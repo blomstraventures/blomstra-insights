@@ -1,0 +1,24 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Dependencies
+vendor/
+node_modules/
+
+# Environment / secrets
+.env
+wp-config-local.php
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
