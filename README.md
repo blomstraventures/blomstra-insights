@@ -37,8 +37,8 @@ Blomstra Insights collects data from public sources (World Bank, UN Comtrade, EI
    define('COMTRADE_PRIMARY_KEY', 'your-key');
    define('EIA_API_KEY', 'your-key');
    ```
-3. **Install an index backend** — e.g. `Backend - CIV Critical Infra Vulnerability Index.php`
-4. **Install the frontend** — CSS + JS snippets (site-wide), then the index shortcode PHP
+3. **Install an index backend** — e.g. `cii-backend.php`
+4. **Install the frontend** — index-frontend-styles.css + index-frontend-engine.js (site-wide), then the cii-shortcode.php
 5. **Build the index** — visit the admin page, refresh pillars, build composite
 6. **Add the shortcode** to any page: `[cii_index]`
 
@@ -64,14 +64,14 @@ blomstra-insights/
 │   └── diagram-04-frontend-architecture.png
 ├── src/
 │   ├── reference-data/
-│   │   └── blomstra-reference-data.php
+│   │   └── global-reference-data.php
 │   ├── indices/
-│   │   └── civ/
-│   │       ├── backend.php
-│   │       └── shortcode.php
+│   │   └── cii/
+│   │       ├── cii-backend.php
+│   │       └── cii-shortcode.php
 │   └── frontend/
-│       ├── blomstra-index-frontend-engine.js
-│       └── blomstra-index-frontend-styles.css
+│       ├── index-frontend-engine.js
+│       └── index-frontend-styles.css
 └── .gitignore
 ```
 
