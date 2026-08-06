@@ -15,17 +15,25 @@ Blomstra Insights collects data from public sources (World Bank, UN Comtrade, EI
 
 ---
 
+## A note on naming
+
+The first index built on this system is internally named **CII** in every function name, REST slug, and shortcode (`cii_build_composite()`, `/wp-json/blomstra/v1/critical-infrastructure-index`, `[cii_index]`, `cii_cron_status`, etc.). Its intended full name is **Critical Infrastructure Vulnerability Index (CIV)** — the rename is a deliberately deferred, tracked task, not yet done. Documentation in this repo uses **CII** to match what's actually in the code, so grepping the codebase for anything mentioned in these docs won't come up empty. Don't be surprised if an older diagram or note says "CIV" — treat "CII" as current truth until the rename actually lands.
+
+---
+
 ## Documentation
 
 | Document | Purpose |
 |---|---|
-| [docs/01-architecture.md](docs/01-architecture.md) | System layers, design principles, migration history |
+| [docs/01-architecture.md](docs/01-architecture.md) | System layers, design principles, migration history, build-reliability pattern |
 | [docs/02-data-flow.md](docs/02-data-flow.md) | Raw API → composite pipeline, fallback paths |
 | [docs/03-api-contract.md](docs/03-api-contract.md) | REST endpoint schemas, required fields, response shapes |
 | [docs/04-frontend-engine.md](docs/04-frontend-engine.md) | Widget architecture, data-* API, state lifecycle |
 | [docs/05-index-template.md](docs/05-index-template.md) | Step-by-step checklist for building a new index |
 | [docs/06-deployment.md](docs/06-deployment.md) | WPCode workflow, cron setup, troubleshooting |
 | [docs/07-glossary.md](docs/07-glossary.md) | Terminology and definitions |
+| [docs/08-reference-data-functions.md](docs/08-reference-data-functions.md) | Function-by-function reference for every shared Reference Data utility |
+| [docs/09-methodology-deepdive.md](docs/09-methodology-deepdive.md) | The reasoning behind percentile normalization and partial-index rank ranges — the part not reconstructable from code alone |
 
 ---
 
@@ -56,7 +64,9 @@ blomstra-insights/
 │   ├── 04-frontend-engine.md
 │   ├── 05-index-template.md
 │   ├── 06-deployment.md
-│   └── 07-glossary.md
+│   ├── 07-glossary.md
+│   ├── 08-reference-data-functions.md
+│   └── 09-methodology-deepdive.md
 ├── assets/
 │   ├── diagram-01-system-architecture.png
 │   ├── diagram-02-data-pipeline.png
