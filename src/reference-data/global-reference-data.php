@@ -1,17 +1,17 @@
 /**
- * Blomstra Reference Data — Shared Utility & Reference Layer (v2.3)
+ * Blomstra Reference Data — Shared Utility & Reference Layer (v2.5.3)
  *
- * Pure reference data / lookup functions and collection engines used across 
- * Blomstra index tools (CII, Mineral Dependency Index, etc.).
+ * Pure reference data / lookup functions and collection engines used across
+ * Blomstra index tools (CII, GERI, and future indices).
  *
- * LOAD ORDER: Must run BEFORE downstream index tools (e.g. CII).
+ * LOAD ORDER: Must run BEFORE downstream index tools (e.g. CII, GERI).
  *
  * @package Blomstra
- * @version 2.3
+ * @version 2.5.3
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
-    exit; // Exit if accessed directly
+    exit;
 }
 
 // ─── LANDLOCKED COUNTRIES (UN-OHRLLS list) ────────────────────────
@@ -49,7 +49,7 @@ if ( ! function_exists( 'blomstra_get_global_country_list' ) ) {
         $page = 1;
         do {
             $url  = "https://api.worldbank.org/v2/country?format=json&per_page=300&page={$page}";
-            $resp = wp_remote_get( $url, array( 'timeout' => 30, 'user-agent' => 'BlomstraReferenceData/2.3' ) );
+            $resp = wp_remote_get( $url, array( 'timeout' => 30, 'user-agent' => 'BlomstraReferenceData/2.5.3' ) );
             if ( is_wp_error( $resp ) ) {
                 break;
             }
@@ -880,12 +880,9 @@ if ( ! function_exists( 'blomstra_get_eia_country_totals' ) ) {
 
 if ( ! function_exists( 'blomstra_check_api_keys_status' ) ) {
     function blomstra_check_api_keys_status() {
-        $comtrade_ok = defined( 'COMTRADE_PRIMARY_KEY' ) && COMTRADE_PRIMARY_KEY !== '';
-        $eia_ok      = defined( 'EIA_API_KEY' ) && EIA_API_KEY !== '';
-
         return array(
-            'comtrade' => $comtrade_ok,
-            'eia'      => $eia_ok,
+            'comtrade' => defined( 'COMTRADE_PRIMARY_KEY' ) && COMTRADE_PRIMARY_KEY !== '',
+            'eia'      => defined( 'EIA_API_KEY' ) && EIA_API_KEY !== '',
         );
     }
 }
@@ -898,7 +895,7 @@ if ( ! function_exists( 'blomstra_update_cron_status' ) ) {
         $cron_status[ $pillar ] = array(
             'last_run'  => current_time( 'mysql' ),
             'timestamp' => time(),
-            'status'    => $status, // 'success', 'error', 'running'
+            'status'    => $status,
             'message'   => $message,
             'count'     => $count,
         );
@@ -911,7 +908,7 @@ if ( ! function_exists( 'blomstra_cron_handle_maritime' ) ) {
         blomstra_update_cron_status( 'maritime', 'running', 'Maritime weekly refresh running...' );
         $data = blomstra_get_maritime_raw( true );
         if ( ! empty( $data ) && is_array( $data ) ) {
-            blomstra_update_cron_status( 'maritime', 'success', 'Maritime data refreshed.', count( $data ) );
+            blomstra_update_cron_status( 'maritime', 'success', 'Maritime data refreshed: ' . count( $data ) . ' countries.', count( $data ) );
         } else {
             blomstra_update_cron_status( 'maritime', 'error', 'Maritime fetch failed or returned empty dataset.' );
         }
@@ -945,6 +942,27 @@ if ( ! function_exists( 'blomstra_cron_handle_hhi' ) ) {
     add_action( 'blomstra_cron_hhi_weekly_event', 'blomstra_cron_handle_hhi' );
 }
 
+// ─── WB INDICATOR LOGGING FUNCTION ──────────────────────────────────
+
+if ( ! function_exists( 'blomstra_log_wb_indicator_fetch' ) ) {
+    function blomstra_log_wb_indicator_fetch( $indicator_code, $row_count, $status, $detail = '' ) {
+        $log = get_option( 'blomstra_wb_indicator_fetch_log', array() );
+        $log[] = array(
+            'time'    => current_time( 'mysql' ),
+            'code'    => $indicator_code,
+            'rows'    => $row_count,
+            'status'  => $status,
+            'detail'  => $detail,
+        );
+        if ( count( $log ) > 50 ) {
+            $log = array_slice( $log, -50 );
+        }
+        update_option( 'blomstra_wb_indicator_fetch_log', $log, false );
+    }
+}
+
+// ─── SCHEDULE REFERENCE CRONS ──────────────────────────────────────
+
 if ( ! function_exists( 'blomstra_schedule_reference_crons' ) ) {
     function blomstra_schedule_reference_crons() {
         if ( ! wp_next_scheduled( 'blomstra_cron_maritime_weekly_event' ) ) {
@@ -958,6 +976,10 @@ if ( ! function_exists( 'blomstra_schedule_reference_crons' ) ) {
         if ( ! wp_next_scheduled( 'blomstra_cron_hhi_weekly_event' ) ) {
             $wed = strtotime( 'next Wednesday 02:00:00 UTC' );
             wp_schedule_event( $wed, 'weekly', 'blomstra_cron_hhi_weekly_event' );
+        }
+        if ( ! wp_next_scheduled( 'blomstra_cron_wb_indicators_weekly_event' ) ) {
+            $thu = strtotime( 'next Thursday 02:00:00 UTC' );
+            wp_schedule_event( $thu, 'weekly', 'blomstra_cron_wb_indicators_weekly_event' );
         }
     }
     add_action( 'init', 'blomstra_schedule_reference_crons' );
@@ -1045,6 +1067,19 @@ if ( ! function_exists( 'blomstra_ref_handle_early_actions' ) ) {
             exit;
         }
 
+        // ── WB Indicators (NEW) ──
+        if ( isset( $_POST['blomstra_ref_refresh_wb_indicators'] ) && check_admin_referer( 'blomstra_ref_refresh_wb_indicators_action', 'blomstra_ref_refresh_wb_indicators_nonce' ) ) {
+            wp_schedule_single_event( time(), 'blomstra_cron_wb_indicators_weekly_event' );
+            wp_safe_redirect( add_query_arg( array( 'page' => 'blomstra-insights-tools', 'triggered' => 'wb_indicators' ), admin_url( 'admin.php' ) ) );
+            exit;
+        }
+
+        if ( isset( $_POST['blomstra_ref_flush_wb_indicators'] ) && check_admin_referer( 'blomstra_ref_flush_wb_indicators_action', 'blomstra_ref_flush_wb_indicators_nonce' ) ) {
+            blomstra_flush_wb_indicator_cache();
+            wp_safe_redirect( add_query_arg( array( 'page' => 'blomstra-insights-tools', 'flushed' => 'wb_indicators' ), admin_url( 'admin.php' ) ) );
+            exit;
+        }
+
         if ( isset( $_POST['blomstra_ref_flush'] ) && check_admin_referer( 'blomstra_ref_flush_action', 'blomstra_ref_flush_nonce' ) ) {
             delete_transient( 'blomstra_global_country_list' );
             delete_transient( 'blomstra_comtrade_reporters' );
@@ -1058,6 +1093,7 @@ if ( ! function_exists( 'blomstra_ref_handle_early_actions' ) ) {
             delete_option( 'blomstra_eia_refresh_summary' );
             delete_option( 'blomstra_comtrade_call_log' );
             delete_option( 'blomstra_eia_call_log' );
+            blomstra_flush_wb_indicator_cache();
             wp_safe_redirect( add_query_arg( array( 'page' => 'blomstra-insights-tools', 'flushed' => 'all' ), admin_url( 'admin.php' ) ) );
             exit;
         }
@@ -1126,7 +1162,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                     );
                 }
             } elseif ( $provider === 'eia' ) {
-                $batch = blomstra_eia_fetch_activity_batch( array( $target ), BLOMSTRA_EIA_ACTIVITY_CONS, '4415' ); // Test Petroleum
+                $batch = blomstra_eia_fetch_activity_batch( array( $target ), BLOMSTRA_EIA_ACTIVITY_CONS, '4415' );
                 $sandbox_result = array(
                     'provider'       => 'EIA Energy (Petroleum Test)',
                     'target_iso3'    => $target,
@@ -1149,12 +1185,30 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                     'execution_time' => round( ( microtime( true ) - $t_start ) * 1000, 2 ) . ' ms',
                     'response_body'  => $body[1] ?? $body,
                 );
+            } elseif ( $provider === 'wb_indicator' ) {
+                $code = sanitize_text_field( $_POST['sandbox_wb_code'] ?? 'NY.GDP.MKTP.KD.ZG' );
+                $source = isset( $_POST['sandbox_wb_source'] ) && $_POST['sandbox_wb_source'] !== '' ? (int) $_POST['sandbox_wb_source'] : null;
+                $target_iso3 = strtoupper( trim( $target ) );
+
+                $raw = blomstra_fetch_wb_indicator_batch( $code, $source, true );
+                $country_data = isset( $raw[ $target_iso3 ] ) ? $raw[ $target_iso3 ] : null;
+
+                $sandbox_result = array(
+                    'provider'       => 'World Bank Indicator (' . ( $source === 3 ? 'WGI' : 'WDI' ) . ')',
+                    'indicator_code' => $code,
+                    'source'         => $source,
+                    'target_iso3'    => $target_iso3,
+                    'execution_time' => round( ( microtime( true ) - $t_start ) * 1000, 2 ) . ' ms',
+                    'total_countries_fetched' => count( $raw ),
+                    'target_data'    => $country_data,
+                    'sample_of_first_3' => array_slice( $raw, 0, 3 ),
+                );
             }
         }
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.3', 'blomstra' ) . '</h1>';
-        echo '<p style="color:#666;">Centralised reference data layer for CII and dependent tools with granular control, live API sandbox, & non-blocking background tasks.</p>';
+        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.5.3', 'blomstra' ) . '</h1>';
+        echo '<p style="color:#666;">Centralised reference data layer for CII, GERI, and dependent tools with granular control, live API sandbox, & non-blocking background tasks.</p>';
 
         if ( isset( $_GET['flushed'] ) ) {
             echo '<div class="notice notice-success is-dismissible"><p>Successfully flushed cache: <strong>' . esc_html( sanitize_text_field( $_GET['flushed'] ) ) . '</strong></p></div>';
@@ -1194,9 +1248,10 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<thead><tr><th>Pillar</th><th>Schedule</th><th>Next Run</th><th>Last Status</th><th>Last Run Time</th><th>Items Fetched</th><th>Message</th></tr></thead><tbody>';
 
         $pillars = array(
-            'maritime' => array( 'label' => 'Maritime (LSCI)', 'hook' => 'blomstra_cron_maritime_weekly_event', 'day' => 'Monday 02:00 UTC' ),
-            'eia'      => array( 'label' => 'Energy (EIA Raw)', 'hook' => 'blomstra_cron_eia_weekly_event', 'day' => 'Tuesday 02:00 UTC' ),
-            'hhi'      => array( 'label' => 'HHI (Comtrade)', 'hook' => 'blomstra_cron_hhi_weekly_event', 'day' => 'Wednesday 02:00 UTC' ),
+            'maritime'      => array( 'label' => 'Maritime (LSCI)', 'hook' => 'blomstra_cron_maritime_weekly_event', 'day' => 'Monday 02:00 UTC' ),
+            'eia'           => array( 'label' => 'Energy (EIA Raw)', 'hook' => 'blomstra_cron_eia_weekly_event', 'day' => 'Tuesday 02:00 UTC' ),
+            'hhi'           => array( 'label' => 'HHI (Comtrade)', 'hook' => 'blomstra_cron_hhi_weekly_event', 'day' => 'Wednesday 02:00 UTC' ),
+            'wb_indicators' => array( 'label' => 'WB Indicators (WDI/WGI)', 'hook' => 'blomstra_cron_wb_indicators_weekly_event', 'day' => 'Thursday 02:00 UTC' ),
         );
 
         foreach ( $pillars as $key => $info ) {
@@ -1208,6 +1263,8 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
             if ( $st ) {
                 if ( $st['status'] === 'success' ) {
                     $status_badge = '<strong style="color:#2e7d32;">SUCCESS ✓</strong>';
+                } elseif ( $st['status'] === 'partial' ) {
+                    $status_badge = '<strong style="color:#f0ad4e;">PARTIAL ⚠️</strong>';
                 } elseif ( $st['status'] === 'error' ) {
                     $status_badge = '<strong style="color:#d63638;">ERROR ✗</strong>';
                 } else {
@@ -1241,6 +1298,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         $maritime_cached = get_transient( 'blomstra_maritime_raw' );
         $hhi_cached      = get_option( 'blomstra_comtrade_hhi_data', array() );
         $eia_cached      = get_option( 'blomstra_eia_raw_data', array() );
+        $wb_indicator_count = blomstra_count_wb_indicator_cache();
 
         // Row 1: Countries
         echo '<tr><td><strong>World Bank Country List</strong></td>';
@@ -1307,6 +1365,19 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<button type="submit" name="blomstra_ref_flush_eia" value="1" class="button button-small button-link-delete">🗑️ Flush</button>';
         echo '</form></td></tr>';
 
+        // Row 6: World Bank Indicators (NEW)
+        echo '<tr><td><strong>World Bank Indicators (WDI/WGI)</strong> <span style="color:#666;font-weight:normal;">— shared by GERI and future indices</span></td>';
+        echo '<td>' . ( $wb_indicator_count > 0 ? '<span style="color:#2e7d32;">Cached ✓</span>' : '<span style="color:#d63638;">Not Cached</span>' ) . '</td>';
+        echo '<td>' . esc_html( $wb_indicator_count ) . ' code(s)</td><td>';
+        echo '<form method="post" style="display:inline-block; margin-right:5px;">';
+        wp_nonce_field( 'blomstra_ref_refresh_wb_indicators_action', 'blomstra_ref_refresh_wb_indicators_nonce' );
+        echo '<button type="submit" name="blomstra_ref_refresh_wb_indicators" value="1" class="button button-small button-primary">⚡ Refresh All</button>';
+        echo '</form>';
+        echo '<form method="post" style="display:inline-block;">';
+        wp_nonce_field( 'blomstra_ref_flush_wb_indicators_action', 'blomstra_ref_flush_wb_indicators_nonce' );
+        echo '<button type="submit" name="blomstra_ref_flush_wb_indicators" value="1" class="button button-small button-link-delete">🗑️ Flush All</button>';
+        echo '</form></td></tr>';
+
         echo '</tbody></table>';
 
         // Master Wipe Button
@@ -1333,7 +1404,14 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<option value="comtrade">UN Comtrade (HHI Engine)</option>';
         echo '<option value="eia">EIA Energy Data</option>';
         echo '<option value="maritime">World Bank Maritime LSCI</option>';
+        echo '<option value="wb_indicator">World Bank Indicator (WDI/WGI)</option>';
         echo '</select></div>';
+
+        echo '<div><label style="font-weight:bold; display:block; margin-bottom:4px;">Indicator Code</label>';
+        echo '<input type="text" name="sandbox_wb_code" value="NY.GDP.MKTP.KD.ZG" style="width:160px;" placeholder="e.g. NY.GDP.MKTP.KD.ZG" /></div>';
+
+        echo '<div><label style="font-weight:bold; display:block; margin-bottom:4px;">Source (optional)</label>';
+        echo '<input type="text" name="sandbox_wb_source" value="" style="width:80px;" placeholder="3 for WGI" /></div>';
 
         echo '<div><label style="font-weight:bold; display:block; margin-bottom:4px;">ISO3 or Reporter Code</label>';
         echo '<input type="text" name="sandbox_target" value="USA" style="width:100px; text-transform:uppercase;" placeholder="e.g. USA or 842" required/></div>';
@@ -1343,6 +1421,41 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '<div><button type="submit" name="blomstra_ref_sandbox_test" value="1" class="button button-primary">🧪 Execute Isolated API Test</button></div>';
         echo '</form>';
+
+        // ── Help box for sandbox providers ──────────────────────────────
+        echo '<div style="background:#f0f6fc; border-left:4px solid #2271b1; padding:10px 15px; margin:15px 0; border-radius:4px;">';
+        echo '<p style="margin:0 0 5px 0;"><strong>🔍 Sandbox provider guide</strong></p>';
+        echo '<ul style="margin:5px 0 0 20px; list-style:disc; color:#333;">';
+
+        echo '<li><strong>UN Comtrade (HHI Engine):</strong> needs an <strong>ISO3</strong> (e.g. USA) or a <strong>reporter code</strong> (e.g. 842). The year is the trade year (default: previous year). Returns HHI (Herfindahl‑Hirschman Index) for total imports.</li>';
+
+        echo '<li><strong>EIA Energy Data:</strong> needs an <strong>ISO3</strong> (e.g. USA). Tests petroleum consumption (productId=4415) for the given year. Returns raw API rows.</li>';
+
+        echo '<li><strong>World Bank Maritime LSCI:</strong> needs an <strong>ISO3</strong> (e.g. USA) and a year. Returns the LSCI value for that country.</li>';
+
+        echo '<li><strong>World Bank Indicator (WDI/WGI):</strong> needs an <strong>Indicator Code</strong> (e.g. <code>NY.GDP.MKTP.KD.ZG</code>) and optionally a <strong>Source</strong> (leave blank for WDI, use <code>3</code> for WGI). The <strong>ISO3</strong> filters to a single country. The year is <em>ignored</em> because the API returns the most recent non‑null value (mrnev=1). </li>';
+
+        echo '</ul>';
+
+        // ── Common indicator codes for quick reference ──────────────────
+        echo '<details style="margin-top:8px; cursor:pointer;">';
+        echo '<summary style="font-weight:bold; color:#135e96;">📋 Show common World Bank indicator codes used in GERI</summary>';
+        echo '<div style="margin:8px 0 0 20px; font-size:13px;">';
+        echo '<table style="border-collapse:collapse; background:#fff;">';
+        echo '<tr><th style="padding:2px 10px; border-bottom:1px solid #ccc; text-align:left;">Code</th><th style="padding:2px 10px; border-bottom:1px solid #ccc; text-align:left;">Description</th><th style="padding:2px 10px; border-bottom:1px solid #ccc; text-align:left;">Source</th></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>NY.GDP.MKTP.KD.ZG</code></td><td style="padding:2px 10px;">GDP growth (annual %)</td><td style="padding:2px 10px;">WDI</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>FP.CPI.TOTL.ZG</code></td><td style="padding:2px 10px;">Inflation (consumer prices, annual %)</td><td style="padding:2px 10px;">WDI</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>FI.RES.TOTL.MO</code></td><td style="padding:2px 10px;">Total reserves in months of imports</td><td style="padding:2px 10px;">WDI</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>DT.DOD.DECT.GN.ZS</code></td><td style="padding:2px 10px;">External debt stocks (% of GNI)</td><td style="padding:2px 10px;">WDI</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>BN.CAB.XOKA.GD.ZS</code></td><td style="padding:2px 10px;">Current account balance (% of GDP)</td><td style="padding:2px 10px;">WDI</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>GC.DOD.TOTL.GD.ZS</code></td><td style="padding:2px 10px;">Central government debt (% of GDP)</td><td style="padding:2px 10px;">WDI</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>GC.NLD.TOTL.GD.ZS</code></td><td style="padding:2px 10px;">Government net lending/borrowing (% of GDP)</td><td style="padding:2px 10px;">WDI</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>GOV_WGI_RL.SC</code></td><td style="padding:2px 10px;">Rule of Law (WGI)</td><td style="padding:2px 10px;">WGI (source=3)</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>GOV_WGI_CC.SC</code></td><td style="padding:2px 10px;">Control of Corruption (WGI)</td><td style="padding:2px 10px;">WGI (source=3)</td></tr>';
+        echo '<tr><td style="padding:2px 10px;"><code>GOV_WGI_PV.SC</code></td><td style="padding:2px 10px;">Political Stability (WGI)</td><td style="padding:2px 10px;">WGI (source=3)</td></tr>';
+        echo '</table>';
+        echo '</div></details>';
+        echo '</div>'; // end help box
 
         if ( $sandbox_result !== null ) {
             echo '<div style="background:#1e1e1e; color:#00ff00; padding:12px; border-radius:4px; overflow:auto; max-height:350px;">';
@@ -1418,6 +1531,30 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         }
         echo '</div></details>';
 
+        // WB Indicator Log Collapsible
+        $wb_log = get_option( 'blomstra_wb_indicator_fetch_log', array() );
+        echo '<details style="background:#fff; padding:10px; border:1px solid #ccd0d4; border-radius:4px; margin-top:10px;">';
+        echo '<summary style="font-weight:bold; cursor:pointer; color:#2271b1;">📜 World Bank Indicator Fetch Log (' . count( $wb_log ) . ' Recorded Calls)</summary>';
+        echo '<div style="margin-top:10px;">';
+        if ( ! empty( $wb_log ) ) {
+            echo '<table class="widefat striped">';
+            echo '<thead><tr><th>Time</th><th>Indicator Code</th><th>Rows</th><th>Status</th><th>Detail</th></tr></thead><tbody>';
+            foreach ( array_reverse( $wb_log ) as $entry ) {
+                $color = ( $entry['status'] === 'success' ) ? '#2e7d32' : '#d63638';
+                echo '<tr>';
+                echo '<td>' . esc_html( $entry['time'] ) . '</td>';
+                echo '<td><code>' . esc_html( $entry['code'] ) . '</code></td>';
+                echo '<td>' . esc_html( $entry['rows'] ) . '</td>';
+                echo '<td><strong style="color:' . $color . ';">' . esc_html( strtoupper( $entry['status'] ) ) . '</strong></td>';
+                echo '<td>' . esc_html( $entry['detail'] ) . '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        } else {
+            echo '<p style="color:#666; font-style:italic; margin:0;">No WB indicator fetch logs recorded yet.</p>';
+        }
+        echo '</div></details>';
+
         echo '</div></div>';
 
         // ─── SECTION 5: COLLAPSIBLE RAW DEBUG INSPECTOR ───────────
@@ -1445,28 +1582,12 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 }
 
 /**
- * PASTE THIS INTO THE EXISTING "Blomstra Reference Data" PHP SNIPPET.
- * Add it anywhere after the file's existing functions — e.g. at the end,
- * alongside the country-names REST route added earlier.
- *
- * ============================================================
- * Multi-year snapshot logging (shared across ALL index tools)
- * ============================================================
- * One history table, shared by every index (CII today, 6-9 more later).
- * Upserts AT MOST ONCE PER CALENDAR MONTH per (index, country) — repeated
- * rebuilds within the same month just update that month's row instead of
- * piling up near-duplicate points. This keeps future trend charts clean
- * without needing a cron job: it just piggybacks on whatever already
- * triggers a composite rebuild (manual or cron).
+ * ═══════════════════════════════════════════════════════════════════
+ * MULTI‑YEAR SNAPSHOT LOGGING (SHARED ACROSS ALL INDICES)
+ * ═══════════════════════════════════════════════════════════════════
  */
-
 define( 'BLOMSTRA_HISTORY_DB_VERSION', '1.0' );
 
-/**
- * Creates/updates the shared history table. Cheap to call repeatedly —
- * dbDelta() is idempotent — so it's safe to check on every admin page
- * load rather than needing a real plugin activation hook.
- */
 function blomstra_index_history_maybe_install() {
     if ( get_option( 'blomstra_index_history_db_version' ) === BLOMSTRA_HISTORY_DB_VERSION ) {
         return;
@@ -1497,22 +1618,6 @@ function blomstra_index_history_maybe_install() {
 }
 add_action( 'admin_init', 'blomstra_index_history_maybe_install' );
 
-/**
- * Save one snapshot per country for an index, upserting within the
- * current calendar month. Call this right after an index's composite
- * build succeeds — pass the same per-country array you're about to
- * store as the index's live composite (keyed by ISO3).
- *
- * Expected per-country shape (extra keys are ignored):
- *   'composite_score'  => float
- *   'rank'             => int|null
- *   'coverage_type'    => 'full'|'partial'|null
- *   ...any pillar fields — everything else gets stored as-is in pillars_json
- *
- * @param string $index_slug e.g. 'cii'
- * @param array  $countries  ISO3 => row array
- * @return int Number of rows written (for logging/verification)
- */
 function blomstra_index_snapshot_save( $index_slug, $countries ) {
     if ( empty( $countries ) || ! is_array( $countries ) ) {
         return 0;
@@ -1531,8 +1636,6 @@ function blomstra_index_snapshot_save( $index_slug, $countries ) {
         $rank_value      = isset( $row['rank'] ) && $row['rank'] !== null ? (int) $row['rank'] : null;
         $coverage_type   = isset( $row['coverage_type'] ) ? sanitize_text_field( $row['coverage_type'] ) : null;
 
-        // Store everything else (pillar percentiles/raw, rank_display, sources, etc.)
-        // so nothing has to be re-derived later even if the shape evolves.
         $pillars = $row;
         unset( $pillars['composite_score'], $pillars['rank'], $pillars['coverage_type'] );
 
@@ -1564,15 +1667,6 @@ function blomstra_index_snapshot_save( $index_slug, $countries ) {
     return $written;
 }
 
-/**
- * Retrieve history for an index, optionally filtered to one country.
- * Returns ISO3 => [ { period, composite_score, rank, coverage_type, pillars }, ... ]
- * ordered oldest-to-newest per country.
- *
- * @param string      $index_slug
- * @param string|null $iso3 Optional single-country filter.
- * @return array
- */
 function blomstra_index_snapshot_get_history( $index_slug, $iso3 = null ) {
     global $wpdb;
     $table = $wpdb->prefix . 'blomstra_index_history';
@@ -1604,8 +1698,6 @@ function blomstra_index_snapshot_get_history( $index_slug, $iso3 = null ) {
     return $out;
 }
 
-// REST: expose history for frontend trend/rank-delta features.
-// GET /wp-json/blomstra/v1/index-history/{slug}?iso3=USA (iso3 optional)
 add_action( 'rest_api_init', function () {
     register_rest_route( 'blomstra/v1', '/index-history/(?P<slug>[a-z0-9_-]+)', array(
         'methods'             => 'GET',
@@ -1618,12 +1710,6 @@ add_action( 'rest_api_init', function () {
     ) );
 } );
 
-/**
- * Small admin visibility panel — shows snapshot counts per index/period
- * so you can confirm this is actually running, without digging into the
- * database directly. Appends to the bottom of the Reference Data admin
- * page (hooked to admin_notices scoped to that page only).
- */
 add_action( 'admin_notices', function () {
     if ( empty( $_GET['page'] ) || strpos( $_GET['page'], 'blomstra' ) === false ) {
         return;
@@ -1638,7 +1724,7 @@ add_action( 'admin_notices', function () {
     if ( empty( $rows ) ) {
         return;
     }
-    echo '<div class="notice notice-info"><p><strong>Snapshot history:</strong> (rebuild again and watch the country count stay fixed while "last updated" advances — that confirms it\'s updating in place, not duplicating)</p><ul style="margin-left:20px;list-style:disc;">';
+    echo '<div class="notice notice-info"><p><strong>Snapshot history:</strong> (rebuild again and watch the country count stay fixed while "last updated" advances – that confirms it\'s updating in place, not duplicating)</p><ul style="margin-left:20px;list-style:disc;">';
     foreach ( $rows as $r ) {
         echo '<li>' . esc_html( $r['index_slug'] ) . ' — ' . esc_html( $r['snapshot_period'] ) . ': '
             . esc_html( $r['country_count'] ) . ' countries · last updated ' . esc_html( $r['last_recorded'] ) . '</li>';
@@ -1646,17 +1732,231 @@ add_action( 'admin_notices', function () {
     echo '</ul></div>';
 } );
 
+// ─── SHARED PERCENTILE‑RANK HELPERS ───────────────────────────────
+
+if ( ! function_exists( 'blomstra_compute_percentile_ranks' ) ) {
+    function blomstra_compute_percentile_ranks( $values_by_iso3 ) {
+        $n = count( $values_by_iso3 );
+        if ( $n === 0 ) {
+            return array();
+        }
+        if ( $n === 1 ) {
+            $only = array_keys( $values_by_iso3 );
+            return array( $only[0] => 50.0 );
+        }
+
+        $pairs = $values_by_iso3;
+        asort( $pairs );
+        $sorted_values = array_values( $pairs );
+        $sorted_iso3   = array_keys( $pairs );
+
+        $ranks = array();
+        $i = 0;
+        while ( $i < $n ) {
+            $j = $i;
+            while ( $j < $n - 1 && abs( $sorted_values[ $j + 1 ] - $sorted_values[ $i ] ) < 0.0001 ) {
+                $j++;
+            }
+            $avg_rank = ( ( $i + 1 ) + ( $j + 1 ) ) / 2;
+            for ( $k = $i; $k <= $j; $k++ ) {
+                $ranks[ $sorted_iso3[ $k ] ] = $avg_rank;
+            }
+            $i = $j + 1;
+        }
+
+        $percentiles = array();
+        foreach ( $ranks as $iso3 => $rank ) {
+            $percentiles[ $iso3 ] = round( ( ( $rank - 0.5 ) / $n ) * 100, 2 );
+        }
+        return $percentiles;
+    }
+}
+
+if ( ! function_exists( 'blomstra_rank_in_full_index' ) ) {
+    function blomstra_rank_in_full_index( $score, $full_composites_sorted ) {
+        $greater = 0;
+        foreach ( $full_composites_sorted as $c ) {
+            if ( $c > $score ) { $greater++; } else { break; }
+        }
+        return $greater + 1;
+    }
+}
+
+if ( ! function_exists( 'blomstra_build_full_rank_display' ) ) {
+    function blomstra_build_full_rank_display( $rank ) {
+        return array(
+            'is_definitive'    => true,
+            'best_estimate'    => $rank,
+            'range_80_low'     => $rank,
+            'range_80_high'    => $rank,
+            'theoretical_low'  => $rank,
+            'theoretical_high' => $rank,
+            'string_format'    => '#' . $rank,
+        );
+    }
+}
+
+if ( ! function_exists( 'blomstra_build_partial_rank_display' ) ) {
+    function blomstra_build_partial_rank_display( $ranks_by_injection ) {
+        $range_80 = array( $ranks_by_injection[90], $ranks_by_injection[10] );
+        sort( $range_80 );
+        $theoretical = array( $ranks_by_injection[100], $ranks_by_injection[0] );
+        sort( $theoretical );
+
+        return array(
+            'is_definitive'    => false,
+            'best_estimate'    => $ranks_by_injection[50],
+            'range_80_low'     => $range_80[0],
+            'range_80_high'    => $range_80[1],
+            'theoretical_low'  => $theoretical[0],
+            'theoretical_high' => $theoretical[1],
+            'string_format'    => '#' . $range_80[0] . '–#' . $range_80[1] . '*',
+        );
+    }
+}
+
+// ─── WORLD BANK INDICATOR BATCH FETCHER ───────────────────────────
+
+if ( ! defined( 'BLOMSTRA_WB_INDICATOR_CACHE_TTL' ) ) {
+    define( 'BLOMSTRA_WB_INDICATOR_CACHE_TTL', WEEK_IN_SECONDS );
+}
+
+if ( ! function_exists( 'blomstra_fetch_wb_indicator_batch' ) ) {
+    function blomstra_fetch_wb_indicator_batch( $code, $source = null, $force = false ) {
+        $cache_key = 'blomstra_wb_indicator_' . md5( $code . '|' . (string) $source );
+        if ( $force ) {
+            delete_transient( $cache_key );
+        }
+        $cached = get_transient( $cache_key );
+        if ( false !== $cached && is_array( $cached ) ) {
+            return $cached;
+        }
+
+        $url = "https://api.worldbank.org/v2/country/all/indicator/{$code}?format=json&per_page=20000";
+        $url .= $source ? "&source={$source}" : '&mrnev=1';
+
+        $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.5.3' ) );
+        if ( is_wp_error( $response ) ) {
+            error_log( "WB indicator fetch ({$code}): " . $response->get_error_message() );
+            return array();
+        }
+        if ( wp_remote_retrieve_response_code( $response ) !== 200 ) {
+            error_log( "WB indicator fetch ({$code}): HTTP " . wp_remote_retrieve_response_code( $response ) );
+            return array();
+        }
+
+        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        if ( ! isset( $body[1] ) || ! is_array( $body[1] ) ) {
+            error_log( "WB indicator fetch ({$code}): missing data array" );
+            return array();
+        }
+
+        $out = array();
+        foreach ( $body[1] as $row ) {
+            $iso3 = $row['countryiso3code'] ?? null;
+            $val  = $row['value'] ?? null;
+            if ( $iso3 && $val !== null ) {
+                $out[ $iso3 ] = array(
+                    'value' => floatval( $val ),
+                    'year'  => $row['date'] ?? null,
+                );
+            }
+        }
+
+        if ( ! empty( $out ) ) {
+            set_transient( $cache_key, $out, BLOMSTRA_WB_INDICATOR_CACHE_TTL );
+        }
+        return $out;
+    }
+}
+
+if ( ! function_exists( 'blomstra_count_wb_indicator_cache' ) ) {
+    function blomstra_count_wb_indicator_cache() {
+        global $wpdb;
+        $count = $wpdb->get_var(
+            "SELECT COUNT(*) FROM {$wpdb->options}
+             WHERE option_name LIKE '_transient_blomstra_wb_indicator_%'
+             AND option_name NOT LIKE '_transient_timeout_%'"
+        );
+        return (int) $count;
+    }
+}
+
+if ( ! function_exists( 'blomstra_flush_wb_indicator_cache' ) ) {
+    function blomstra_flush_wb_indicator_cache() {
+        global $wpdb;
+        return $wpdb->query(
+            "DELETE FROM {$wpdb->options}
+             WHERE option_name LIKE '_transient_blomstra_wb_indicator_%'
+             OR option_name LIKE '_transient_timeout_blomstra_wb_indicator_%'"
+        );
+    }
+}
+
+if ( ! function_exists( 'blomstra_refresh_wb_indicators' ) ) {
+    function blomstra_refresh_wb_indicators( $force = false ) {
+        $indicators = array(
+            // Governance (WGI, source=3)
+            'GOV_WGI_RL.SC' => array( 'source' => 3 ),
+            'GOV_WGI_CC.SC' => array( 'source' => 3 ),
+            'GOV_WGI_PV.SC' => array( 'source' => 3 ),
+            // Macro – GDP growth (falls back from GNI which proved unreliable)
+            'NY.GDP.MKTP.KD.ZG' => array( 'source' => null ),
+            'FP.CPI.TOTL.ZG'    => array( 'source' => null ),
+            // External Vulnerability
+            'FI.RES.TOTL.MO'    => array( 'source' => null ),
+            'DT.DOD.DECT.GN.ZS' => array( 'source' => null ),
+            'BN.CAB.XOKA.GD.ZS' => array( 'source' => null ),
+            // Fiscal Stress
+            'GC.DOD.TOTL.GD.ZS' => array( 'source' => null ),
+            'GC.NLD.TOTL.GD.ZS' => array( 'source' => null ),
+        );
+
+        $results = array();
+        foreach ( $indicators as $code => $config ) {
+            $data = blomstra_fetch_wb_indicator_batch( $code, $config['source'], $force );
+            $row_count = count( $data );
+            $status = $row_count > 0 ? 'success' : 'error';
+            blomstra_log_wb_indicator_fetch( $code, $row_count, $status, $row_count > 0 ? 'OK' : 'No data returned' );
+            $results[ $code ] = array(
+                'success' => $row_count > 0,
+                'count'   => $row_count,
+            );
+        }
+        return $results;
+    }
+}
+
+// ─── CRON: Weekly refresh of WB indicators ────────────────────────
+
+if ( ! function_exists( 'blomstra_cron_handle_wb_indicators' ) ) {
+    function blomstra_cron_handle_wb_indicators() {
+        blomstra_update_cron_status( 'wb_indicators', 'running', 'WB indicators weekly refresh running...' );
+        $result = blomstra_refresh_wb_indicators( true );
+
+        $success_count = 0;
+        $total_count = count( $result );
+        foreach ( $result as $code => $status ) {
+            if ( $status['success'] ) {
+                $success_count++;
+            }
+        }
+
+        $msg = 'WB indicators refreshed: ' . $success_count . ' of ' . $total_count . ' indicators fetched.';
+        if ( $success_count === $total_count ) {
+            blomstra_update_cron_status( 'wb_indicators', 'success', $msg, $success_count );
+        } elseif ( $success_count > 0 ) {
+            blomstra_update_cron_status( 'wb_indicators', 'partial', $msg, $success_count );
+        } else {
+            blomstra_update_cron_status( 'wb_indicators', 'error', 'WB indicators fetch failed or returned empty datasets.' );
+        }
+    }
+    add_action( 'blomstra_cron_wb_indicators_weekly_event', 'blomstra_cron_handle_wb_indicators' );
+}
+
 /**
- * PASTE THIS INTO THE EXISTING "Blomstra Reference Data" PHP SNIPPET.
- * Add it anywhere after blomstra_get_global_country_list() is defined —
- * e.g. right at the end of the file, before the closing tag (if any).
- *
- * Purpose: exposes the ISO3 -> country name map that Reference Data
- * already fetches/caches, as a REST endpoint. Every index frontend
- * (CII, and future ones) fetches this once instead of re-implementing
- * name lookup — same centralization principle as the rest of Reference Data.
+ * ─── REST endpoint for country names (ISO3 → name) ────────────────
  */
- 
 add_action( 'rest_api_init', function () {
     register_rest_route( 'blomstra/v1', '/country-names', array(
         'methods'             => 'GET',
@@ -1666,4 +1966,3 @@ add_action( 'rest_api_init', function () {
         'permission_callback' => '__return_true',
     ) );
 } );
- 
