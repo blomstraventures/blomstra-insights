@@ -1,17 +1,15 @@
-<?php
 /**
- * Blomstra Geo-Economic Risk Index (GERI) — v3.5.4
+ * Blomstra Geo-Economic Risk Index (GERI) — v3.5.5
  *
  * @package Blomstra\Insights\Indices\GERI
- * @since   3.5.4
- * @version 3.5.4
+ * @since   3.5.5
+ * @version 3.5.5
  *
- * FIXES (v3.5.4):
- * - Individual pillar buttons (Governance, Macro, External, Fiscal) now async
- * - Builder reads pillar weights from geri_get_pillar_weights() (single source of truth)
- * - _last_fetched moved to separate meta options (no longer pollutes data)
- * - External divergence remains weighted at 10% (deliberately kept)
- * - All remaining gaps closed; backend ready for validation phase
+ * FIXES (v3.5.5):
+ * - Fixed macro indicator count: derived indicators (volatility) now included in geri_get_pillar_weights()
+ * - Fixed fiscal indicator count: debt_trajectory now included in geri_get_pillar_weights()
+ * - Composite builder now reads indicator lists from geri_get_pillar_weights() (single source of truth)
+ * - Restored country count to expected ~177+ scores
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -20,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 
-define( 'GERI_VERSION', '3.5.4' );
+define( 'GERI_VERSION', '3.5.5' );
 define( 'GERI_OPTION_KEY', 'blomstra_geo_economic_risk_index' );
 define( 'GERI_CRON_HOOK', 'blomstra_geo_economic_weekly_refresh' );
 define( 'GERI_DAILY_CRON_HOOK', 'blomstra_geri_daily_cron' );
@@ -67,7 +65,7 @@ function geri_get_pillar_weights() {
                 'reserve_months' => 30,
                 'external_debt' => 30,
                 'current_account' => 30,
-                'gni_gdp_divergence' => 10, // kept as weighted
+                'gni_gdp_divergence' => 10, // derived
             ),
         ),
         'fiscal' => array(
@@ -463,8 +461,7 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         }
     }
 
-    // 4. Compute percentiles per indicator (risk-oriented)
-    // Get weight definitions from the single source of truth
+    // 4. Get weights from single source of truth
     $weight_defs = geri_get_pillar_weights();
     $percentiles = array();
 
@@ -524,9 +521,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         }
         $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
     }
-
-    // GNI–GDP divergence is derived from gni_growth and gdp_growth, but we already computed it in fetch and stored in rows.
-    // It is already in the $ext_indicators list, so the above loop covers it.
 
     // Fiscal
     $fisc_indicators = array_keys( $weight_defs['fiscal']['indicators'] );
