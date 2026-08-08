@@ -11,6 +11,8 @@
  * - Composite builder now reads indicator lists from geri_get_pillar_weights() (single source of truth)
  * - Restored country count to expected ~177+ scores
  * - Restored gni_gdp_divergence computation (lost during refactor)
+ * - Fixed sign error in divergence percentile (removed extra negation)
+ * - Added flat pillar percentiles and pillars_missing for frontend engine
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -520,23 +522,23 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         }
     }
 
-   // External
-   $ext_indicators = array_keys( $weight_defs['external']['indicators'] );
-   foreach ( $ext_indicators as $ind ) {
-      $values = array();
-      foreach ( $rows as $iso3 => $row ) {
-         if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
-             if ( $ind === 'reserve_months' || $ind === 'current_account' ) {
-                 $values[ $iso3 ] = - $row[ $ind ]; // Higher reserves/CA = lower risk
-             } elseif ( $ind === 'external_debt' ) {
-                 $values[ $iso3 ] = $row[ $ind ]; // Higher debt = higher risk
-             } elseif ( $ind === 'gni_gdp_divergence' ) {
-                 $values[ $iso3 ] = $row[ $ind ]; // FIXED: Higher divergence = higher risk
-             }
-         }
-      }
-      $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
-   }
+    // External
+    $ext_indicators = array_keys( $weight_defs['external']['indicators'] );
+    foreach ( $ext_indicators as $ind ) {
+        $values = array();
+        foreach ( $rows as $iso3 => $row ) {
+            if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
+                if ( $ind === 'reserve_months' || $ind === 'current_account' ) {
+                    $values[ $iso3 ] = - $row[ $ind ];
+                } elseif ( $ind === 'external_debt' ) {
+                    $values[ $iso3 ] = $row[ $ind ];
+                } elseif ( $ind === 'gni_gdp_divergence' ) {
+                    $values[ $iso3 ] = $row[ $ind ]; // Already risk-oriented (gdp - gni)
+                }
+            }
+        }
+        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
+    }
 
     // Fiscal
     $fisc_indicators = array_keys( $weight_defs['fiscal']['indicators'] );
@@ -753,13 +755,30 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             ),
         );
 
+        // Build missing pillars list for frontend
+        $missing_pillars_list = array();
+        foreach ( array( 'governance', 'macro', 'external', 'fiscal' ) as $p ) {
+            if ( ! isset( $pillars[ $p ] ) || $pillars[ $p ] === null ) {
+                $missing_pillars_list[] = $p;
+            }
+        }
+
         $country_output[ $iso3 ] = array(
             'iso3' => $iso3,
             'name' => $countries[ $iso3 ] ?? $iso3,
             'geri_structural' => round( $composite, 2 ),
             'coverage' => $coverage_type,
+            'pillars_missing' => $missing_pillars_list,
             'macro_base_source' => $rows[ $iso3 ]['macro_base_source'] ?? 'unknown',
             'data_freshness' => $freshness,
+            
+            // ─── FLAT PILLAR KEYS (for frontend engine) ───
+            'governance_percentile' => isset( $pillars['governance'] ) ? round( $pillars['governance'], 2 ) : null,
+            'macro_percentile'      => isset( $pillars['macro'] ) ? round( $pillars['macro'], 2 ) : null,
+            'external_percentile'   => isset( $pillars['external'] ) ? round( $pillars['external'], 2 ) : null,
+            'fiscal_percentile'     => isset( $pillars['fiscal'] ) ? round( $pillars['fiscal'], 2 ) : null,
+            
+            // ─── NESTED PILLARS (backward compatibility) ───
             'pillars' => array(
                 'governance' => array( 'score' => isset( $pillars['governance'] ) ? round( $pillars['governance'], 2 ) : null, 'weight' => 25 ),
                 'macro'      => array( 'score' => isset( $pillars['macro'] ) ? round( $pillars['macro'], 2 ) : null, 'weight' => 25 ),
