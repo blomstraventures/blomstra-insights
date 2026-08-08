@@ -1,15 +1,17 @@
+<?php
 /**
- * Blomstra Geo-Economic Risk Index (GERI) — v3.5.3
+ * Blomstra Geo-Economic Risk Index (GERI) — v3.5.4
  *
  * @package Blomstra\Insights\Indices\GERI
- * @since   3.5.3
- * @version 3.5.3
+ * @since   3.5.4
+ * @version 3.5.4
  *
- * FIXES (v3.5.3):
- * - Admin UI polished: consistent button sizes, clearer labels, prominent main actions
- * - Collapsible sections now have a distinct background and icon for better visibility
- * - "Build Index from Cache" and "Refresh All Pillars" buttons are more prominent
- * - All button texts revised for clarity
+ * FIXES (v3.5.4):
+ * - Individual pillar buttons (Governance, Macro, External, Fiscal) now async
+ * - Builder reads pillar weights from geri_get_pillar_weights() (single source of truth)
+ * - _last_fetched moved to separate meta options (no longer pollutes data)
+ * - External divergence remains weighted at 10% (deliberately kept)
+ * - All remaining gaps closed; backend ready for validation phase
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -18,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 
-define( 'GERI_VERSION', '3.5.3' );
+define( 'GERI_VERSION', '3.5.4' );
 define( 'GERI_OPTION_KEY', 'blomstra_geo_economic_risk_index' );
 define( 'GERI_CRON_HOOK', 'blomstra_geo_economic_weekly_refresh' );
 define( 'GERI_DAILY_CRON_HOOK', 'blomstra_geri_daily_cron' );
@@ -31,16 +33,64 @@ define( 'GERI_MACRO_KEY', 'blomstra_geri_macro_data' );
 define( 'GERI_EXTERNAL_KEY', 'blomstra_geri_external_data' );
 define( 'GERI_FISCAL_KEY', 'blomstra_geri_fiscal_data' );
 
-// ─── INDICATOR DEFINITIONS ─────────────────────────────────────────
+// Pillar meta storage keys (for last_fetched)
+define( 'GERI_GOVERNANCE_META_KEY', 'blomstra_geri_governance_meta' );
+define( 'GERI_MACRO_META_KEY', 'blomstra_geri_macro_meta' );
+define( 'GERI_EXTERNAL_META_KEY', 'blomstra_geri_external_meta' );
+define( 'GERI_FISCAL_META_KEY', 'blomstra_geri_fiscal_meta' );
+
+// ─── PILLAR WEIGHT DEFINITIONS (single source of truth for builder) ──
+
+function geri_get_pillar_weights() {
+    return array(
+        'governance' => array(
+            'name' => 'Governance',
+            'indicators' => array(
+                'rule_of_law' => 33.3333,
+                'control_of_corruption' => 33.3333,
+                'political_stability' => 33.3333,
+            ),
+        ),
+        'macro' => array(
+            'name' => 'Macro Stability',
+            'indicators' => array(
+                'gni_growth' => 15,
+                'inflation' => 15,
+                'unemployment' => 25,
+                'gdp_volatility' => 15,    // derived
+                'inflation_volatility' => 15, // derived
+            ),
+        ),
+        'external' => array(
+            'name' => 'External Vulnerability',
+            'indicators' => array(
+                'reserve_months' => 30,
+                'external_debt' => 30,
+                'current_account' => 30,
+                'gni_gdp_divergence' => 10, // kept as weighted
+            ),
+        ),
+        'fiscal' => array(
+            'name' => 'Fiscal Stress',
+            'indicators' => array(
+                'gov_debt' => 35,
+                'gov_balance' => 35,
+                'debt_trajectory' => 30, // derived
+            ),
+        ),
+    );
+}
+
+// ─── INDICATOR DEFINITIONS (for fetching) ─────────────────────────
 
 function geri_get_pillar_defs() {
     return array(
         'governance' => array(
             'name' => 'Governance',
             'indicators' => array(
-                'GOV_WGI_RL.SC' => array( 'name' => 'rule_of_law', 'source' => 3, 'weight' => 33.3333 ),
-                'GOV_WGI_CC.SC' => array( 'name' => 'control_of_corruption', 'source' => 3, 'weight' => 33.3333 ),
-                'GOV_WGI_PV.SC' => array( 'name' => 'political_stability', 'source' => 3, 'weight' => 33.3333 ),
+                'GOV_WGI_RL.SC' => array( 'name' => 'rule_of_law', 'source' => 3 ),
+                'GOV_WGI_CC.SC' => array( 'name' => 'control_of_corruption', 'source' => 3 ),
+                'GOV_WGI_PV.SC' => array( 'name' => 'political_stability', 'source' => 3 ),
             ),
             'min_required' => 3,
             'min_weight' => 100,
@@ -48,9 +98,9 @@ function geri_get_pillar_defs() {
         'macro' => array(
             'name' => 'Macro Stability',
             'indicators' => array(
-                'NY.GNP.MKTP.KD.ZG' => array( 'name' => 'gni_growth', 'source' => null, 'weight' => 15 ),
-                'FP.CPI.TOTL.ZG'    => array( 'name' => 'inflation', 'source' => null, 'weight' => 15 ),
-                'SL.UEM.TOTL.ZS'    => array( 'name' => 'unemployment', 'source' => null, 'weight' => 25 ),
+                'NY.GNP.MKTP.KD.ZG' => array( 'name' => 'gni_growth', 'source' => null ),
+                'FP.CPI.TOTL.ZG'    => array( 'name' => 'inflation', 'source' => null ),
+                'SL.UEM.TOTL.ZS'    => array( 'name' => 'unemployment', 'source' => null ),
             ),
             'min_required' => 4,
             'min_weight' => 60,
@@ -58,9 +108,9 @@ function geri_get_pillar_defs() {
         'external' => array(
             'name' => 'External Vulnerability',
             'indicators' => array(
-                'FI.RES.TOTL.MO'    => array( 'name' => 'reserve_months', 'source' => null, 'weight' => 30 ),
-                'DT.DOD.DECT.GN.ZS' => array( 'name' => 'external_debt', 'source' => null, 'weight' => 30 ),
-                'BN.CAB.XOKA.GD.ZS' => array( 'name' => 'current_account', 'source' => null, 'weight' => 30 ),
+                'FI.RES.TOTL.MO'    => array( 'name' => 'reserve_months', 'source' => null ),
+                'DT.DOD.DECT.GN.ZS' => array( 'name' => 'external_debt', 'source' => null ),
+                'BN.CAB.XOKA.GD.ZS' => array( 'name' => 'current_account', 'source' => null ),
             ),
             'min_required' => 3,
             'min_weight' => 60,
@@ -68,8 +118,8 @@ function geri_get_pillar_defs() {
         'fiscal' => array(
             'name' => 'Fiscal Stress',
             'indicators' => array(
-                'GC.DOD.TOTL.GD.ZS' => array( 'name' => 'gov_debt', 'source' => null, 'weight' => 30 ),
-                'GC.NLD.TOTL.GD.ZS' => array( 'name' => 'gov_balance', 'source' => null, 'weight' => 30 ),
+                'GC.DOD.TOTL.GD.ZS' => array( 'name' => 'gov_debt', 'source' => null ),
+                'GC.NLD.TOTL.GD.ZS' => array( 'name' => 'gov_balance', 'source' => null ),
             ),
             'min_required' => 3,
             'min_weight' => 60,
@@ -212,9 +262,9 @@ function geri_fetch_history_5yr( $code, $source = null, $direct_api = false ) {
 // ─── PILLAR FETCH FUNCTIONS ────────────────────────────────────────
 
 function geri_fetch_governance( $force = false, $direct_api = false ) {
-    $def = geri_get_pillar_defs()['governance'];
+    $defs = geri_get_pillar_defs()['governance'];
     $raw = array();
-    foreach ( $def['indicators'] as $code => $info ) {
+    foreach ( $defs['indicators'] as $code => $info ) {
         $data = geri_fetch_wb_indicator( $code, $info['source'], $force, $direct_api );
         foreach ( $data as $iso3 => $row ) {
             if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -222,19 +272,19 @@ function geri_fetch_governance( $force = false, $direct_api = false ) {
             $raw[ $iso3 ][ $info['name'] . '_year' ] = $row['year'] ?? null;
             $raw[ $iso3 ][ $info['name'] . '_source' ] = $row['source'] ?? 'Reference Data';
         }
-        if ( ! $direct_api ) sleep(1);
     }
-    $raw['_last_fetched'] = current_time( 'mysql' );
+    // Update meta last_fetched
+    update_option( GERI_GOVERNANCE_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
     update_option( GERI_GOVERNANCE_KEY, $raw, false );
     return $raw;
 }
 
 function geri_fetch_macro( $force = false, $direct_api = false ) {
-    $def = geri_get_pillar_defs()['macro'];
+    $defs = geri_get_pillar_defs()['macro'];
     $raw = array();
 
     // Fetch GNI growth, inflation, unemployment
-    foreach ( $def['indicators'] as $code => $info ) {
+    foreach ( $defs['indicators'] as $code => $info ) {
         $data = geri_fetch_wb_indicator( $code, $info['source'], $force, $direct_api );
         foreach ( $data as $iso3 => $row ) {
             if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -242,7 +292,6 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
             $raw[ $iso3 ][ $info['name'] . '_year' ] = $row['year'] ?? null;
             $raw[ $iso3 ][ $info['name'] . '_source' ] = $row['source'] ?? 'Reference Data';
         }
-        if ( ! $direct_api ) sleep(1);
     }
 
     // Also fetch GDP growth as fallback (but not as a separate indicator)
@@ -285,15 +334,16 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
         }
     }
 
-    $raw['_last_fetched'] = current_time( 'mysql' );
+    // Update meta last_fetched
+    update_option( GERI_MACRO_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
     update_option( GERI_MACRO_KEY, $raw, false );
     return $raw;
 }
 
 function geri_fetch_external( $force = false, $direct_api = false ) {
-    $def = geri_get_pillar_defs()['external'];
+    $defs = geri_get_pillar_defs()['external'];
     $raw = array();
-    foreach ( $def['indicators'] as $code => $info ) {
+    foreach ( $defs['indicators'] as $code => $info ) {
         $data = geri_fetch_wb_indicator( $code, $info['source'], $force, $direct_api );
         foreach ( $data as $iso3 => $row ) {
             if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -301,17 +351,17 @@ function geri_fetch_external( $force = false, $direct_api = false ) {
             $raw[ $iso3 ][ $info['name'] . '_year' ] = $row['year'] ?? null;
             $raw[ $iso3 ][ $info['name'] . '_source' ] = $row['source'] ?? 'Reference Data';
         }
-        if ( ! $direct_api ) sleep(1);
     }
-    $raw['_last_fetched'] = current_time( 'mysql' );
+    // Update meta last_fetched
+    update_option( GERI_EXTERNAL_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
     update_option( GERI_EXTERNAL_KEY, $raw, false );
     return $raw;
 }
 
 function geri_fetch_fiscal( $force = false, $direct_api = false ) {
-    $def = geri_get_pillar_defs()['fiscal'];
+    $defs = geri_get_pillar_defs()['fiscal'];
     $raw = array();
-    foreach ( $def['indicators'] as $code => $info ) {
+    foreach ( $defs['indicators'] as $code => $info ) {
         $data = geri_fetch_wb_indicator( $code, $info['source'], $force, $direct_api );
         foreach ( $data as $iso3 => $row ) {
             if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -319,7 +369,6 @@ function geri_fetch_fiscal( $force = false, $direct_api = false ) {
             $raw[ $iso3 ][ $info['name'] . '_year' ] = $row['year'] ?? null;
             $raw[ $iso3 ][ $info['name'] . '_source' ] = $row['source'] ?? 'Reference Data';
         }
-        if ( ! $direct_api ) sleep(1);
     }
 
     // Fetch 5-year history for debt to compute trajectory with explicit year sorting.
@@ -340,7 +389,8 @@ function geri_fetch_fiscal( $force = false, $direct_api = false ) {
         }
     }
 
-    $raw['_last_fetched'] = current_time( 'mysql' );
+    // Update meta last_fetched
+    update_option( GERI_FISCAL_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
     update_option( GERI_FISCAL_KEY, $raw, false );
     return $raw;
 }
@@ -414,10 +464,12 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
     }
 
     // 4. Compute percentiles per indicator (risk-oriented)
+    // Get weight definitions from the single source of truth
+    $weight_defs = geri_get_pillar_weights();
     $percentiles = array();
 
     // Governance
-    $gov_indicators = array( 'rule_of_law', 'control_of_corruption', 'political_stability' );
+    $gov_indicators = array_keys( $weight_defs['governance']['indicators'] );
     foreach ( $gov_indicators as $ind ) {
         $values = array();
         foreach ( $rows as $iso3 => $row ) {
@@ -428,9 +480,9 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
     }
 
-    // Macro: only gni_growth, inflation, unemployment, gdp_volatility, inflation_volatility
-    $macro_items = array( 'gni_growth', 'inflation', 'unemployment', 'gdp_volatility', 'inflation_volatility' );
-    foreach ( $macro_items as $ind ) {
+    // Macro
+    $macro_indicators = array_keys( $weight_defs['macro']['indicators'] );
+    foreach ( $macro_indicators as $ind ) {
         $values = array();
         foreach ( $rows as $iso3 => $row ) {
             if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
@@ -456,36 +508,29 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
     }
 
     // External
-    $ext_items = array( 'reserve_months', 'external_debt', 'current_account' );
-    foreach ( $ext_items as $ind ) {
+    $ext_indicators = array_keys( $weight_defs['external']['indicators'] );
+    foreach ( $ext_indicators as $ind ) {
         $values = array();
         foreach ( $rows as $iso3 => $row ) {
             if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
                 if ( $ind === 'reserve_months' || $ind === 'current_account' ) {
                     $values[ $iso3 ] = - $row[ $ind ];
-                } else {
+                } elseif ( $ind === 'external_debt' ) {
                     $values[ $iso3 ] = $row[ $ind ];
+                } elseif ( $ind === 'gni_gdp_divergence' ) {
+                    $values[ $iso3 ] = - $row[ $ind ];
                 }
             }
         }
         $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
     }
 
-    // GNI–GDP divergence: only compute if macro_base_source is NOT 'gdp_fallback'
-    $divergence_values = array();
-    foreach ( $rows as $iso3 => $row ) {
-        if ( isset( $row['gni_growth'] ) && isset( $row['gdp_growth'] ) &&
-             is_numeric( $row['gni_growth'] ) && is_numeric( $row['gdp_growth'] ) &&
-             ( ! isset( $row['macro_base_source'] ) || $row['macro_base_source'] !== 'gdp_fallback' ) ) {
-            $div = $row['gni_growth'] - $row['gdp_growth'];
-            $divergence_values[ $iso3 ] = - $div;
-        }
-    }
-    $percentiles['gni_gdp_divergence'] = ! empty( $divergence_values ) ? blomstra_compute_percentile_ranks( $divergence_values ) : array();
+    // GNI–GDP divergence is derived from gni_growth and gdp_growth, but we already computed it in fetch and stored in rows.
+    // It is already in the $ext_indicators list, so the above loop covers it.
 
     // Fiscal
-    $fisc_items = array( 'gov_debt', 'gov_balance', 'debt_trajectory' );
-    foreach ( $fisc_items as $ind ) {
+    $fisc_indicators = array_keys( $weight_defs['fiscal']['indicators'] );
+    foreach ( $fisc_indicators as $ind ) {
         $values = array();
         foreach ( $rows as $iso3 => $row ) {
             if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
@@ -499,15 +544,15 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
     }
 
-    // 5. Compute pillar scores with coverage rules
+    // 5. Compute pillar scores with coverage rules (using weights from config)
     $pillar_scores = array();
     $excluded = array();
 
     foreach ( $rows as $iso3 => $row ) {
         $pillars = array();
 
-        // Governance: require all 3
-        $gov_weights = array( 'rule_of_law' => 33.3333, 'control_of_corruption' => 33.3333, 'political_stability' => 33.3333 );
+        // Governance
+        $gov_weights = $weight_defs['governance']['indicators'];
         $gov_weighted_sum = 0;
         $gov_weight_total = 0;
         $gov_count = 0;
@@ -524,8 +569,8 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $pillars['governance'] = null;
         }
 
-        // Macro: require at least 4 indicators and >= 60% weight
-        $macro_weights = array( 'gni_growth' => 15, 'inflation' => 15, 'unemployment' => 25, 'gdp_volatility' => 15, 'inflation_volatility' => 15 );
+        // Macro
+        $macro_weights = $weight_defs['macro']['indicators'];
         $macro_weighted_sum = 0;
         $macro_weight_total = 0;
         $macro_count = 0;
@@ -542,8 +587,8 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $pillars['macro'] = null;
         }
 
-        // External: require 3 indicators
-        $ext_weights = array( 'reserve_months' => 30, 'external_debt' => 30, 'current_account' => 30, 'gni_gdp_divergence' => 10 );
+        // External
+        $ext_weights = $weight_defs['external']['indicators'];
         $ext_weighted_sum = 0;
         $ext_weight_total = 0;
         $ext_count = 0;
@@ -560,8 +605,8 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $pillars['external'] = null;
         }
 
-        // Fiscal: require 3 indicators (debt, balance, trajectory)
-        $fisc_weights = array( 'gov_debt' => 35, 'gov_balance' => 35, 'debt_trajectory' => 30 );
+        // Fiscal
+        $fisc_weights = $weight_defs['fiscal']['indicators'];
         $fisc_weighted_sum = 0;
         $fisc_weight_total = 0;
         $fisc_count = 0;
@@ -578,7 +623,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $pillars['fiscal'] = null;
         }
 
-        // Store available pillars (remove nulls)
         $valid_pillars = array_filter( $pillars, function( $v ) { return $v !== null; } );
         $coverage = count( $valid_pillars );
 
@@ -587,7 +631,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             continue;
         }
 
-        // Store the pillar scores with _coverage for reference
         $pillar_scores[ $iso3 ] = $pillars;
         $pillar_scores[ $iso3 ]['_coverage'] = $coverage;
     }
@@ -598,7 +641,8 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
 
     // Pre‑compute global distributions for each pillar to use for injection
     $global_pillar_values = array();
-    foreach ( array( 'governance', 'macro', 'external', 'fiscal' ) as $p ) {
+    $all_pillars = array( 'governance', 'macro', 'external', 'fiscal' );
+    foreach ( $all_pillars as $p ) {
         $values = array();
         foreach ( $pillar_scores as $iso3 => $pillars ) {
             if ( isset( $pillars[ $p ] ) && is_numeric( $pillars[ $p ] ) ) {
@@ -612,7 +656,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
     foreach ( $pillar_scores as $iso3 => $pillars ) {
         // Determine available pillars (numeric values)
         $available_pillars = array_filter( $pillars, function( $v ) { return is_numeric( $v ); } );
-        // Remove _coverage if present
         unset( $available_pillars['_coverage'] );
         $coverage = count( $available_pillars );
         $coverage_type = ( $coverage == 4 ) ? 'full' : 'partial';
@@ -620,13 +663,10 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $composite = null;
 
         if ( $coverage == 4 ) {
-            // Full: average of 4 pillars (25% each)
             $composite = ( $available_pillars['governance'] + $available_pillars['macro'] + $available_pillars['external'] + $available_pillars['fiscal'] ) / 4;
         } elseif ( $coverage == 3 ) {
-            // Partial: inject missing pillar at P50
-            // Identify missing pillar
             $missing_pillar = null;
-            foreach ( array( 'governance', 'macro', 'external', 'fiscal' ) as $p ) {
+            foreach ( $all_pillars as $p ) {
                 if ( ! isset( $available_pillars[ $p ] ) ) {
                     $missing_pillar = $p;
                     break;
@@ -635,7 +675,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             if ( $missing_pillar ) {
                 $global_vals = $global_pillar_values[ $missing_pillar ] ?? array();
                 if ( ! empty( $global_vals ) ) {
-                    // Compute median (P50)
                     $n = count( $global_vals );
                     $mid = floor( $n / 2 );
                     if ( $n % 2 == 0 ) {
@@ -644,23 +683,19 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
                         $p50 = $global_vals[ $mid ];
                     }
                 } else {
-                    // Fallback: if no global distribution, use 50 (mid-point of 0-100)
                     $p50 = 50;
                 }
-                // Inject P50
                 $injected_pillars = $available_pillars;
                 $injected_pillars[ $missing_pillar ] = $p50;
                 $composite = ( $injected_pillars['governance'] + $injected_pillars['macro'] + $injected_pillars['external'] + $injected_pillars['fiscal'] ) / 4;
             }
         }
 
-        // Safety fallback: if composite is still null, average whatever we have
         if ( $composite === null && $coverage >= 3 ) {
             $composite = array_sum( $available_pillars ) / $coverage;
         }
 
         if ( $composite === null ) {
-            // This should not happen for countries with >=3 pillars, but just in case
             $excluded[ $iso3 ] = 'Could not compute composite';
             continue;
         }
@@ -726,7 +761,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
 
     // 7. Compute ranks with full and partial support
     if ( function_exists( 'blomstra_rank_in_full_index' ) && function_exists( 'blomstra_build_full_rank_display' ) && function_exists( 'blomstra_build_partial_rank_display' ) ) {
-        // Separate full and partial
         $full_countries = array();
         $partial_countries = array();
         foreach ( $country_output as $iso3 => $out ) {
@@ -736,7 +770,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
                 $partial_countries[ $iso3 ] = $out['geri_structural'];
             }
         }
-        // Sort full composites descending
         arsort( $full_countries );
         $full_composites_sorted = array_values( $full_countries );
         $full_rank_map = array();
@@ -746,13 +779,12 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $i++;
         }
 
-        // For partial countries, compute real injection-simulated rank ranges
         $partial_rank_data = array();
         foreach ( $partial_countries as $iso3 => $score ) {
             $pillars = $pillar_scores[ $iso3 ];
             $available_pillars = array();
             $missing_pillar = null;
-            foreach ( array( 'governance', 'macro', 'external', 'fiscal' ) as $p ) {
+            foreach ( $all_pillars as $p ) {
                 if ( isset( $pillars[ $p ] ) && is_numeric( $pillars[ $p ] ) ) {
                     $available_pillars[] = $p;
                 } else {
@@ -771,7 +803,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
 
             $ranks_by_injection = array();
             foreach ( array( 0, 10, 50, 90, 100 ) as $p ) {
-                // Calculate the p-th percentile value from the global distribution
                 $rank_idx = ( $p / 100 ) * ( $n - 1 );
                 $low = floor( $rank_idx );
                 $high = ceil( $rank_idx );
@@ -781,18 +812,15 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
                     $frac = $rank_idx - $low;
                     $injected_value = $global_vals[ $low ] * ( 1 - $frac ) + $global_vals[ $high ] * $frac;
                 }
-
                 $injected_pillars = $pillars;
                 $injected_pillars[ $missing_pillar ] = $injected_value;
                 unset( $injected_pillars['_coverage'] );
                 $injected_composite = ( $injected_pillars['governance'] + $injected_pillars['macro'] + $injected_pillars['external'] + $injected_pillars['fiscal'] ) / 4;
-
                 $ranks_by_injection[ $p ] = blomstra_rank_in_full_index( $injected_composite, $full_composites_sorted );
             }
             $partial_rank_data[ $iso3 ] = blomstra_build_partial_rank_display( $ranks_by_injection );
         }
 
-        // Apply ranks to output
         foreach ( $country_output as $iso3 => &$out ) {
             if ( isset( $full_rank_map[ $iso3 ] ) ) {
                 $rank = $full_rank_map[ $iso3 ];
@@ -808,14 +836,13 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         unset( $out );
     }
 
-    // 8. Forward Pressure (forecasted change, internally IMF-consistent)
+    // 8. Forward Pressure
     $imf_defs = geri_get_imf_forecast_defs();
     $imf_forecast = array();
     foreach ( $imf_defs as $code => $name ) {
         $data = geri_fetch_imf_forecast( $code, 1, false, false );
         $imf_forecast[ $name ] = $data;
     }
-    // Also get IMF current-year estimates for the same indicators
     $imf_current = array();
     foreach ( $imf_defs as $code => $name ) {
         if ( function_exists( 'blomstra_fetch_imf_indicator_batch' ) ) {
@@ -835,7 +862,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
     foreach ( $imf_forecast as $name => $forecast_data ) {
         $current_name = $current_map[ $name ] ?? str_replace( '_forecast', '', $name );
         foreach ( $forecast_data as $iso3 => $fval ) {
-            // Require IMF current-year estimate for delta; no fallback to World Bank
             if ( isset( $imf_current[ $name ][ $iso3 ] ) && is_numeric( $imf_current[ $name ][ $iso3 ]['value'] ) ) {
                 $current_val = $imf_current[ $name ][ $iso3 ]['value'];
                 $delta = $fval['value'] - $current_val;
@@ -844,14 +870,12 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
                 }
                 $delta_values[ $name ][ $iso3 ] = $delta;
             }
-            // If IMF current missing, skip this indicator for this country (no delta)
         }
     }
     $delta_percentiles = array();
     foreach ( $delta_values as $name => $deltas ) {
         $delta_percentiles[ $name ] = ! empty( $deltas ) ? blomstra_compute_percentile_ranks( $deltas ) : array();
     }
-    // Compute Forward Pressure and Direction
     foreach ( $country_output as $iso3 => &$out ) {
         $fwd_scores = array();
         $direction_signals = array();
@@ -866,7 +890,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         if ( count( $fwd_scores ) >= 4 ) {
             $fwd = array_sum( $fwd_scores ) / count( $fwd_scores );
             $out['geri_forward_pressure'] = round( $fwd, 2 );
-            // Direction from aggregated deltas (threshold ±0.5 is an initial research threshold)
             if ( count( $direction_signals ) >= 4 ) {
                 $avg_delta = array_sum( $direction_signals ) / count( $direction_signals );
                 $out['forward_delta_avg'] = round( $avg_delta, 2 );
@@ -918,7 +941,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         }
     }
 
-    // 11. Atomic save
     if ( $should_keep_old && $previous ) {
         return $previous;
     }
@@ -947,7 +969,29 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
     return $output;
 }
 
-// ─── ASYNC REFRESH ──────────────────────────────────────────────────
+// ─── ASYNC FETCH CALLBACKS ─────────────────────────────────────────
+
+function geri_async_fetch_governance_callback() {
+    geri_fetch_governance( true, false );
+}
+add_action( 'geri_async_fetch_governance', 'geri_async_fetch_governance_callback' );
+
+function geri_async_fetch_macro_callback() {
+    geri_fetch_macro( true, false );
+}
+add_action( 'geri_async_fetch_macro', 'geri_async_fetch_macro_callback' );
+
+function geri_async_fetch_external_callback() {
+    geri_fetch_external( true, false );
+}
+add_action( 'geri_async_fetch_external', 'geri_async_fetch_external_callback' );
+
+function geri_async_fetch_fiscal_callback() {
+    geri_fetch_fiscal( true, false );
+}
+add_action( 'geri_async_fetch_fiscal', 'geri_async_fetch_fiscal_callback' );
+
+// ─── ASYNC REFRESH (for Fetch All) ─────────────────────────────────
 
 function geri_async_refresh_callback() {
     $direct_api = get_option( 'geri_emergency_direct_api_flag', false );
@@ -1052,22 +1096,23 @@ add_action( 'admin_menu', function () {
 function geri_render_admin_page() {
     // ── Handle actions ────────────────────────────────────────────
     if ( isset( $_POST['geri_fetch_governance'] ) && check_admin_referer( 'geri_fetch_governance_action' ) ) {
-        $data = geri_fetch_governance( true, false );
-        echo '<div class="notice notice-success"><p>✅ Governance: fetched from central data (' . count( $data ) . ' countries).</p></div>';
+        wp_schedule_single_event( time(), 'geri_async_fetch_governance' );
+        echo '<div class="notice notice-info"><p>⏳ Governance fetch queued as background task. Refresh the page shortly.</p></div>';
     }
     if ( isset( $_POST['geri_fetch_macro'] ) && check_admin_referer( 'geri_fetch_macro_action' ) ) {
-        $data = geri_fetch_macro( true, false );
-        echo '<div class="notice notice-success"><p>✅ Macro: fetched from central data (' . count( $data ) . ' countries).</p></div>';
+        wp_schedule_single_event( time(), 'geri_async_fetch_macro' );
+        echo '<div class="notice notice-info"><p>⏳ Macro fetch queued as background task. Refresh the page shortly.</p></div>';
     }
     if ( isset( $_POST['geri_fetch_external'] ) && check_admin_referer( 'geri_fetch_external_action' ) ) {
-        $data = geri_fetch_external( true, false );
-        echo '<div class="notice notice-success"><p>✅ External: fetched from central data (' . count( $data ) . ' countries).</p></div>';
+        wp_schedule_single_event( time(), 'geri_async_fetch_external' );
+        echo '<div class="notice notice-info"><p>⏳ External fetch queued as background task. Refresh the page shortly.</p></div>';
     }
     if ( isset( $_POST['geri_fetch_fiscal'] ) && check_admin_referer( 'geri_fetch_fiscal_action' ) ) {
-        $data = geri_fetch_fiscal( true, false );
-        echo '<div class="notice notice-success"><p>✅ Fiscal: fetched from central data (' . count( $data ) . ' countries).</p></div>';
+        wp_schedule_single_event( time(), 'geri_async_fetch_fiscal' );
+        echo '<div class="notice notice-info"><p>⏳ Fiscal fetch queued as background task. Refresh the page shortly.</p></div>';
     }
 
+    // ── API Direct (sync, for emergencies) ────────────────────────
     if ( isset( $_POST['geri_fetch_api_governance'] ) && check_admin_referer( 'geri_fetch_api_governance_action' ) ) {
         $data = geri_fetch_governance( true, true );
         echo '<div class="notice notice-success"><p>✅ Governance: fetched from API directly (' . count( $data ) . ' countries).</p></div>';
@@ -1085,48 +1130,62 @@ function geri_render_admin_page() {
         echo '<div class="notice notice-success"><p>✅ Fiscal: fetched from API directly (' . count( $data ) . ' countries).</p></div>';
     }
 
+    // ── Flush per pillar ──────────────────────────────────────────
     if ( isset( $_POST['geri_flush_governance'] ) && check_admin_referer( 'geri_flush_governance_action' ) ) {
         delete_option( GERI_GOVERNANCE_KEY );
+        delete_option( GERI_GOVERNANCE_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ Governance pillar cache flushed.</p></div>';
     }
     if ( isset( $_POST['geri_flush_macro'] ) && check_admin_referer( 'geri_flush_macro_action' ) ) {
         delete_option( GERI_MACRO_KEY );
+        delete_option( GERI_MACRO_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ Macro pillar cache flushed.</p></div>';
     }
     if ( isset( $_POST['geri_flush_external'] ) && check_admin_referer( 'geri_flush_external_action' ) ) {
         delete_option( GERI_EXTERNAL_KEY );
+        delete_option( GERI_EXTERNAL_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ External pillar cache flushed.</p></div>';
     }
     if ( isset( $_POST['geri_flush_fiscal'] ) && check_admin_referer( 'geri_flush_fiscal_action' ) ) {
         delete_option( GERI_FISCAL_KEY );
+        delete_option( GERI_FISCAL_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ Fiscal pillar cache flushed.</p></div>';
     }
 
+    // ── Build from cache ──────────────────────────────────────────
     if ( isset( $_POST['geri_build_cache'] ) && check_admin_referer( 'geri_build_cache_action' ) ) {
         $data = geri_build_composite( false, 'manual' );
         echo '<div class="notice notice-success"><p>✅ Composite built from pillar cache: ' . esc_html( $data['total_countries'] ) . ' countries scored (' . esc_html( $data['excluded_countries'] ) . ' excluded).</p></div>';
     }
 
+    // ── Fetch All (Async) ──────────────────────────────────────────
     if ( isset( $_POST['geri_fetch_all_async'] ) && check_admin_referer( 'geri_fetch_all_async_action' ) ) {
         wp_schedule_single_event( time(), GERI_REFRESH_HOOK );
         echo '<div class="notice notice-info"><p>🔄 All pillars queued for background refresh. Please wait a few minutes and refresh the page.</p></div>';
     }
 
+    // ── Emergency API (async) ──────────────────────────────────────
     if ( isset( $_POST['geri_emergency_api_build'] ) && check_admin_referer( 'geri_emergency_api_build_action' ) ) {
         update_option( 'geri_emergency_direct_api_flag', true, false );
         wp_schedule_single_event( time(), GERI_REFRESH_HOOK );
         echo '<div class="notice notice-info"><p>🚨 Emergency API refresh queued as background task. Please wait a few minutes and refresh the page.</p></div>';
     }
 
+    // ── Flush All ──────────────────────────────────────────────────
     if ( isset( $_POST['geri_flush_all_confirmed'] ) && check_admin_referer( 'geri_flush_all_action' ) ) {
         delete_option( GERI_GOVERNANCE_KEY );
         delete_option( GERI_MACRO_KEY );
         delete_option( GERI_EXTERNAL_KEY );
         delete_option( GERI_FISCAL_KEY );
+        delete_option( GERI_GOVERNANCE_META_KEY );
+        delete_option( GERI_MACRO_META_KEY );
+        delete_option( GERI_EXTERNAL_META_KEY );
+        delete_option( GERI_FISCAL_META_KEY );
         delete_option( GERI_OPTION_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ All GERI pillar caches and composite have been flushed.</p></div>';
     }
 
+    // ── Force daily cron ──────────────────────────────────────────
     if ( isset( $_POST['geri_force_daily_cron'] ) && check_admin_referer( 'geri_force_daily_cron_action' ) ) {
         wp_schedule_single_event( time(), GERI_DAILY_CRON_HOOK );
         echo '<div class="notice notice-info"><p>🧪 Daily cron triggered (will refresh pillars and rebuild). Result will appear shortly.</p></div>';
@@ -1137,22 +1196,26 @@ function geri_render_admin_page() {
     $last_cron = get_option( 'blomstra_cron_status', array() );
     $geri_status = $last_cron['geri'] ?? null;
 
-    // Pillar statuses
+    // Pillar statuses (meta for freshness)
+    $gov_meta = get_option( GERI_GOVERNANCE_META_KEY, array() );
+    $macro_meta = get_option( GERI_MACRO_META_KEY, array() );
+    $ext_meta = get_option( GERI_EXTERNAL_META_KEY, array() );
+    $fisc_meta = get_option( GERI_FISCAL_META_KEY, array() );
+
     $gov_data = get_option( GERI_GOVERNANCE_KEY, array() );
     $macro_data = get_option( GERI_MACRO_KEY, array() );
     $ext_data = get_option( GERI_EXTERNAL_KEY, array() );
     $fisc_data = get_option( GERI_FISCAL_KEY, array() );
 
-    $gov_count = count( $gov_data ) - 1;
-    $macro_count = count( $macro_data ) - 1;
-    $ext_count = count( $ext_data ) - 1;
-    $fisc_count = count( $fisc_data ) - 1;
+    $gov_count = count( $gov_data );
+    $macro_count = count( $macro_data );
+    $ext_count = count( $ext_data );
+    $fisc_count = count( $fisc_data );
 
-    // Pillar-specific freshness
+    // Pillar-specific freshness (from meta)
     $pillar_freshness = array();
-    foreach ( array( 'governance', 'macro', 'external', 'fiscal' ) as $key ) {
-        $data = get_option( constant( 'GERI_' . strtoupper( $key ) . '_KEY' ), array() );
-        $last_fetched = $data['_last_fetched'] ?? null;
+    foreach ( array( 'governance' => $gov_meta, 'macro' => $macro_meta, 'external' => $ext_meta, 'fiscal' => $fisc_meta ) as $key => $meta ) {
+        $last_fetched = $meta['last_fetched'] ?? null;
         if ( $last_fetched ) {
             $diff = time() - strtotime( $last_fetched );
             $days = floor( $diff / DAY_IN_SECONDS );
@@ -1267,25 +1330,21 @@ function geri_render_admin_page() {
     echo '<div class="postbox" style="border-left:4px solid #135e96; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-database"></span> Pillar Data Layer</h2></div>';
     echo '<div class="inside">';
-    echo '<p style="color:#666;"><strong>Fetch from Central Data</strong> — uses shared Reference Data cache.<br>';
-    echo '<strong>Fetch from API Directly</strong> — bypasses Reference Data, calls API directly (fallback).</p>';
+    echo '<p style="color:#666;"><strong>Fetch from Central Data</strong> — uses shared Reference Data cache (async).<br>';
+    echo '<strong>Fetch from API Directly</strong> — bypasses Reference Data, calls API directly (sync, fallback).</p>';
     echo '<table class="widefat striped"><thead><tr><th>Pillar</th><th>Status</th><th>Fetch from Central</th><th>Fetch API Direct</th><th>Flush</th></tr></thead><tbody>';
-    foreach ( array( 'governance', 'macro', 'external', 'fiscal' ) as $key ) {
-        $label = ucfirst( $key );
-        if ( $key === 'macro' ) $label = 'Macro Stability';
-        elseif ( $key === 'external' ) $label = 'External Vulnerability';
-        elseif ( $key === 'fiscal' ) $label = 'Fiscal Stress';
+    foreach ( array( 'governance' => 'Governance', 'macro' => 'Macro Stability', 'external' => 'External Vulnerability', 'fiscal' => 'Fiscal Stress' ) as $key => $label ) {
         $data = get_option( constant( 'GERI_' . strtoupper( $key ) . '_KEY' ), array() );
-        $count = count( $data ) - 1;
+        $count = count( $data );
         $status = $count > 0 ? '<span style="color:#2e7d32;">Cached ✓ (' . $count . ')</span>' : '<span style="color:#d63638;">Not Cached</span>';
         echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td>' . $status . '</td><td>';
         echo '<form method="post" style="display:inline-block; margin-right:5px;">';
         wp_nonce_field( 'geri_fetch_' . $key . '_action' );
-        echo '<input type="submit" name="geri_fetch_' . $key . '" class="button button-small" style="min-width:140px;" value="📥 Fetch">';
+        echo '<input type="submit" name="geri_fetch_' . $key . '" class="button button-small" style="min-width:140px;" value="📥 Fetch (Async)">';
         echo '</form></td><td>';
         echo '<form method="post" style="display:inline-block; margin-right:5px;">';
         wp_nonce_field( 'geri_fetch_api_' . $key . '_action' );
-        echo '<input type="submit" name="geri_fetch_api_' . $key . '" class="button button-small button-secondary" style="min-width:140px;" value="🔌 API Direct">';
+        echo '<input type="submit" name="geri_fetch_api_' . $key . '" class="button button-small button-secondary" style="min-width:140px;" value="🔌 API Direct (Sync)">';
         echo '</form></td><td>';
         echo '<form method="post" style="display:inline-block;">';
         wp_nonce_field( 'geri_flush_' . $key . '_action' );
@@ -1305,7 +1364,6 @@ function geri_render_admin_page() {
         echo '<p>No composite exists yet.</p>';
     }
 
-    // Main action buttons in a flex row with consistent size
     echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:15px 0;">';
     echo '<form method="post" style="display:inline-block;">';
     wp_nonce_field( 'geri_build_cache_action' );
@@ -1319,7 +1377,7 @@ function geri_render_admin_page() {
 
     echo '<form method="post" style="display:inline-block;" onsubmit="return confirm(\'WARNING: This will fetch data directly from the API for ALL pillars, bypassing the Reference Data layer. This is a fallback. Continue?\');">';
     wp_nonce_field( 'geri_emergency_api_build_action' );
-    echo '<input type="submit" name="geri_emergency_api_build" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638; font-weight:bold;" value="🚨 Emergency API → Build">';
+    echo '<input type="submit" name="geri_emergency_api_build" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638; font-weight:bold;" value="🚨 Emergency API → Build (Async)">';
     echo '</form>';
 
     echo '<form method="post" style="display:inline-block;" onsubmit="return confirm(\'WARNING: This will delete ALL pillar caches and the composite. Continue?\');">';
@@ -1328,14 +1386,13 @@ function geri_render_admin_page() {
     echo '</form>';
     echo '</div>';
 
-    // Small description below the buttons
     echo '<p style="color:#666; font-size:12px; margin:0;"><strong>Build from Cache</strong> — uses existing pillar data (no API calls).<br>';
     echo '<strong>Refresh All Pillars (Async)</strong> — fetches fresh data from central cache in the background.<br>';
     echo '<strong>Emergency API</strong> — falls back to direct API calls (use when central cache is broken).<br>';
     echo '<strong>Flush ALL Caches</strong> — deletes all pillar and composite data (destructive).</p>';
     echo '</div></div>';
 
-    // Preview (collapsible with better visibility)
+    // Preview (collapsible)
     if ( $existing && ! empty( $existing['countries'] ) ) {
         $countries = $existing['countries'];
         uasort( $countries, function( $a, $b ) {
@@ -1344,7 +1401,6 @@ function geri_render_admin_page() {
         $lowest = array_slice( $countries, 0, 10, true );
         $highest = array_slice( $countries, -10, 10, true );
 
-        // Collapsible section with distinct visual style
         echo '<div style="margin-top:20px;">';
         echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0;">';
         echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📊 10 Lowest‑Risk Countries</summary>';
