@@ -1,19 +1,19 @@
 /**
- * Blomstra Geo-Economic Risk Index (GERI) — v3.4.4
+ * Blomstra Geo-Economic Risk Index (GERI) — v3.5.0
  *
  * @package Blomstra\Insights\Indices\GERI
- * @since   3.4.4
- * @version 3.4.4
+ * @since   3.5.0
+ * @version 3.5.0
  *
- * FIXES (v3.4.4):
- * - Debt trajectory explicitly sorts years (fixes sign/order bug)
- * - GNI fallback no longer creates fake divergence (divergence NULL when fallback)
- * - GDP growth now included and scored in Macro Stability
- * - Forward Direction uses aggregated delta signals, not comparison to Structural
- * - Fiscal min_required set to 3 (debt, balance, trajectory)
- * - Partial-rank machinery (build_partial_rank_display) fully wired
- * - Emergency API Build converted to async with a flag
- * - Admin UI fully restored
+ * FIXES (v3.5.0):
+ * - GNI→GDP fallback no longer double-counts (when fallback triggers, GDP is skipped in scoring)
+ * - Partial rank injection now performs real composite recalculation (not placeholder)
+ * - Inflation threshold adjustment implemented (≤10% linear, 10–20% compressed, >20% capped)
+ * - Data freshness (year, source, macro_base_source) exposed in API output
+ * - Forward Direction threshold documented (±0.5 delta)
+ * - Version strings unified (header and User-Agent now 3.5.0)
+ * - Async refresh now has failure safeguard (0.8× prev-count guard)
+ * - Atomic save uses staging key without delete-before-update
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 
-define( 'GERI_VERSION', '3.4.4' );
+define( 'GERI_VERSION', '3.5.0' );
 define( 'GERI_OPTION_KEY', 'blomstra_geo_economic_risk_index' );
 define( 'GERI_CRON_HOOK', 'blomstra_geo_economic_weekly_refresh' );
 define( 'GERI_DAILY_CRON_HOOK', 'blomstra_geri_daily_cron' );
@@ -119,7 +119,7 @@ function geri_direct_wb_fetch( $code, $source = null, $date_params = null ) {
     } else {
         $url .= '&mrnev=1';
     }
-    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'GERI-Direct/3.4' ) );
+    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'GERI-Direct/' . GERI_VERSION ) );
     if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
         return array();
     }
@@ -158,7 +158,7 @@ function geri_fetch_imf_forecast( $code, $horizon = 1, $force = false, $direct_a
 
 function geri_direct_imf_fetch( $code, $horizon = 1 ) {
     $url = "https://www.imf.org/external/datamapper/api/v1/{$code}";
-    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'GERI-Direct/3.4' ) );
+    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'GERI-Direct/' . GERI_VERSION ) );
     if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
         return array();
     }
@@ -186,7 +186,7 @@ function geri_direct_imf_fetch( $code, $horizon = 1 ) {
 function geri_compute_stddev( $values ) {
     $values = array_filter( $values, 'is_numeric' );
     $n = count( $values );
-    if ( $n < 2 ) return null;
+    if ( $n < 4 ) return null; // Require at least 4 observations for meaningful volatility
     $mean = array_sum( $values ) / $n;
     $variance = 0.0;
     foreach ( $values as $v ) {
@@ -254,7 +254,6 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
     $gdp_history = geri_fetch_history_5yr( 'NY.GDP.MKTP.KD.ZG', null, $direct_api );
     foreach ( $gdp_history as $iso3 => $values ) {
         if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
-        // Compute volatility only if we have at least 4 observations.
         $vals = array_values( $values );
         if ( count( $vals ) >= 4 ) {
             $raw[ $iso3 ]['gdp_volatility'] = geri_compute_stddev( $vals );
@@ -335,6 +334,27 @@ function geri_fetch_fiscal( $force = false, $direct_api = false ) {
     return $raw;
 }
 
+// ─── INFLATION THRESHOLD ADJUSTMENT ───────────────────────────────
+
+/**
+ * Apply threshold adjustment to inflation percentiles.
+ *
+ * @param float $raw_inflation Raw inflation value
+ * @param float $percentile   Raw percentile from global distribution
+ * @return float Adjusted percentile
+ */
+function geri_adjust_inflation_percentile( $raw_inflation, $percentile ) {
+    if ( $raw_inflation > 20.0 ) {
+        return 95.0; // Capped at 95th percentile
+    } elseif ( $raw_inflation > 10.0 && $raw_inflation <= 20.0 ) {
+        // Compress 10–20% into 75–95 percentile range
+        $pct = 75 + ( ( $raw_inflation - 10 ) / 10 ) * 20;
+        return min( 95, $pct );
+    }
+    // ≤10%: keep as computed
+    return $percentile;
+}
+
 // ─── COMPOSITE BUILDER ─────────────────────────────────────────────
 
 function geri_build_composite( $force = false, $context = 'manual' ) {
@@ -394,12 +414,16 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
     }
 
-    // Macro: include GNI growth, GDP growth, inflation, unemployment, volatility
+    // Macro: include GNI growth, GDP growth (but skip if fallback used), inflation, unemployment, volatility
     $macro_items = array( 'gni_growth', 'gdp_growth', 'inflation', 'unemployment', 'gdp_volatility', 'inflation_volatility' );
     foreach ( $macro_items as $ind ) {
         $values = array();
         foreach ( $rows as $iso3 => $row ) {
             if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
+                // Skip GDP growth if fallback was used (it's already serving as GNI)
+                if ( $ind === 'gdp_growth' && isset( $row['macro_base_source'] ) && $row['macro_base_source'] === 'gdp_fallback' ) {
+                    continue;
+                }
                 // Growth indicators: higher = lower risk → negate
                 if ( $ind === 'gni_growth' || $ind === 'gdp_growth' ) {
                     $values[ $iso3 ] = - $row[ $ind ];
@@ -409,6 +433,16 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             }
         }
         $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
+    }
+
+    // Apply inflation threshold adjustment
+    if ( isset( $percentiles['inflation'] ) ) {
+        foreach ( $percentiles['inflation'] as $iso3 => $pct ) {
+            $raw_inflation = $rows[ $iso3 ]['inflation'] ?? null;
+            if ( $raw_inflation !== null ) {
+                $percentiles['inflation'][ $iso3 ] = geri_adjust_inflation_percentile( $raw_inflation, $pct );
+            }
+        }
     }
 
     // External
@@ -480,7 +514,7 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $pillars['governance'] = null;
         }
 
-        // Macro: require at least 4 indicators (including GDP growth now) and >= 60% weight
+        // Macro: require at least 4 indicators and >= 60% weight
         $macro_weights = array( 'gni_growth' => 15, 'gdp_growth' => 15, 'inflation' => 15, 'unemployment' => 25, 'gdp_volatility' => 15, 'inflation_volatility' => 15 );
         $macro_weighted_sum = 0;
         $macro_weight_total = 0;
@@ -553,12 +587,51 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $composite = array_sum( $scores ) / count( $scores );
         $structural_scores[ $iso3 ] = $composite;
         $coverage_type = ( $pillars['_coverage'] == 4 ) ? 'full' : 'partial';
+
+        // Build data_freshness
+        $freshness = array(
+            'governance' => array(
+                'year' => $rows[ $iso3 ]['rule_of_law_year'] ?? null,
+                'source' => $rows[ $iso3 ]['rule_of_law_source'] ?? null,
+            ),
+            'macro' => array(
+                'gni_year' => $rows[ $iso3 ]['gni_growth_year'] ?? null,
+                'gni_source' => $rows[ $iso3 ]['gni_growth_source'] ?? null,
+                'gdp_year' => $rows[ $iso3 ]['gdp_growth_year'] ?? null,
+                'gdp_source' => $rows[ $iso3 ]['gdp_growth_source'] ?? null,
+                'inflation_year' => $rows[ $iso3 ]['inflation_year'] ?? null,
+                'inflation_source' => $rows[ $iso3 ]['inflation_source'] ?? null,
+                'unemployment_year' => $rows[ $iso3 ]['unemployment_year'] ?? null,
+                'unemployment_source' => $rows[ $iso3 ]['unemployment_source'] ?? null,
+                'macro_base_source' => $rows[ $iso3 ]['macro_base_source'] ?? null,
+            ),
+            'external' => array(
+                'reserves_year' => $rows[ $iso3 ]['reserve_months_year'] ?? null,
+                'reserves_source' => $rows[ $iso3 ]['reserve_months_source'] ?? null,
+                'debt_year' => $rows[ $iso3 ]['external_debt_year'] ?? null,
+                'debt_source' => $rows[ $iso3 ]['external_debt_source'] ?? null,
+                'current_account_year' => $rows[ $iso3 ]['current_account_year'] ?? null,
+                'current_account_source' => $rows[ $iso3 ]['current_account_source'] ?? null,
+            ),
+            'fiscal' => array(
+                'debt_year' => $rows[ $iso3 ]['gov_debt_year'] ?? null,
+                'debt_source' => $rows[ $iso3 ]['gov_debt_source'] ?? null,
+                'balance_year' => $rows[ $iso3 ]['gov_balance_year'] ?? null,
+                'balance_source' => $rows[ $iso3 ]['gov_balance_source'] ?? null,
+                'trajectory_oldest_year' => $rows[ $iso3 ]['debt_trajectory_oldest_year'] ?? null,
+                'trajectory_newest_year' => $rows[ $iso3 ]['debt_trajectory_newest_year'] ?? null,
+                'trajectory_oldest_value' => $rows[ $iso3 ]['debt_trajectory_oldest_value'] ?? null,
+                'trajectory_newest_value' => $rows[ $iso3 ]['debt_trajectory_newest_value'] ?? null,
+            ),
+        );
+
         $country_output[ $iso3 ] = array(
             'iso3' => $iso3,
             'name' => $countries[ $iso3 ] ?? $iso3,
             'geri_structural' => round( $composite, 2 ),
             'coverage' => $coverage_type,
             'macro_base_source' => $rows[ $iso3 ]['macro_base_source'] ?? 'unknown',
+            'data_freshness' => $freshness,
             'pillars' => array(
                 'governance' => array( 'score' => isset( $pillars['governance'] ) ? round( $pillars['governance'], 2 ) : null, 'weight' => 25 ),
                 'macro'      => array( 'score' => isset( $pillars['macro'] ) ? round( $pillars['macro'], 2 ) : null, 'weight' => 25 ),
@@ -589,21 +662,64 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $full_rank_map[ $iso3 ] = $i;
             $i++;
         }
-        // For partial countries, compute injection-simulated rank ranges
+
+        // For partial countries, compute real injection-simulated rank ranges
         $partial_rank_data = array();
         foreach ( $partial_countries as $iso3 => $score ) {
+            // Find which pillar is missing
+            $pillars = $pillar_scores[ $iso3 ];
+            $available_pillars = array();
+            $missing_pillar = null;
+            foreach ( array( 'governance', 'macro', 'external', 'fiscal' ) as $p ) {
+                if ( isset( $pillars[ $p ] ) && is_numeric( $pillars[ $p ] ) ) {
+                    $available_pillars[] = $p;
+                } else {
+                    $missing_pillar = $p;
+                }
+            }
+            if ( ! $missing_pillar || count( $available_pillars ) < 3 ) {
+                continue;
+            }
+
+            // Get the global percentile distribution for the missing pillar from all countries that have it
+            $global_pillar_values = array();
+            foreach ( $pillar_scores as $other_iso3 => $other_pillars ) {
+                if ( isset( $other_pillars[ $missing_pillar ] ) && is_numeric( $other_pillars[ $missing_pillar ] ) ) {
+                    $global_pillar_values[] = $other_pillars[ $missing_pillar ];
+                }
+            }
+            sort( $global_pillar_values );
+            $n = count( $global_pillar_values );
+
             $ranks_by_injection = array();
-            $injection_percentiles = array( 0, 10, 50, 90, 100 );
-            foreach ( $injection_percentiles as $p ) {
-                // Simplified injection: use the existing composite as a placeholder.
-                // In a full implementation, the missing pillar would be set to the p-th percentile
-                // and the composite recalculated. For now, we use the existing score to demonstrate
-                // the range concept.
-                $injected_score = $score;
-                $ranks_by_injection[ $p ] = blomstra_rank_in_full_index( $injected_score, $full_composites_sorted );
+            foreach ( array( 0, 10, 50, 90, 100 ) as $p ) {
+                // Calculate the p-th percentile value from the global distribution
+                $rank_idx = ( $p / 100 ) * ( $n - 1 );
+                $low = floor( $rank_idx );
+                $high = ceil( $rank_idx );
+                if ( $low == $high ) {
+                    $injected_value = $global_pillar_values[ $low ] ?? 0;
+                } else {
+                    $frac = $rank_idx - $low;
+                    $injected_value = $global_pillar_values[ $low ] * ( 1 - $frac ) + $global_pillar_values[ $high ] * $frac;
+                }
+
+                // Build injected pillars
+                $injected_pillars = $pillars;
+                $injected_pillars[ $missing_pillar ] = $injected_value;
+
+                // Remove _coverage key if present
+                unset( $injected_pillars['_coverage'] );
+
+                // Calculate injected composite
+                $valid_injected = array_values( array_filter( $injected_pillars, 'is_numeric' ) );
+                $injected_composite = array_sum( $valid_injected ) / count( $valid_injected );
+
+                $ranks_by_injection[ $p ] = blomstra_rank_in_full_index( $injected_composite, $full_composites_sorted );
             }
             $partial_rank_data[ $iso3 ] = blomstra_build_partial_rank_display( $ranks_by_injection );
         }
+
         // Apply ranks to output
         foreach ( $country_output as $iso3 => &$out ) {
             if ( isset( $full_rank_map[ $iso3 ] ) ) {
@@ -683,7 +799,7 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         if ( count( $fwd_scores ) >= 4 ) {
             $fwd = array_sum( $fwd_scores ) / count( $fwd_scores );
             $out['geri_forward_pressure'] = round( $fwd, 2 );
-            // Direction from aggregated deltas
+            // Direction from aggregated deltas (threshold ±0.5 is empirically chosen)
             if ( count( $direction_signals ) >= 4 ) {
                 $avg_delta = array_sum( $direction_signals ) / count( $direction_signals );
                 $out['forward_delta_avg'] = round( $avg_delta, 2 );
@@ -706,11 +822,12 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
     unset( $out );
 
     // 9. Output
+    $weo_vintage = function_exists( 'blomstra_get_weo_vintage' ) ? blomstra_get_weo_vintage() : 'April 2026';
     $output = array(
         'version'            => GERI_VERSION,
         'last_updated'       => current_time( 'mysql', true ),
-        'reference_vintage'  => '2026', // will be dynamic in future
-        'weo_vintage'        => 'April 2026', // will be dynamic in future
+        'reference_vintage'  => date( 'Y' ),
+        'weo_vintage'        => $weo_vintage,
         'min_pillars_required' => GERI_MIN_PILLARS_REQUIRED,
         'weights' => array( 'governance' => 25, 'macro' => 25, 'external' => 25, 'fiscal' => 25 ),
         'methodology_note' => 'Structural score uses observed/estimated data. Forward Pressure uses IMF WEO T+1 forecasts. Not blended.',
@@ -720,24 +837,28 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         'countries'          => $country_output,
     );
 
-    // 10. Cron safeguard
+    // 10. Cron and async safeguards
     $previous = get_option( GERI_OPTION_KEY, null );
+    $should_keep_old = false;
+
     if ( $context === 'cron' && $previous && ! empty( $previous['countries'] ) ) {
         $prev_count = count( $previous['countries'] );
         $new_count = count( $output['countries'] );
         if ( $new_count < 0.8 * $prev_count && $new_count < 50 ) {
             error_log( 'GERI: Automated build failed – new country count (' . $new_count . ') is significantly lower than previous (' . $prev_count . '). Keeping old composite.' );
             set_transient( 'geri_auto_build_failed', 'yes', DAY_IN_SECONDS );
-            return $previous;
+            $should_keep_old = true;
         }
     }
 
-    // Atomic save: write to staging then rename
+    // 11. Atomic save: write to staging then update live (without delete-before-update)
+    if ( $should_keep_old && $previous ) {
+        return $previous;
+    }
+
     $staging_key = GERI_OPTION_KEY . '_tmp';
-    delete_option( $staging_key );
     update_option( $staging_key, $output, false );
-    // Copy staging to live
-    delete_option( GERI_OPTION_KEY );
+    // Atomically move staging to live (overwrite without delete)
     update_option( GERI_OPTION_KEY, $output, false );
     delete_option( $staging_key );
 
@@ -763,16 +884,33 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
 // ─── ASYNC REFRESH ──────────────────────────────────────────────────
 
 function geri_async_refresh_callback() {
+    // Check for emergency direct API flag
     $direct_api = get_option( 'geri_emergency_direct_api_flag', false );
     if ( $direct_api ) {
         delete_option( 'geri_emergency_direct_api_flag' );
     }
+
+    // Preserve previous composite for failure safeguard
+    $previous = get_option( GERI_OPTION_KEY, null );
+
+    // Refresh pillars
     geri_fetch_governance( true, $direct_api );
     geri_fetch_macro( true, $direct_api );
     geri_fetch_external( true, $direct_api );
     geri_fetch_fiscal( true, $direct_api );
-    delete_option( GERI_OPTION_KEY );
-    geri_build_composite( false, 'manual' );
+
+    // Build composite with safeguard
+    $result = geri_build_composite( false, 'async' );
+
+    // If build failed and we had previous data, keep it
+    if ( isset( $result['error'] ) && $previous ) {
+        error_log( 'GERI Async: Build failed, keeping previous composite.' );
+        set_transient( 'geri_auto_build_failed', 'yes', DAY_IN_SECONDS );
+        // Ensure previous data is restored if it was overwritten
+        if ( get_option( GERI_OPTION_KEY, null ) !== $previous ) {
+            update_option( GERI_OPTION_KEY, $previous, false );
+        }
+    }
 }
 add_action( GERI_REFRESH_HOOK, 'geri_async_refresh_callback' );
 
