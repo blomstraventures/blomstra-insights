@@ -959,154 +959,270 @@ if ( ! function_exists( 'blomstra_fetch_imf_indicator_batch' ) ) {
     /**
      * Fetch a single IMF WEO indicator for all countries.
      * Returns the latest ACTUAL year (<= current year) for each country.
-     * Also stores forecast data in a separate cache key for forward-pressure.
+     * Implements retry logic (3 attempts, exponential backoff).
      *
      * @param string $code   IMF indicator code (e.g., 'NGDP_RPCH')
      * @param bool   $force  Bypass cache.
-     * @return array ISO3 => [ 'value' => float, 'year' => string, 'data_type' => 'actual'|'forecast', 'fetched_at' => string ]
+     * @return array ISO3 => [ 'value' => float, 'year' => string, 'data_type' => 'actual'|'forecast_fallback', 'fetched_at' => string, 'source' => string ]
      */
     function blomstra_fetch_imf_indicator_batch( $code, $force = false ) {
         $cache_key = 'blomstra_imf_indicator_' . md5( $code );
+        $staging_key = $cache_key . '_tmp';
+
         if ( $force ) {
             delete_transient( $cache_key );
+            delete_transient( $staging_key );
         }
+
+        // Check live cache
         $cached = get_transient( $cache_key );
         if ( false !== $cached && is_array( $cached ) ) {
             return $cached;
         }
 
+        // Check staging cache (in case previous refresh failed)
+        $staging = get_transient( $staging_key );
+        if ( false !== $staging && is_array( $staging ) ) {
+            set_transient( $cache_key, $staging, BLOMSTRA_IMF_CACHE_TTL );
+            delete_transient( $staging_key );
+            return $staging;
+        }
+
         $url = BLOMSTRA_IMF_BASE_URL . '/' . $code;
-        $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.7.0' ) );
-
-        if ( is_wp_error( $response ) ) {
-            error_log( "IMF indicator fetch ({$code}): " . $response->get_error_message() );
-            return array();
-        }
-        if ( wp_remote_retrieve_response_code( $response ) !== 200 ) {
-            error_log( "IMF indicator fetch ({$code}): HTTP " . wp_remote_retrieve_response_code( $response ) );
-            return array();
-        }
-
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
-        if ( ! isset( $body['values'][ $code ] ) ) {
-            error_log( "IMF indicator fetch ({$code}): no data array" );
-            return array();
-        }
-
         $current_year = (int) current_time( 'Y' );
-        $out = array();
         $iso3_map = BLOMSTRA_IMF_TO_ISO3_MAP;
+        $out = array();
 
-        foreach ( $body['values'][ $code ] as $imf_code => $years ) {
-            // Map IMF code to ISO3 if needed
-            $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
-            if ( ! is_array( $years ) || empty( $years ) ) {
-                continue;
+        // Retry logic (3 attempts)
+        $attempt = 1;
+        $max_attempts = 3;
+        $backoff = 2;
+
+        while ( $attempt <= $max_attempts ) {
+            $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.7.1' ) );
+
+            if ( is_wp_error( $response ) ) {
+                error_log( "IMF indicator fetch ({$code}) attempt {$attempt}: " . $response->get_error_message() );
+                if ( $attempt < $max_attempts ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
             }
 
-            // Separate actual/historical years (<= current_year) from forecast years (> current_year)
-            $actual_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
-                return (int) $y <= $current_year;
-            } );
-            $forecast_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
-                return (int) $y > $current_year;
-            } );
-
-            // For the structural "latest actual" value, pick the highest actual year
-            if ( ! empty( $actual_years ) ) {
-                $latest_actual_year = max( $actual_years );
-                $out[ $iso3 ] = array(
-                    'value'       => floatval( $years[ $latest_actual_year ] ),
-                    'year'        => (string) $latest_actual_year,
-                    'data_type'   => 'actual',
-                    'fetched_at'  => current_time( 'mysql' ),
-                    'source'      => 'IMF WEO DataMapper',
-                );
-            } elseif ( ! empty( $forecast_years ) ) {
-                // Fallback: if no actual data exists, use the earliest forecast (T+1) as proxy
-                $earliest_forecast_year = min( $forecast_years );
-                $out[ $iso3 ] = array(
-                    'value'       => floatval( $years[ $earliest_forecast_year ] ),
-                    'year'        => (string) $earliest_forecast_year,
-                    'data_type'   => 'forecast_fallback',
-                    'fetched_at'  => current_time( 'mysql' ),
-                    'source'      => 'IMF WEO DataMapper (forecast)',
-                );
+            $http_code = wp_remote_retrieve_response_code( $response );
+            if ( $http_code === 429 ) {
+                // Rate limit: wait longer and retry
+                if ( $attempt < $max_attempts ) {
+                    sleep( 5 * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                error_log( "IMF indicator fetch ({$code}) rate-limited after {$max_attempts} attempts" );
+                return array();
             }
+
+            if ( $http_code !== 200 ) {
+                error_log( "IMF indicator fetch ({$code}) attempt {$attempt}: HTTP {$http_code}" );
+                if ( $attempt < $max_attempts && $http_code >= 500 ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
+            }
+
+            $body_raw = wp_remote_retrieve_body( $response );
+            $body = json_decode( $body_raw, true );
+            if ( ! isset( $body['values'][ $code ] ) || ! is_array( $body['values'][ $code ] ) ) {
+                error_log( "IMF indicator fetch ({$code}): no data array" );
+                if ( $attempt < $max_attempts ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
+            }
+
+            // Success – parse data
+            foreach ( $body['values'][ $code ] as $imf_code => $years ) {
+                $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
+                if ( ! is_array( $years ) || empty( $years ) ) {
+                    continue;
+                }
+
+                // Separate actual/historical years (<= current_year) from forecast years (> current_year)
+                $actual_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
+                    return (int) $y <= $current_year;
+                } );
+                $forecast_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
+                    return (int) $y > $current_year;
+                } );
+
+                // For the structural "latest actual" value, pick the highest actual year
+                if ( ! empty( $actual_years ) ) {
+                    $latest_actual_year = max( $actual_years );
+                    $out[ $iso3 ] = array(
+                        'value'       => is_numeric( $years[ $latest_actual_year ] ) ? floatval( $years[ $latest_actual_year ] ) : null,
+                        'year'        => (string) $latest_actual_year,
+                        'data_type'   => $latest_actual_year == $current_year ? 'current_year_estimate' : 'actual',
+                        'fetched_at'  => current_time( 'mysql' ),
+                        'source'      => 'IMF WEO DataMapper',
+                    );
+                } elseif ( ! empty( $forecast_years ) ) {
+                    // Fallback: if no actual data exists, use the earliest forecast (T+1) as proxy
+                    $earliest_forecast_year = min( $forecast_years );
+                    $out[ $iso3 ] = array(
+                        'value'       => is_numeric( $years[ $earliest_forecast_year ] ) ? floatval( $years[ $earliest_forecast_year ] ) : null,
+                        'year'        => (string) $earliest_forecast_year,
+                        'data_type'   => 'forecast_fallback',
+                        'fetched_at'  => current_time( 'mysql' ),
+                        'source'      => 'IMF WEO DataMapper (forecast)',
+                    );
+                }
+            }
+
+            // If we got data, break out of retry loop
+            if ( ! empty( $out ) ) {
+                break;
+            }
+
+            // If we got empty data but no error, treat as success but empty
+            break;
         }
 
+        // If we have data, store in staging and then atomically copy to live
         if ( ! empty( $out ) ) {
+            set_transient( $staging_key, $out, BLOMSTRA_IMF_CACHE_TTL );
             set_transient( $cache_key, $out, BLOMSTRA_IMF_CACHE_TTL );
+            delete_transient( $staging_key );
         }
+
         return $out;
     }
 }
-
 // For forward pressure, we need a separate getter that returns forecast data for T+1
 if ( ! function_exists( 'blomstra_fetch_imf_forecast_batch' ) ) {
     /**
      * Fetch IMF forecast data for a given horizon (1 = next year).
-     * Similar to the main fetcher but returns only forecast years.
+     * Implements retry logic (3 attempts, exponential backoff).
      *
      * @param string $code   IMF indicator code.
      * @param int    $horizon 1 = T+1, 2 = T+2, etc.
      * @param bool   $force
-     * @return array ISO3 => [ 'value' => float, 'year' => string, 'data_type' => 'forecast' ]
+     * @return array ISO3 => [ 'value' => float, 'year' => string, 'data_type' => 'forecast', 'horizon' => int, 'fetched_at' => string, 'source' => string ]
      */
     function blomstra_fetch_imf_forecast_batch( $code, $horizon = 1, $force = false ) {
-        // Cache key includes horizon
         $cache_key = 'blomstra_imf_forecast_' . md5( $code . '_h' . $horizon );
+        $staging_key = $cache_key . '_tmp';
+
         if ( $force ) {
             delete_transient( $cache_key );
+            delete_transient( $staging_key );
         }
+
+        // Check live cache
         $cached = get_transient( $cache_key );
         if ( false !== $cached && is_array( $cached ) ) {
             return $cached;
         }
 
+        // Check staging cache
+        $staging = get_transient( $staging_key );
+        if ( false !== $staging && is_array( $staging ) ) {
+            set_transient( $cache_key, $staging, BLOMSTRA_IMF_CACHE_TTL );
+            delete_transient( $staging_key );
+            return $staging;
+        }
+
         $url = BLOMSTRA_IMF_BASE_URL . '/' . $code;
-        $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.7.0' ) );
-
-        if ( is_wp_error( $response ) ) {
-            error_log( "IMF forecast fetch ({$code}): " . $response->get_error_message() );
-            return array();
-        }
-        if ( wp_remote_retrieve_response_code( $response ) !== 200 ) {
-            error_log( "IMF forecast fetch ({$code}): HTTP " . wp_remote_retrieve_response_code( $response ) );
-            return array();
-        }
-
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
-        if ( ! isset( $body['values'][ $code ] ) ) {
-            error_log( "IMF forecast fetch ({$code}): no data array" );
-            return array();
-        }
-
         $current_year = (int) current_time( 'Y' );
         $target_year = $current_year + $horizon;
         $iso3_map = BLOMSTRA_IMF_TO_ISO3_MAP;
         $out = array();
 
-        foreach ( $body['values'][ $code ] as $imf_code => $years ) {
-            $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
-            if ( ! is_array( $years ) || empty( $years ) ) {
-                continue;
+        // Retry logic (3 attempts)
+        $attempt = 1;
+        $max_attempts = 3;
+        $backoff = 2;
+
+        while ( $attempt <= $max_attempts ) {
+            $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.7.1' ) );
+
+            if ( is_wp_error( $response ) ) {
+                error_log( "IMF forecast fetch ({$code}) attempt {$attempt}: " . $response->get_error_message() );
+                if ( $attempt < $max_attempts ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
             }
-            if ( isset( $years[ $target_year ] ) && is_numeric( $years[ $target_year ] ) ) {
-                $out[ $iso3 ] = array(
-                    'value'     => floatval( $years[ $target_year ] ),
-                    'year'      => (string) $target_year,
-                    'data_type' => 'forecast',
-                    'horizon'   => $horizon,
-                    'fetched_at' => current_time( 'mysql' ),
-                    'source'    => 'IMF WEO DataMapper (forecast)',
-                );
+
+            $http_code = wp_remote_retrieve_response_code( $response );
+            if ( $http_code === 429 ) {
+                if ( $attempt < $max_attempts ) {
+                    sleep( 5 * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                error_log( "IMF forecast fetch ({$code}) rate-limited after {$max_attempts} attempts" );
+                return array();
             }
+
+            if ( $http_code !== 200 ) {
+                error_log( "IMF forecast fetch ({$code}) attempt {$attempt}: HTTP {$http_code}" );
+                if ( $attempt < $max_attempts && $http_code >= 500 ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
+            }
+
+            $body_raw = wp_remote_retrieve_body( $response );
+            $body = json_decode( $body_raw, true );
+            if ( ! isset( $body['values'][ $code ] ) || ! is_array( $body['values'][ $code ] ) ) {
+                error_log( "IMF forecast fetch ({$code}): no data array" );
+                if ( $attempt < $max_attempts ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
+            }
+
+            // Success – parse data
+            foreach ( $body['values'][ $code ] as $imf_code => $years ) {
+                $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
+                if ( ! is_array( $years ) || empty( $years ) ) {
+                    continue;
+                }
+                if ( isset( $years[ $target_year ] ) && is_numeric( $years[ $target_year ] ) ) {
+                    $out[ $iso3 ] = array(
+                        'value'     => floatval( $years[ $target_year ] ),
+                        'year'      => (string) $target_year,
+                        'data_type' => 'forecast',
+                        'horizon'   => $horizon,
+                        'fetched_at' => current_time( 'mysql' ),
+                        'source'    => 'IMF WEO DataMapper (forecast)',
+                    );
+                }
+            }
+
+            if ( ! empty( $out ) ) {
+                break;
+            }
+            break;
         }
 
         if ( ! empty( $out ) ) {
+            set_transient( $staging_key, $out, BLOMSTRA_IMF_CACHE_TTL );
             set_transient( $cache_key, $out, BLOMSTRA_IMF_CACHE_TTL );
+            delete_transient( $staging_key );
         }
+
         return $out;
     }
 }
