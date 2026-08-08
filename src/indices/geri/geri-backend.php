@@ -520,23 +520,23 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         }
     }
 
-    // External
-    $ext_indicators = array_keys( $weight_defs['external']['indicators'] );
-    foreach ( $ext_indicators as $ind ) {
-        $values = array();
-        foreach ( $rows as $iso3 => $row ) {
-            if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
-                if ( $ind === 'reserve_months' || $ind === 'current_account' ) {
-                    $values[ $iso3 ] = - $row[ $ind ];
-                } elseif ( $ind === 'external_debt' ) {
-                    $values[ $iso3 ] = $row[ $ind ];
-                } elseif ( $ind === 'gni_gdp_divergence' ) {
-                    $values[ $iso3 ] = - $row[ $ind ];
-                }
-            }
-        }
-        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
-    }
+   // External
+   $ext_indicators = array_keys( $weight_defs['external']['indicators'] );
+   foreach ( $ext_indicators as $ind ) {
+      $values = array();
+      foreach ( $rows as $iso3 => $row ) {
+         if ( isset( $row[ $ind ] ) && is_numeric( $row[ $ind ] ) ) {
+             if ( $ind === 'reserve_months' || $ind === 'current_account' ) {
+                 $values[ $iso3 ] = - $row[ $ind ]; // Higher reserves/CA = lower risk
+             } elseif ( $ind === 'external_debt' ) {
+                 $values[ $iso3 ] = $row[ $ind ]; // Higher debt = higher risk
+             } elseif ( $ind === 'gni_gdp_divergence' ) {
+                 $values[ $iso3 ] = $row[ $ind ]; // FIXED: Higher divergence = higher risk
+             }
+         }
+      }
+      $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks( $values ) : array();
+   }
 
     // Fiscal
     $fisc_indicators = array_keys( $weight_defs['fiscal']['indicators'] );
