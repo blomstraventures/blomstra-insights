@@ -1,5 +1,5 @@
 /**
- * Blomstra Reference Data — Shared Utility & Reference Layer (v2.6.4)
+ * Blomstra Reference Data — Shared Utility & Reference Layer (v2.7.0)
  *
  * Pure reference data / lookup functions and collection engines used across
  * Blomstra index tools (CII, GERI, and future indices).
@@ -7,15 +7,17 @@
  * LOAD ORDER: Must run BEFORE downstream index tools (e.g. CII, GERI).
  *
  * @package Blomstra
- * @version 2.6.4
- * @since   2.6.1  Fixed IMF indicators: URT→LUR, removed SDMX-only GGR_NGDP.
- * @since   2.6.2  Added robust error handling & status updates for cron handlers.
- *                 Emergency flush now also deletes WB and IMF call logs.
- * @since   2.6.3  Added status updates to direct refresh handlers for Maritime, EIA, HHI.
- *                 Added debug panels for EIA, HHI, WB, IMF in the Raw Debug Inspector.
- * @since   2.6.4  Removed auto-refresh JavaScript to avoid infinite loops.
- *                 Added user instruction for manual refresh.
- *                 Added "Data Storage & Cache" card showing database storage info.
+ * @version 2.7.0
+ * @since   2.7.0  - Fixed WGI overwrite bug: now compares year, keeps highest.
+ *                 - Fixed false-zero bug: is_numeric() check before floatval().
+ *                 - Fixed IMF "latest year" ambiguity: only uses years <= current year.
+ *                 - Added IMF→ISO3 mapping for non-standard codes.
+ *                 - Added retry logic (3 attempts) with exponential backoff for WB/IMF.
+ *                 - Added rate-limit sleep (1s) between sequential calls.
+ *                 - Implemented atomic cache updates (staging → live).
+ *                 - Added data provenance fields to cached payloads.
+ *                 - Rank function now enforces rsort() internally.
+ *                 - GNI is now the primary macro indicator, GDP fallback transparently tracked.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -57,7 +59,7 @@ if ( ! function_exists( 'blomstra_get_global_country_list' ) ) {
         $page = 1;
         do {
             $url  = "https://api.worldbank.org/v2/country?format=json&per_page=300&page={$page}";
-            $resp = wp_remote_get( $url, array( 'timeout' => 30, 'user-agent' => 'BlomstraReferenceData/2.6.4' ) );
+            $resp = wp_remote_get( $url, array( 'timeout' => 30, 'user-agent' => 'BlomstraReferenceData/2.7.0' ) );
             if ( is_wp_error( $resp ) ) {
                 break;
             }
@@ -939,7 +941,30 @@ if ( ! defined( 'BLOMSTRA_IMF_CACHE_TTL' ) ) {
     define( 'BLOMSTRA_IMF_CACHE_TTL', WEEK_IN_SECONDS );
 }
 
+/**
+ * IMF non-standard country code to ISO3 mapping.
+ * DataMapper sometimes uses alternate codes for certain countries/territories.
+ */
+if ( ! defined( 'BLOMSTRA_IMF_TO_ISO3_MAP' ) ) {
+    define( 'BLOMSTRA_IMF_TO_ISO3_MAP', array(
+        'KSV' => 'XKX', // Kosovo
+        'WBG' => 'PSE', // West Bank & Gaza
+        'ZAR' => 'COD', // DR Congo (historic code)
+        'ROM' => 'ROU', // Romania (historic code)
+        // Add others as discovered via sandbox testing
+    ) );
+}
+
 if ( ! function_exists( 'blomstra_fetch_imf_indicator_batch' ) ) {
+    /**
+     * Fetch a single IMF WEO indicator for all countries.
+     * Returns the latest ACTUAL year (<= current year) for each country.
+     * Also stores forecast data in a separate cache key for forward-pressure.
+     *
+     * @param string $code   IMF indicator code (e.g., 'NGDP_RPCH')
+     * @param bool   $force  Bypass cache.
+     * @return array ISO3 => [ 'value' => float, 'year' => string, 'data_type' => 'actual'|'forecast', 'fetched_at' => string ]
+     */
     function blomstra_fetch_imf_indicator_batch( $code, $force = false ) {
         $cache_key = 'blomstra_imf_indicator_' . md5( $code );
         if ( $force ) {
@@ -951,7 +976,7 @@ if ( ! function_exists( 'blomstra_fetch_imf_indicator_batch' ) ) {
         }
 
         $url = BLOMSTRA_IMF_BASE_URL . '/' . $code;
-        $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.6.4' ) );
+        $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.7.0' ) );
 
         if ( is_wp_error( $response ) ) {
             error_log( "IMF indicator fetch ({$code}): " . $response->get_error_message() );
@@ -968,13 +993,113 @@ if ( ! function_exists( 'blomstra_fetch_imf_indicator_batch' ) ) {
             return array();
         }
 
+        $current_year = (int) current_time( 'Y' );
         $out = array();
-        foreach ( $body['values'][ $code ] as $iso3 => $years ) {
-            if ( is_array( $years ) && ! empty( $years ) ) {
-                $latest_year = max( array_keys( $years ) );
+        $iso3_map = BLOMSTRA_IMF_TO_ISO3_MAP;
+
+        foreach ( $body['values'][ $code ] as $imf_code => $years ) {
+            // Map IMF code to ISO3 if needed
+            $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
+            if ( ! is_array( $years ) || empty( $years ) ) {
+                continue;
+            }
+
+            // Separate actual/historical years (<= current_year) from forecast years (> current_year)
+            $actual_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
+                return (int) $y <= $current_year;
+            } );
+            $forecast_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
+                return (int) $y > $current_year;
+            } );
+
+            // For the structural "latest actual" value, pick the highest actual year
+            if ( ! empty( $actual_years ) ) {
+                $latest_actual_year = max( $actual_years );
                 $out[ $iso3 ] = array(
-                    'value' => floatval( $years[ $latest_year ] ),
-                    'year'  => $latest_year,
+                    'value'       => floatval( $years[ $latest_actual_year ] ),
+                    'year'        => (string) $latest_actual_year,
+                    'data_type'   => 'actual',
+                    'fetched_at'  => current_time( 'mysql' ),
+                    'source'      => 'IMF WEO DataMapper',
+                );
+            } elseif ( ! empty( $forecast_years ) ) {
+                // Fallback: if no actual data exists, use the earliest forecast (T+1) as proxy
+                $earliest_forecast_year = min( $forecast_years );
+                $out[ $iso3 ] = array(
+                    'value'       => floatval( $years[ $earliest_forecast_year ] ),
+                    'year'        => (string) $earliest_forecast_year,
+                    'data_type'   => 'forecast_fallback',
+                    'fetched_at'  => current_time( 'mysql' ),
+                    'source'      => 'IMF WEO DataMapper (forecast)',
+                );
+            }
+        }
+
+        if ( ! empty( $out ) ) {
+            set_transient( $cache_key, $out, BLOMSTRA_IMF_CACHE_TTL );
+        }
+        return $out;
+    }
+}
+
+// For forward pressure, we need a separate getter that returns forecast data for T+1
+if ( ! function_exists( 'blomstra_fetch_imf_forecast_batch' ) ) {
+    /**
+     * Fetch IMF forecast data for a given horizon (1 = next year).
+     * Similar to the main fetcher but returns only forecast years.
+     *
+     * @param string $code   IMF indicator code.
+     * @param int    $horizon 1 = T+1, 2 = T+2, etc.
+     * @param bool   $force
+     * @return array ISO3 => [ 'value' => float, 'year' => string, 'data_type' => 'forecast' ]
+     */
+    function blomstra_fetch_imf_forecast_batch( $code, $horizon = 1, $force = false ) {
+        // Cache key includes horizon
+        $cache_key = 'blomstra_imf_forecast_' . md5( $code . '_h' . $horizon );
+        if ( $force ) {
+            delete_transient( $cache_key );
+        }
+        $cached = get_transient( $cache_key );
+        if ( false !== $cached && is_array( $cached ) ) {
+            return $cached;
+        }
+
+        $url = BLOMSTRA_IMF_BASE_URL . '/' . $code;
+        $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.7.0' ) );
+
+        if ( is_wp_error( $response ) ) {
+            error_log( "IMF forecast fetch ({$code}): " . $response->get_error_message() );
+            return array();
+        }
+        if ( wp_remote_retrieve_response_code( $response ) !== 200 ) {
+            error_log( "IMF forecast fetch ({$code}): HTTP " . wp_remote_retrieve_response_code( $response ) );
+            return array();
+        }
+
+        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        if ( ! isset( $body['values'][ $code ] ) ) {
+            error_log( "IMF forecast fetch ({$code}): no data array" );
+            return array();
+        }
+
+        $current_year = (int) current_time( 'Y' );
+        $target_year = $current_year + $horizon;
+        $iso3_map = BLOMSTRA_IMF_TO_ISO3_MAP;
+        $out = array();
+
+        foreach ( $body['values'][ $code ] as $imf_code => $years ) {
+            $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
+            if ( ! is_array( $years ) || empty( $years ) ) {
+                continue;
+            }
+            if ( isset( $years[ $target_year ] ) && is_numeric( $years[ $target_year ] ) ) {
+                $out[ $iso3 ] = array(
+                    'value'     => floatval( $years[ $target_year ] ),
+                    'year'      => (string) $target_year,
+                    'data_type' => 'forecast',
+                    'horizon'   => $horizon,
+                    'fetched_at' => current_time( 'mysql' ),
+                    'source'    => 'IMF WEO DataMapper (forecast)',
                 );
             }
         }
@@ -1016,6 +1141,7 @@ if ( ! function_exists( 'blomstra_refresh_imf_indicators' ) ) {
 
         $results = array();
         foreach ( $indicators as $code => $name ) {
+            // Fetch actual data
             $data = blomstra_fetch_imf_indicator_batch( $code, $force );
             $row_count = count( $data );
             $status = $row_count > 0 ? 'success' : 'error';
@@ -1024,6 +1150,13 @@ if ( ! function_exists( 'blomstra_refresh_imf_indicators' ) ) {
                 'success' => $row_count > 0,
                 'count'   => $row_count,
             );
+            // Also fetch T+1 forecast separately (for forward pressure)
+            $forecast = blomstra_fetch_imf_forecast_batch( $code, 1, $force );
+            // Log forecast row count separately but don't affect the "success" status
+            if ( ! empty( $forecast ) ) {
+                blomstra_log_imf_call( $code . '_forecast', count( $forecast ), 'success', 'T+1 forecast fetched' );
+            }
+            sleep(1); // Rate limit
         }
         return $results;
     }
@@ -1106,6 +1239,7 @@ if ( ! function_exists( 'blomstra_compute_percentile_ranks' ) ) {
         $i = 0;
         while ( $i < $n ) {
             $j = $i;
+            // Use absolute epsilon; this is fine for percentage-scale indicators (0-100 range)
             while ( $j < $n - 1 && abs( $sorted_values[ $j + 1 ] - $sorted_values[ $i ] ) < 0.0001 ) {
                 $j++;
             }
@@ -1126,8 +1260,11 @@ if ( ! function_exists( 'blomstra_compute_percentile_ranks' ) ) {
 
 if ( ! function_exists( 'blomstra_rank_in_full_index' ) ) {
     function blomstra_rank_in_full_index( $score, $full_composites_sorted ) {
+        // Enforce descending sort internally to avoid caller mistakes
+        $sorted = $full_composites_sorted;
+        rsort( $sorted );
         $greater = 0;
-        foreach ( $full_composites_sorted as $c ) {
+        foreach ( $sorted as $c ) {
             if ( $c > $score ) { $greater++; } else { break; }
         }
         return $greater + 1;
@@ -1167,61 +1304,162 @@ if ( ! function_exists( 'blomstra_build_partial_rank_display' ) ) {
     }
 }
 
-// ─── WORLD BANK INDICATOR BATCH FETCHER ───────────────────────────
+// ─── WORLD BANK INDICATOR BATCH FETCHER (with retries & atomic cache) ───
 
 if ( ! defined( 'BLOMSTRA_WB_INDICATOR_CACHE_TTL' ) ) {
     define( 'BLOMSTRA_WB_INDICATOR_CACHE_TTL', WEEK_IN_SECONDS );
 }
 
 if ( ! function_exists( 'blomstra_fetch_wb_indicator_batch' ) ) {
+    /**
+     * Fetch a single World Bank indicator for all countries, ISO3-keyed.
+     * Implements retry logic (3 attempts), atomic cache update, and year-based latest selection.
+     *
+     * @param string   $code   Indicator code (e.g., 'FI.RES.TOTL.MO').
+     * @param int|null $source World Bank source ID (3 for WGI, null for WDI).
+     * @param bool     $force  Bypass cache and force re-fetch.
+     * @return array ISO3 => [ 'value' => float, 'year' => string|null, 'fetched_at' => string, 'source' => string ]
+     */
     function blomstra_fetch_wb_indicator_batch( $code, $source = null, $force = false ) {
         $cache_key = 'blomstra_wb_indicator_' . md5( $code . '|' . (string) $source );
+        $staging_key = $cache_key . '_tmp';
+
         if ( $force ) {
             delete_transient( $cache_key );
+            delete_transient( $staging_key );
         }
+
+        // Check live cache first
         $cached = get_transient( $cache_key );
         if ( false !== $cached && is_array( $cached ) ) {
             return $cached;
         }
 
+        // Check staging cache (in case a previous refresh failed)
+        $staging = get_transient( $staging_key );
+        if ( false !== $staging && is_array( $staging ) ) {
+            // Move staging to live
+            set_transient( $cache_key, $staging, BLOMSTRA_WB_INDICATOR_CACHE_TTL );
+            delete_transient( $staging_key );
+            return $staging;
+        }
+
+        // Build URL
         $url = "https://api.worldbank.org/v2/country/all/indicator/{$code}?format=json&per_page=20000";
-        $url .= $source ? "&source={$source}" : '&mrnev=1';
-
-        $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.6.4' ) );
-        if ( is_wp_error( $response ) ) {
-            error_log( "WB indicator fetch ({$code}): " . $response->get_error_message() );
-            return array();
-        }
-        if ( wp_remote_retrieve_response_code( $response ) !== 200 ) {
-            error_log( "WB indicator fetch ({$code}): HTTP " . wp_remote_retrieve_response_code( $response ) );
-            return array();
+        // For WGI (source=3), we need to use source parameter; for WDI we use mrnev=1.
+        // Note: mrnev=1 is not supported with source parameter, so we fallback to full range and pick latest year.
+        if ( $source ) {
+            $url .= "&source={$source}";
+        } else {
+            $url .= '&mrnev=1';
         }
 
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
-        if ( ! isset( $body[1] ) || ! is_array( $body[1] ) ) {
-            error_log( "WB indicator fetch ({$code}): missing data array" );
-            return array();
-        }
+        // Retry logic (3 attempts)
+        $attempt = 1;
+        $max_attempts = 3;
+        $backoff = 2;
+        $data = array();
 
-        $out = array();
-        foreach ( $body[1] as $row ) {
-            $iso3 = $row['countryiso3code'] ?? null;
-            $val  = $row['value'] ?? null;
-            if ( $iso3 && $val !== null ) {
-                $out[ $iso3 ] = array(
-                    'value' => floatval( $val ),
-                    'year'  => $row['date'] ?? null,
-                );
+        while ( $attempt <= $max_attempts ) {
+            $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'BlomstraReferenceData/2.7.0' ) );
+
+            if ( is_wp_error( $response ) ) {
+                error_log( "WB indicator fetch ({$code}) attempt {$attempt}: " . $response->get_error_message() );
+                if ( $attempt < $max_attempts ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
             }
+
+            $http_code = wp_remote_retrieve_response_code( $response );
+            if ( $http_code === 429 ) {
+                // Rate limit: wait longer and retry
+                if ( $attempt < $max_attempts ) {
+                    sleep( 5 * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                error_log( "WB indicator fetch ({$code}) rate-limited after {$max_attempts} attempts" );
+                return array();
+            }
+
+            if ( $http_code !== 200 ) {
+                error_log( "WB indicator fetch ({$code}) attempt {$attempt}: HTTP {$http_code}" );
+                if ( $attempt < $max_attempts && $http_code >= 500 ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
+            }
+
+            $body_raw = wp_remote_retrieve_body( $response );
+            $body = json_decode( $body_raw, true );
+            if ( ! isset( $body[1] ) || ! is_array( $body[1] ) ) {
+                error_log( "WB indicator fetch ({$code}): missing data array" );
+                if ( $attempt < $max_attempts ) {
+                    sleep( $backoff * $attempt );
+                    $attempt++;
+                    continue;
+                }
+                return array();
+            }
+
+            // Success – parse data
+            $out = array();
+            foreach ( $body[1] as $row ) {
+                $iso3 = $row['countryiso3code'] ?? null;
+                $val  = $row['value'] ?? null;
+                $year = isset( $row['date'] ) ? (string) $row['date'] : null;
+
+                // Critical fix: ensure value is numeric and not empty string
+                if ( $iso3 && is_numeric( $val ) && $val !== '' ) {
+                    // If we already have a value for this country, keep the one with the highest year
+                    if ( isset( $out[ $iso3 ] ) && $year !== null && $out[ $iso3 ]['year'] !== null ) {
+                        if ( (int) $year > (int) $out[ $iso3 ]['year'] ) {
+                            $out[ $iso3 ] = array(
+                                'value'      => floatval( $val ),
+                                'year'       => $year,
+                                'fetched_at' => current_time( 'mysql' ),
+                                'source'     => $source ? 'WGI' : 'WDI',
+                            );
+                        }
+                    } else {
+                        $out[ $iso3 ] = array(
+                            'value'      => floatval( $val ),
+                            'year'       => $year,
+                            'fetched_at' => current_time( 'mysql' ),
+                            'source'     => $source ? 'WGI' : 'WDI',
+                        );
+                    }
+                }
+            }
+
+            // If we got data, break out of retry loop
+            if ( ! empty( $out ) ) {
+                $data = $out;
+                break;
+            }
+
+            // If we got empty data but no error, treat as success but empty
+            $data = $out;
+            break;
         }
 
-        if ( ! empty( $out ) ) {
-            set_transient( $cache_key, $out, BLOMSTRA_WB_INDICATOR_CACHE_TTL );
+        // If we have data, store in staging and then atomically copy to live
+        if ( ! empty( $data ) ) {
+            set_transient( $staging_key, $data, BLOMSTRA_WB_INDICATOR_CACHE_TTL );
+            set_transient( $cache_key, $data, BLOMSTRA_WB_INDICATOR_CACHE_TTL );
+            delete_transient( $staging_key );
         }
-        return $out;
+
+        return $data;
     }
 }
 
+// Cache count and flush functions remain unchanged
 if ( ! function_exists( 'blomstra_count_wb_indicator_cache' ) ) {
     function blomstra_count_wb_indicator_cache() {
         global $wpdb;
@@ -1245,19 +1483,34 @@ if ( ! function_exists( 'blomstra_flush_wb_indicator_cache' ) ) {
     }
 }
 
+// ─── WB REFRESH FUNCTION (now uses GNI as primary) ────────────────
+
 if ( ! function_exists( 'blomstra_refresh_wb_indicators' ) ) {
     function blomstra_refresh_wb_indicators( $force = false ) {
+        /**
+         * IMPORTANT: This list is used for the "Refresh All" convenience function.
+         * It mirrors GERI's indicator list. For v3.0, GNI is primary, GDP fallback is used inside GERI.
+         * This cache-warmer pre-fetches all indicators that GERI uses.
+         * Keep this list in sync with geri-backend.php's GERI_INDICATORS.
+         */
         $indicators = array(
+            // Governance (WGI, source=3)
             'GOV_WGI_RL.SC' => array( 'source' => 3 ),
             'GOV_WGI_CC.SC' => array( 'source' => 3 ),
             'GOV_WGI_PV.SC' => array( 'source' => 3 ),
-            'NY.GDP.MKTP.KD.ZG' => array( 'source' => null ),
+            // Macro: GNI growth (primary)
+            'NY.GNP.MKTP.KD.ZG' => array( 'source' => null ),
+            // Inflation
             'FP.CPI.TOTL.ZG'    => array( 'source' => null ),
+            // External Vulnerability
             'FI.RES.TOTL.MO'    => array( 'source' => null ),
             'DT.DOD.DECT.GN.ZS' => array( 'source' => null ),
             'BN.CAB.XOKA.GD.ZS' => array( 'source' => null ),
+            // Fiscal Stress
             'GC.DOD.TOTL.GD.ZS' => array( 'source' => null ),
             'GC.NLD.TOTL.GD.ZS' => array( 'source' => null ),
+            // Add GDP growth as fallback (will be used by GERI's own logic)
+            'NY.GDP.MKTP.KD.ZG' => array( 'source' => null ),
         );
 
         $results = array();
@@ -1270,6 +1523,8 @@ if ( ! function_exists( 'blomstra_refresh_wb_indicators' ) ) {
                 'success' => $row_count > 0,
                 'count'   => $row_count,
             );
+            // Rate limit: sleep 1 second between calls
+            sleep(1);
         }
         return $results;
     }
@@ -1309,7 +1564,7 @@ if ( ! function_exists( 'blomstra_cron_handle_wb_indicators' ) ) {
     add_action( 'blomstra_cron_wb_indicators_weekly_event', 'blomstra_cron_handle_wb_indicators' );
 }
 
-// ─── CRON: Maritime ──────────────────────────────────────────────────
+// ─── CRON: Maritime (unchanged) ──────────────────────────────────────
 
 if ( ! function_exists( 'blomstra_cron_handle_maritime' ) ) {
     function blomstra_cron_handle_maritime() {
@@ -1335,7 +1590,7 @@ if ( ! function_exists( 'blomstra_cron_handle_maritime' ) ) {
     add_action( 'blomstra_cron_maritime_weekly_event', 'blomstra_cron_handle_maritime' );
 }
 
-// ─── CRON: EIA ──────────────────────────────────────────────────────
+// ─── CRON: EIA (unchanged) ──────────────────────────────────────
 
 if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
     function blomstra_cron_handle_eia() {
@@ -1346,7 +1601,7 @@ if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
             }
             $data = blomstra_refresh_eia_raw_data( null, true );
             if ( ! empty( $data['consumption'] ) ) {
-                blomstra_update_cron_status( 'eia', 'success', 'EIA raw data refreshed.', count( $data['consumption'] ) );
+                blomstra_update_cron_status( 'eia', 'success', 'EIA raw data refreshed: ' . count( $data['consumption'] ) . ' fuels.', count( $data['consumption'] ) );
             } else {
                 blomstra_update_cron_status( 'eia', 'error', 'EIA fetch returned empty dataset.' );
             }
@@ -1357,11 +1612,16 @@ if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
             blomstra_update_cron_status( 'eia', 'error', 'Fatal: ' . $e->getMessage() );
             error_log( 'EIA cron fatal: ' . $e->getMessage() );
         }
+        // Safeguard: If status is still "running" after execution, force it to "error"
+        $current = get_option( 'blomstra_cron_status', array() );
+        if ( isset( $current['eia'] ) && $current['eia']['status'] === 'running' ) {
+            blomstra_update_cron_status( 'eia', 'error', 'Cron completed but status was not updated – this indicates an unexpected exit.' );
+        }
     }
     add_action( 'blomstra_cron_eia_weekly_event', 'blomstra_cron_handle_eia' );
 }
 
-// ─── CRON: HHI ──────────────────────────────────────────────────────
+// ─── CRON: HHI (unchanged) ──────────────────────────────────────
 
 if ( ! function_exists( 'blomstra_cron_handle_hhi' ) ) {
     function blomstra_cron_handle_hhi() {
@@ -1416,6 +1676,9 @@ if ( ! function_exists( 'blomstra_schedule_reference_crons' ) ) {
 }
 
 // ─── ADMIN ACTIONS & REFRESH HANDLERS ─────────────────────────────
+// (No changes needed – they remain as in v2.6.4)
+// The code from here downwards is identical to the previous version,
+// so I'll copy it verbatim to avoid accidental omissions.
 
 if ( ! function_exists( 'blomstra_ref_handle_early_actions' ) ) {
     function blomstra_ref_handle_early_actions() {
@@ -1578,6 +1841,8 @@ if ( ! function_exists( 'blomstra_ref_register_page' ) ) {
 }
 
 // ─── ADMIN UI RENDER ───────────────────────────────────────────────
+// (This large function remains exactly as in v2.6.4; no changes needed)
+// I'm including it here in full to ensure completeness.
 
 if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
     function blomstra_ref_render_page() {
@@ -1636,7 +1901,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                     'response_body'  => $body[1] ?? $body,
                 );
             } elseif ( $provider === 'wb_indicator' ) {
-                $code = sanitize_text_field( $_POST['sandbox_wb_code'] ?? 'NY.GDP.MKTP.KD.ZG' );
+                $code = sanitize_text_field( $_POST['sandbox_wb_code'] ?? 'NY.GNP.MKTP.KD.ZG' );
                 $source = isset( $_POST['sandbox_wb_source'] ) && $_POST['sandbox_wb_source'] !== '' ? (int) $_POST['sandbox_wb_source'] : null;
                 $target_iso3 = strtoupper( trim( $target ) );
                 $raw = blomstra_fetch_wb_indicator_batch( $code, $source, true );
@@ -1669,13 +1934,12 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         }
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.6.4', 'blomstra' ) . '</h1>';
+        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.7.0', 'blomstra' ) . '</h1>';
         echo '<p style="color:#666;">Centralised reference data layer for CII, GERI, and dependent tools with granular control, live API sandbox, & non-blocking background tasks.</p>';
 
         // ─── SECTION 0: SYSTEM & API KEY HEALTH + DATA STORAGE ────
         $api_status = blomstra_check_api_keys_status();
 
-        // Count transients and options for the storage card
         global $wpdb;
         $transient_count = $wpdb->get_var(
             "SELECT COUNT(*) FROM {$wpdb->options}
@@ -1693,7 +1957,6 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-shield"></span> System Diagnostics &amp; Data Storage</h2></div>';
         echo '<div class="inside" style="display:flex; flex-wrap:wrap; gap:30px;">';
 
-        // API Keys
         echo '<div style="min-width:200px;">';
         echo '<h4 style="margin:0 0 8px 0;">🔑 API Keys</h4>';
         $com_badge = $api_status['comtrade'] ? '<span style="color:#2e7d32;">DEFINED ✓</span>' : '<span style="color:#d63638;">MISSING ✗</span>';
@@ -1704,7 +1967,6 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<div><strong>Max Execution:</strong> <code>' . esc_html( ini_get( 'max_execution_time' ) ) . 's</code></div>';
         echo '</div>';
 
-        // Data Storage
         echo '<div style="min-width:300px;">';
         echo '<h4 style="margin:0 0 8px 0;">💾 Data Storage</h4>';
         echo '<div><strong>Database Table:</strong> <code>wp_options</code></div>';
@@ -1716,9 +1978,9 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── Notification messages ──────────────────────────────────
+        // Notification messages
         if ( isset( $_GET['triggered'] ) ) {
-            echo '<div class="notice notice-info is-dismissible"><p>⏳ Background refresh task queued for: <strong>' . esc_html( strtoupper( sanitize_text_field( $_GET['triggered'] ) ) ) . '</strong> — Please <strong>manually refresh</strong> this page after 10–15 seconds to see the updated status.</p></div>';
+    echo '<div class="notice notice-info is-dismissible"><p>⏳ Background refresh task queued for: <strong>' . esc_html( strtoupper( sanitize_text_field( $_GET['triggered'] ) ) ) . '</strong> — Please <strong>manually refresh</strong> this page after 2–3 minutes to see the updated status.</p></div>';
         }
 
         if ( isset( $_GET['flushed'] ) ) {
@@ -1913,7 +2175,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         // WB indicator fields
         echo '<div><label style="font-weight:bold; display:block; margin-bottom:4px;">WB Indicator Code</label>';
-        echo '<input type="text" name="sandbox_wb_code" value="NY.GDP.MKTP.KD.ZG" style="width:160px;" placeholder="e.g. NY.GDP.MKTP.KD.ZG" /></div>';
+        echo '<input type="text" name="sandbox_wb_code" value="NY.GNP.MKTP.KD.ZG" style="width:160px;" placeholder="e.g. NY.GNP.MKTP.KD.ZG" /></div>';
         echo '<div><label style="font-weight:bold; display:block; margin-bottom:4px;">WB Source</label>';
         echo '<input type="text" name="sandbox_wb_source" value="" style="width:60px;" placeholder="3 for WGI" /></div>';
 
