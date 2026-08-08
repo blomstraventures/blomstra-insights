@@ -1,16 +1,15 @@
 /**
- * Blomstra Geo-Economic Risk Index (GERI) — v3.5.2
+ * Blomstra Geo-Economic Risk Index (GERI) — v3.5.3
  *
  * @package Blomstra\Insights\Indices\GERI
- * @since   3.5.2
- * @version 3.5.2
+ * @since   3.5.3
+ * @version 3.5.3
  *
- * FIXES (v3.5.2):
- * - Fixed composite injection bug – countries with 4 pillars now score correctly
- * - Partial countries with missing pillar now fall back to P50=50 if global distribution empty
- * - Safety fallback ensures 3+ pillar countries never get "Could not compute composite"
- * - Full countries now correctly sum pillar scores without _coverage interference
- * - 3/4 pillars = Partial (with rank range), 4/4 = Full (definitive rank)
+ * FIXES (v3.5.3):
+ * - Admin UI polished: consistent button sizes, clearer labels, prominent main actions
+ * - Collapsible sections now have a distinct background and icon for better visibility
+ * - "Build Index from Cache" and "Refresh All Pillars" buttons are more prominent
+ * - All button texts revised for clarity
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -19,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 
-define( 'GERI_VERSION', '3.5.2' );
+define( 'GERI_VERSION', '3.5.3' );
 define( 'GERI_OPTION_KEY', 'blomstra_geo_economic_risk_index' );
 define( 'GERI_CRON_HOOK', 'blomstra_geo_economic_weekly_refresh' );
 define( 'GERI_DAILY_CRON_HOOK', 'blomstra_geri_daily_cron' );
@@ -52,7 +51,6 @@ function geri_get_pillar_defs() {
                 'NY.GNP.MKTP.KD.ZG' => array( 'name' => 'gni_growth', 'source' => null, 'weight' => 15 ),
                 'FP.CPI.TOTL.ZG'    => array( 'name' => 'inflation', 'source' => null, 'weight' => 15 ),
                 'SL.UEM.TOTL.ZS'    => array( 'name' => 'unemployment', 'source' => null, 'weight' => 25 ),
-                // Volatility indicators are derived, not fetched.
             ),
             'min_required' => 4,
             'min_weight' => 60,
@@ -1197,47 +1195,33 @@ function geri_render_admin_page() {
 
     // Dashboard cards
     echo '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:15px; margin:15px 0;">';
-
-    // Governance
     echo '<div class="postbox" style="border-left:4px solid #2271b1; margin:0; min-height:100px;">';
     echo '<div class="postbox-header"><h3 class="hndle" style="font-size:14px; margin:0; padding:8px 12px;">Governance Pillar</h3></div>';
     echo '<div class="inside" style="padding:8px 12px;"><p style="font-size:18px; margin:0; font-weight:bold;">' . $gov_status . '</p></div></div>';
-
-    // Macro
     echo '<div class="postbox" style="border-left:4px solid #2271b1; margin:0; min-height:100px;">';
     echo '<div class="postbox-header"><h3 class="hndle" style="font-size:14px; margin:0; padding:8px 12px;">Macro Pillar</h3></div>';
     echo '<div class="inside" style="padding:8px 12px;"><p style="font-size:18px; margin:0; font-weight:bold;">' . $macro_status . '</p></div></div>';
-
-    // External
     echo '<div class="postbox" style="border-left:4px solid #2271b1; margin:0; min-height:100px;">';
     echo '<div class="postbox-header"><h3 class="hndle" style="font-size:14px; margin:0; padding:8px 12px;">External Pillar</h3></div>';
     echo '<div class="inside" style="padding:8px 12px;"><p style="font-size:18px; margin:0; font-weight:bold;">' . $ext_status . '</p></div></div>';
-
-    // Fiscal
     echo '<div class="postbox" style="border-left:4px solid #2271b1; margin:0; min-height:100px;">';
     echo '<div class="postbox-header"><h3 class="hndle" style="font-size:14px; margin:0; padding:8px 12px;">Fiscal Pillar</h3></div>';
     echo '<div class="inside" style="padding:8px 12px;"><p style="font-size:18px; margin:0; font-weight:bold;">' . $fisc_status . '</p></div></div>';
-
-    // Composite
     echo '<div class="postbox" style="border-left:4px solid #f56e28; margin:0; min-height:100px;">';
     echo '<div class="postbox-header"><h3 class="hndle" style="font-size:14px; margin:0; padding:8px 12px;">Composite Index</h3></div>';
     echo '<div class="inside" style="padding:8px 12px;"><p style="font-size:18px; margin:0; font-weight:bold;">' . ( $existing ? 'Scored ✓ (' . $existing['total_countries'] . ')' : 'Not Scored' ) . '</p>';
     echo '<p style="margin:4px 0 0; font-size:12px; color:#666;">' . $composite_status . '</p></div></div>';
-
     echo '</div>';
 
     // Freshness & System Status
     echo '<div class="postbox" style="border-left:4px solid #00a0d2; background:#f9f9f9;">';
     echo '<div class="inside" style="display:flex; flex-wrap:wrap; gap:30px; padding:10px 15px;">';
-
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Governance</strong><span style="font-size:14px;">' . $pillar_freshness['governance'] . '</span></div>';
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Macro</strong><span style="font-size:14px;">' . $pillar_freshness['macro'] . '</span></div>';
     echo '<div><strong style="display:block; font-size:13px; color:#666;">External</strong><span style="font-size:14px;">' . $pillar_freshness['external'] . '</span></div>';
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Fiscal</strong><span style="font-size:14px;">' . $pillar_freshness['fiscal'] . '</span></div>';
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Composite Index</strong><span style="font-size:14px;">' . $composite_fresh . '</span></div>';
-
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Build Lock</strong><span style="font-size:14px;">🔓 Free</span></div>';
-
     $last_run = null;
     if ( $geri_status && isset( $geri_status['last_run'] ) ) {
         $last_run = $geri_status['last_run'];
@@ -1249,14 +1233,12 @@ function geri_render_admin_page() {
     }
     $last_fire_display = $last_run ? $last_run . ' ✅' : 'Never ❌';
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Last Real wp-cron Fire</strong><span style="font-size:14px;">' . $last_fire_display . '</span></div>';
-
     echo '<div style="margin-left:auto;">';
     echo '<form method="post">';
     wp_nonce_field( 'geri_force_daily_cron_action' );
     echo '<input type="submit" name="geri_force_daily_cron" class="button button-secondary" value="🧪 Force Daily Cron Now" style="font-size:12px;">';
     echo '</form>';
     echo '</div>';
-
     echo '</div></div>';
 
     // Auto-build failure notice
@@ -1313,7 +1295,7 @@ function geri_render_admin_page() {
     echo '</tbody></table>';
     echo '</div></div>';
 
-    // Composite Build
+    // Composite Build – Prominent Actions
     echo '<div class="postbox" style="border-left:4px solid #f56e28; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-chart-area"></span> Composite &amp; Build</h2></div>';
     echo '<div class="inside">';
@@ -1322,42 +1304,38 @@ function geri_render_admin_page() {
     } else {
         echo '<p>No composite exists yet.</p>';
     }
-    echo '<table class="widefat striped"><thead><tr><th>Action</th><th>Description</th><th>Data Source</th></tr></thead><tbody>';
-    echo '<tr><td>';
+
+    // Main action buttons in a flex row with consistent size
+    echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:15px 0;">';
     echo '<form method="post" style="display:inline-block;">';
     wp_nonce_field( 'geri_build_cache_action' );
-    echo '<input type="submit" name="geri_build_cache" class="button" style="min-width:140px;" value="🔨 Build from Cache">';
-    echo '</form></td>';
-    echo '<td>Calculate composite using existing pillar caches</td>';
-    echo '<td>Pillar Cache</td></tr>';
+    echo '<input type="submit" name="geri_build_cache" class="button button-primary" style="min-width:180px; font-weight:bold;" value="🔨 Build Index from Cache">';
+    echo '</form>';
 
-    echo '<tr><td>';
     echo '<form method="post" style="display:inline-block;">';
     wp_nonce_field( 'geri_fetch_all_async_action' );
-    echo '<input type="submit" name="geri_fetch_all_async" class="button button-primary" style="min-width:140px;" value="📥 Fetch All (Async)">';
-    echo '</form></td>';
-    echo '<td>Queue background refresh of all pillars, then build</td>';
-    echo '<td>Background Task</td></tr>';
+    echo '<input type="submit" name="geri_fetch_all_async" class="button button-secondary" style="min-width:180px; font-weight:bold;" value="📥 Refresh All Pillars (Async)">';
+    echo '</form>';
 
-    echo '<tr><td>';
     echo '<form method="post" style="display:inline-block;" onsubmit="return confirm(\'WARNING: This will fetch data directly from the API for ALL pillars, bypassing the Reference Data layer. This is a fallback. Continue?\');">';
     wp_nonce_field( 'geri_emergency_api_build_action' );
-    echo '<input type="submit" name="geri_emergency_api_build" class="button button-secondary" style="min-width:140px; background:#d63638; color:#fff; border-color:#d63638;" value="🚨 Emergency API → Build (Async)">';
-    echo '</form></td>';
-    echo '<td>Emergency: fetch ALL pillars directly from API (background), then build</td>';
-    echo '<td>API Direct → Pillar Cache → Build</td></tr>';
+    echo '<input type="submit" name="geri_emergency_api_build" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638; font-weight:bold;" value="🚨 Emergency API → Build">';
+    echo '</form>';
 
-    echo '<tr><td>';
     echo '<form method="post" style="display:inline-block;" onsubmit="return confirm(\'WARNING: This will delete ALL pillar caches and the composite. Continue?\');">';
     wp_nonce_field( 'geri_flush_all_action' );
-    echo '<input type="submit" name="geri_flush_all_confirmed" class="button button-secondary" style="min-width:140px; background:#d63638; color:#fff; border-color:#d63638;" value="🗑️ Flush ALL">';
-    echo '</form></td>';
-    echo '<td>Delete all pillar caches and composite</td>';
-    echo '<td>⚠️ Destructive</td></tr>';
-    echo '</tbody></table>';
+    echo '<input type="submit" name="geri_flush_all_confirmed" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638;" value="🗑️ Flush ALL Caches">';
+    echo '</form>';
+    echo '</div>';
+
+    // Small description below the buttons
+    echo '<p style="color:#666; font-size:12px; margin:0;"><strong>Build from Cache</strong> — uses existing pillar data (no API calls).<br>';
+    echo '<strong>Refresh All Pillars (Async)</strong> — fetches fresh data from central cache in the background.<br>';
+    echo '<strong>Emergency API</strong> — falls back to direct API calls (use when central cache is broken).<br>';
+    echo '<strong>Flush ALL Caches</strong> — deletes all pillar and composite data (destructive).</p>';
     echo '</div></div>';
 
-    // Preview (collapsible)
+    // Preview (collapsible with better visibility)
     if ( $existing && ! empty( $existing['countries'] ) ) {
         $countries = $existing['countries'];
         uasort( $countries, function( $a, $b ) {
@@ -1366,40 +1344,46 @@ function geri_render_admin_page() {
         $lowest = array_slice( $countries, 0, 10, true );
         $highest = array_slice( $countries, -10, 10, true );
 
-        echo '<details style="margin-top:20px;">';
-        echo '<summary style="cursor:pointer; font-weight:bold;">10 Lowest‑Risk Countries</summary>';
-        echo '<div class="postbox" style="margin-top:10px;"><div class="inside">';
+        // Collapsible section with distinct visual style
+        echo '<div style="margin-top:20px;">';
+        echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0;">';
+        echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📊 10 Lowest‑Risk Countries</summary>';
+        echo '<div style="padding:15px; background:#fff;">';
         echo '<table class="widefat striped"><thead><tr><th>Country</th><th>Structural Score</th><th>Forward Pressure</th><th>Direction</th></tr></thead><tbody>';
         foreach ( $lowest as $name => $row ) {
             echo '<tr><td>' . esc_html( $name ) . '</td><td>' . esc_html( $row['geri_structural'] ?? '—' ) . '</td><td>' . esc_html( $row['geri_forward_pressure'] ?? '—' ) . '</td><td>' . esc_html( $row['forward_direction'] ?? '—' ) . '</td></tr>';
         }
-        echo '</tbody></table></div></div></details>';
+        echo '</tbody></table>';
+        echo '</div></details>';
 
-        echo '<details style="margin-top:10px;">';
-        echo '<summary style="cursor:pointer; font-weight:bold;">10 Highest‑Risk Countries</summary>';
-        echo '<div class="postbox" style="margin-top:10px;"><div class="inside">';
+        echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0; margin-top:10px;">';
+        echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📈 10 Highest‑Risk Countries</summary>';
+        echo '<div style="padding:15px; background:#fff;">';
         echo '<table class="widefat striped"><thead><tr><th>Country</th><th>Structural Score</th><th>Forward Pressure</th><th>Direction</th></tr></thead><tbody>';
         foreach ( $highest as $name => $row ) {
             echo '<tr><td>' . esc_html( $name ) . '</td><td>' . esc_html( $row['geri_structural'] ?? '—' ) . '</td><td>' . esc_html( $row['geri_forward_pressure'] ?? '—' ) . '</td><td>' . esc_html( $row['forward_direction'] ?? '—' ) . '</td></tr>';
         }
-        echo '</tbody></table></div></div></details>';
+        echo '</tbody></table>';
+        echo '</div></details>';
 
         if ( ! empty( $existing['excluded_detail'] ) ) {
-            echo '<details style="margin-top:10px;">';
-            echo '<summary style="cursor:pointer; font-weight:bold;">Excluded — Insufficient Data (' . count( $existing['excluded_detail'] ) . ')</summary>';
-            echo '<div class="postbox" style="margin-top:10px;"><div class="inside">';
+            echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0; margin-top:10px;">';
+            echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">🚫 Excluded — Insufficient Data (' . count( $existing['excluded_detail'] ) . ')</summary>';
+            echo '<div style="padding:15px; background:#fff;">';
             echo '<table class="widefat striped"><thead><tr><th>Country</th><th>Reason</th></tr></thead><tbody>';
             foreach ( $existing['excluded_detail'] as $name => $reason ) {
                 echo '<tr><td>' . esc_html( $name ) . '</td><td>' . esc_html( $reason ) . '</td></tr>';
             }
-            echo '</tbody></table></div></div></details>';
+            echo '</tbody></table>';
+            echo '</div></details>';
         }
 
-        echo '<details style="margin-top:10px;">';
-        echo '<summary style="cursor:pointer; font-weight:bold;">Raw JSON Output</summary>';
-        echo '<div class="postbox" style="margin-top:10px;"><div class="inside">';
+        echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0; margin-top:10px;">';
+        echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📄 Raw JSON Output</summary>';
+        echo '<div style="padding:15px; background:#fff;">';
         echo '<textarea readonly style="width:100%;height:200px;font-family:monospace;font-size:12px;">' . esc_textarea( wp_json_encode( $existing, JSON_PRETTY_PRINT ) ) . '</textarea>';
-        echo '</div></div></details>';
+        echo '</div></details>';
+        echo '</div>';
     }
 
     echo '</div>';
