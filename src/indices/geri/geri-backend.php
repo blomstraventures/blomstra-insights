@@ -10,6 +10,7 @@
  * - Fixed fiscal indicator count: debt_trajectory now included in geri_get_pillar_weights()
  * - Composite builder now reads indicator lists from geri_get_pillar_weights() (single source of truth)
  * - Restored country count to expected ~177+ scores
+ * - Restored gni_gdp_divergence computation (lost during refactor)
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -460,6 +461,21 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             $rows[ $iso3 ]['macro_base_source'] = 'gni';
         }
     }
+
+    // ─── RESTORE GNI‑GDP DIVERGENCE COMPUTATION ─────────────────
+    // Compute divergence = GDP growth - GNI growth (positive = risk)
+    // Only for countries that have both and where GNI is real (not GDP fallback)
+    foreach ( $rows as $iso3 => &$row ) {
+        if ( isset( $row['macro_base_source'] ) && $row['macro_base_source'] === 'gdp_fallback' ) {
+            continue; // Divergence meaningless if GNI is missing
+        }
+        $gni = isset( $row['gni_growth'] ) && is_numeric( $row['gni_growth'] ) ? (float) $row['gni_growth'] : null;
+        $gdp = isset( $row['gdp_growth'] ) && is_numeric( $row['gdp_growth'] ) ? (float) $row['gdp_growth'] : null;
+        if ( $gni !== null && $gdp !== null ) {
+            $row['gni_gdp_divergence'] = $gdp - $gni;
+        }
+    }
+    unset( $row );
 
     // 4. Get weights from single source of truth
     $weight_defs = geri_get_pillar_weights();
