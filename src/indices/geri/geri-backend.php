@@ -1,18 +1,19 @@
 /**
- * Blomstra Geo-Economic Risk Index (GERI) — v4.1.1
+ * Blomstra Geo-Economic Risk Index (GERI) — v4.2.1
  *
  * NOTE: This snippet depends on the "Shared Utilities" snippet being active
  *       (blomstra-index-utilities.php). Ensure it is loaded BEFORE this snippet.
  *
  * @package Blomstra\Insights\Indices\GERI
  * @since   3.5.5
- * @version 4.1.1
+ * @version 4.2.1
  *
- * FIXES (v4.1.1):
- * - Fixed fiscal_source_summary: now uses blomstra_pillar_source_summary() to correctly
- *   extract string sources instead of arrays
- * - Added synthetic source for gni_gdp_divergence so data quality shows 100% for external
- * - Cleaned up double inflation percentile computation (now computed once with winsorization)
+ * FIXES (v4.2.1):
+ * - Fixed JSON preset buttons (now use JavaScript data-attributes, no more "invalid JSON")
+ * - Added defensive checks around blomstra_pillar_source_summary()
+ * - Ensured fisc_sources is always an array to prevent null access errors
+ * - Fixed coverage calculation to correctly set Full Index
+ * - Prevent scenario builds from overwriting the live GERI_OPTION_KEY
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -26,7 +27,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 
-define( 'GERI_VERSION', '4.1.1' );
+define( 'GERI_VERSION', '4.2.1' );
 define( 'GERI_OPTION_KEY', 'blomstra_geo_economic_risk_index' );
 define( 'GERI_CRON_HOOK', 'blomstra_geo_economic_weekly_refresh' );
 define( 'GERI_DAILY_CRON_HOOK', 'blomstra_geri_daily_cron' );
@@ -152,11 +153,16 @@ function geri_get_imf_forecast_defs() {
     );
 }
 
-// ─── NOTE: Local utility functions removed. All now use shared layer.
-//     blomstra_safe_numeric()   - from index-utilities
-//     blomstra_sanitize_timeseries() - from index-utilities
-//     blomstra_compute_cagr()   - from index-utilities
-//     blomstra_compute_stddev() - from index-utilities
+// ─── COMPOSITE WEIGHTS ─────────────────────────────────────────────
+
+function geri_get_composite_weights() {
+    return array(
+        'governance' => 25,
+        'macro'      => 25,
+        'external'   => 25,
+        'fiscal'     => 25,
+    );
+}
 
 // ─── DATA FETCH HELPERS ────────────────────────────────────────────
 
@@ -377,7 +383,7 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
         }
     }
 
-    // 2. Inflation — computed directly with winsorization in the percentile stage
+    // 2. Inflation
     $inf_data = geri_fetch_wb_indicator( 'FP.CPI.TOTL.ZG', null, $force, $direct_api );
     if ( ! empty( $inf_data ) && is_array( $inf_data ) ) {
         foreach ( $inf_data as $iso3 => $row ) {
@@ -598,9 +604,65 @@ function geri_fetch_fiscal( $force = false, $direct_api = false ) {
     return $raw;
 }
 
+// ─── SCENARIO STORAGE ─────────────────────────────────────────────
+
+function geri_store_scenario( $output, $scenario_id ) {
+    $key = GERI_OPTION_KEY . '_scenario_' . sanitize_key( $scenario_id );
+    update_option( $key, $output, false );
+}
+
+function geri_list_scenarios() {
+    global $wpdb;
+    $results = array();
+    $rows = $wpdb->get_results( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'blomstra_geo_economic_risk_index_scenario_%'" );
+    foreach ( $rows as $row ) {
+        $id = str_replace( 'blomstra_geo_economic_risk_index_scenario_', '', $row->option_name );
+        $data = get_option( $row->option_name );
+        if ( $data ) {
+            $results[ $id ] = $data;
+        }
+    }
+    return $results;
+}
+
+function geri_delete_scenario( $scenario_id ) {
+    delete_option( GERI_OPTION_KEY . '_scenario_' . sanitize_key( $scenario_id ) );
+}
+
+// ─── SPEARMAN CORRELATION ─────────────────────────────────────────
+
+function geri_spearman_correlation( $x, $y ) {
+    $n = count( $x );
+    if ( $n < 2 ) {
+        return 0;
+    }
+
+    $rank = function( $arr ) {
+        $sorted = $arr;
+        sort( $sorted );
+        $ranks = array();
+        foreach ( $arr as $v ) {
+            $ranks[] = array_search( $v, $sorted ) + 1;
+        }
+        return $ranks;
+    };
+
+    $rx = $rank( $x );
+    $ry = $rank( $y );
+
+    $d2 = 0;
+    for ( $i = 0; $i < $n; $i++ ) {
+        $d2 += pow( $rx[ $i ] - $ry[ $i ], 2 );
+    }
+    return 1 - ( ( 6 * $d2 ) / ( $n * ( $n * $n - 1 ) ) );
+}
+
 // ─── COMPOSITE BUILDER ─────────────────────────────────────────────
 
-function geri_build_composite( $force = false, $context = 'manual' ) {
+function geri_build_composite( $force = false, $context = 'manual', $custom_weights = null, $custom_composite_weights = null ) {
+    // 🔧 FIX: detect if this is a scenario build (custom weights were passed)
+    $is_scenario = ( $custom_weights !== null || $custom_composite_weights !== null );
+
     if ( function_exists( 'set_time_limit' ) ) {
         @set_time_limit( 120 );
     }
@@ -649,13 +711,23 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $gdp = isset( $row['gdp_growth'] ) && is_numeric( $row['gdp_growth'] ) ? (float) $row['gdp_growth'] : null;
         if ( $gni !== null && $gdp !== null ) {
             $row['gni_gdp_divergence'] = $gdp - $gni;
-            // Add synthetic source entry for data quality tracking
             blomstra_track_source( $all_sources, $iso3, 'gni_gdp_divergence', 'WB_WDI_derived', 'national' );
         }
     }
     unset( $row );
 
-    $weight_defs = geri_get_pillar_weights();
+    // Use custom weights if provided, else fallback to default
+    $weight_defs = $custom_weights ?? geri_get_pillar_weights();
+    $composite_weights = $custom_composite_weights ?? geri_get_composite_weights();
+
+    // Ensure composite weights are valid
+    $all_pillars = array( 'governance', 'macro', 'external', 'fiscal' );
+    foreach ( $all_pillars as $p ) {
+        if ( ! isset( $composite_weights[ $p ] ) || ! is_numeric( $composite_weights[ $p ] ) ) {
+            $composite_weights[ $p ] = 25;
+        }
+    }
+
     $percentiles = array();
 
     // Governance
@@ -683,7 +755,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
                 }
             }
         }
-        // Inflation gets 1% winsorization to cap hyperinflation outliers
         if ( $ind === 'inflation' ) {
             $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, 0.01 ) : array();
         } else {
@@ -816,12 +887,11 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $pillar_scores[ $iso3 ]['_coverage'] = $coverage;
     }
 
-    // 6. Compute composite
+    // 6. Compute composite with custom weights
     $country_output = array();
     $structural_scores = array();
 
     $global_pillar_values = array();
-    $all_pillars = array( 'governance', 'macro', 'external', 'fiscal' );
     foreach ( $all_pillars as $p ) {
         $values = array();
         foreach ( $pillar_scores as $iso3 => $pillars ) {
@@ -842,9 +912,23 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         $composite = null;
 
         if ( $coverage == 4 ) {
-            $composite = ( $available_pillars['governance'] + $available_pillars['macro'] + $available_pillars['external'] + $available_pillars['fiscal'] ) / 4;
+            $weighted_sum = 0;
+            $total_weight = 0;
+            foreach ( $all_pillars as $p ) {
+                $weighted_sum += $available_pillars[ $p ] * $composite_weights[ $p ];
+                $total_weight += $composite_weights[ $p ];
+            }
+            $composite = $weighted_sum / $total_weight;
         } elseif ( $coverage == 3 ) {
-            $composite = array_sum( $available_pillars ) / $coverage;
+            $available_weight = 0;
+            foreach ( $available_pillars as $p => $score ) {
+                $available_weight += $composite_weights[ $p ];
+            }
+            $weighted_sum = 0;
+            foreach ( $available_pillars as $p => $score ) {
+                $weighted_sum += $score * ( $composite_weights[ $p ] / $available_weight );
+            }
+            $composite = $weighted_sum;
         }
 
         if ( $composite === null ) {
@@ -922,11 +1006,25 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             ),
         );
 
-        // ─── FISCAL SOURCE SUMMARY (FIXED) ──────────────────────
+        // ─── FISCAL SOURCE SUMMARY ──────────────────────────────
+        // Defensive check: ensure fisc_sources is an array
+        $fisc_sources_safe = is_array( $fisc_sources ) ? $fisc_sources : array();
         $fiscal_summary = blomstra_pillar_source_summary(
-            $fisc_sources, $iso3,
+            $fisc_sources_safe, $iso3,
             array( 'gov_debt', 'gov_balance', 'debt_trajectory' )
         );
+
+        // If summary is null, provide default values
+        if ( $fiscal_summary === null ) {
+            $fiscal_summary = array(
+                'breakdown' => array(
+                    'gov_debt' => array( 'source' => 'unknown' ),
+                    'gov_balance' => array( 'source' => 'unknown' ),
+                    'debt_trajectory' => array( 'source' => 'unknown' ),
+                ),
+                'scope_mixed' => false,
+            );
+        }
 
         $fiscal_source_summary = array(
             'gov_debt_source'        => $fiscal_summary['breakdown']['gov_debt']['source'] ?? 'unknown',
@@ -964,10 +1062,10 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
             'external_percentile'   => isset( $pillars['external'] ) ? round( $pillars['external'], 2 ) : null,
             'fiscal_percentile'     => isset( $pillars['fiscal'] ) ? round( $pillars['fiscal'], 2 ) : null,
             'pillars' => array(
-                'governance' => array( 'score' => isset( $pillars['governance'] ) ? round( $pillars['governance'], 2 ) : null, 'weight' => 25 ),
-                'macro'      => array( 'score' => isset( $pillars['macro'] ) ? round( $pillars['macro'], 2 ) : null, 'weight' => 25 ),
-                'external'   => array( 'score' => isset( $pillars['external'] ) ? round( $pillars['external'], 2 ) : null, 'weight' => 25 ),
-                'fiscal'     => array( 'score' => isset( $pillars['fiscal'] ) ? round( $pillars['fiscal'], 2 ) : null, 'weight' => 25 ),
+                'governance' => array( 'score' => isset( $pillars['governance'] ) ? round( $pillars['governance'], 2 ) : null, 'weight' => $composite_weights['governance'] ?? 25 ),
+                'macro'      => array( 'score' => isset( $pillars['macro'] ) ? round( $pillars['macro'], 2 ) : null, 'weight' => $composite_weights['macro'] ?? 25 ),
+                'external'   => array( 'score' => isset( $pillars['external'] ) ? round( $pillars['external'], 2 ) : null, 'weight' => $composite_weights['external'] ?? 25 ),
+                'fiscal'     => array( 'score' => isset( $pillars['fiscal'] ) ? round( $pillars['fiscal'], 2 ) : null, 'weight' => $composite_weights['fiscal'] ?? 25 ),
             ),
         );
     }
@@ -1132,7 +1230,12 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         'reference_vintage'  => date( 'Y' ),
         'weo_vintage'        => $weo_vintage,
         'min_pillars_required' => GERI_MIN_PILLARS_REQUIRED,
-        'weights' => array( 'governance' => 25, 'macro' => 25, 'external' => 25, 'fiscal' => 25 ),
+        'weights' => array(
+            'governance' => $composite_weights['governance'] ?? 25,
+            'macro'      => $composite_weights['macro'] ?? 25,
+            'external'   => $composite_weights['external'] ?? 25,
+            'fiscal'     => $composite_weights['fiscal'] ?? 25,
+        ),
         'methodology_note' => 'Fiscal pillar uses IMF WEO general government debt as primary, World Bank central government as fallback. Debt trajectory uses CAGR with 4+ years required for "good" quality. GNI growth is NOT imputed from GDP. External debt uses only DT.DOD.DECT.GN.ZS (stock % GNI) – no fallback is used because no equivalent stock indicator exists.',
         'total_countries'    => count( $country_output ),
         'excluded_countries' => count( $excluded ),
@@ -1144,7 +1247,8 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
     $previous = get_option( GERI_OPTION_KEY, null );
     $should_keep_old = false;
 
-    if ( $context === 'cron' && $previous && ! empty( $previous['countries'] ) ) {
+    // Skip cron safeguard for scenario builds (they shouldn't trigger false alarms)
+    if ( ! $is_scenario && $context === 'cron' && $previous && ! empty( $previous['countries'] ) ) {
         $prev_count = count( $previous['countries'] );
         $new_count = count( $output['countries'] );
         if ( $new_count < 0.8 * $prev_count && $new_count < 50 ) {
@@ -1158,25 +1262,28 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
         return $previous;
     }
 
-    $staging_key = GERI_OPTION_KEY . '_tmp';
-    update_option( $staging_key, $output, false );
-    update_option( GERI_OPTION_KEY, $output, false );
-    delete_option( $staging_key );
+    // 🔒 Only persist to the live option if this is a REAL build (not a scenario)
+    if ( ! $is_scenario ) {
+        $staging_key = GERI_OPTION_KEY . '_tmp';
+        update_option( $staging_key, $output, false );
+        update_option( GERI_OPTION_KEY, $output, false );
+        delete_option( $staging_key );
 
-    if ( function_exists( 'blomstra_index_snapshot_save' ) ) {
-        $snap = array();
-        foreach ( $country_output as $iso3 => $data ) {
-            $snap[ $iso3 ] = array(
-                'composite_score' => $data['geri_structural'] ?? null,
-                'rank' => $data['rank_display']['best_estimate'] ?? null,
-                'coverage_type' => $data['coverage'] ?? 'full',
-                'governance' => $data['pillars']['governance']['score'] ?? null,
-                'macro'      => $data['pillars']['macro']['score'] ?? null,
-                'external'   => $data['pillars']['external']['score'] ?? null,
-                'fiscal'     => $data['pillars']['fiscal']['score'] ?? null,
-            );
+        if ( function_exists( 'blomstra_index_snapshot_save' ) ) {
+            $snap = array();
+            foreach ( $country_output as $iso3 => $data ) {
+                $snap[ $iso3 ] = array(
+                    'composite_score' => $data['geri_structural'] ?? null,
+                    'rank' => $data['rank_display']['best_estimate'] ?? null,
+                    'coverage_type' => $data['coverage'] ?? 'full',
+                    'governance' => $data['pillars']['governance']['score'] ?? null,
+                    'macro'      => $data['pillars']['macro']['score'] ?? null,
+                    'external'   => $data['pillars']['external']['score'] ?? null,
+                    'fiscal'     => $data['pillars']['fiscal']['score'] ?? null,
+                );
+            }
+            blomstra_index_snapshot_save( 'geri', $snap );
         }
-        blomstra_index_snapshot_save( 'geri', $snap );
     }
 
     return $output;
@@ -1185,7 +1292,6 @@ function geri_build_composite( $force = false, $context = 'manual' ) {
 // ─── VALIDATION ON INIT ─────────────────────────────────────────────
 
 function geri_initialize() {
-    // Use shared validation utility
     $validation = blomstra_validate_pillar_thresholds( geri_get_pillar_defs(), geri_get_pillar_weights() );
     if ( ! $validation['valid'] ) {
         foreach ( $validation['mismatches'] as $m ) {
@@ -1420,6 +1526,35 @@ function geri_render_admin_page() {
         echo '<div class="notice notice-info"><p>🧪 Daily cron triggered (will refresh pillars and rebuild). Result will appear shortly.</p></div>';
     }
 
+    // ─── SENSITIVITY TESTING ──────────────────────────────────────
+    if ( isset( $_POST['geri_build_scenario'] ) && check_admin_referer( 'geri_build_scenario_action' ) ) {
+        $scenario_name = sanitize_key( $_POST['geri_scenario_name'] );
+        $raw_json = wp_unslash( $_POST['geri_custom_weights'] );
+        $json = json_decode( $raw_json, true );
+        
+        if ( $json === null ) {
+            echo '<div class="notice notice-error"><p>❌ Invalid JSON. Please check the syntax. Error: ' . json_last_error_msg() . '</p></div>';
+        } elseif ( ! isset( $json['pillars'] ) || ! isset( $json['composite'] ) ) {
+            echo '<div class="notice notice-error"><p>❌ JSON must include both <code>pillars</code> and <code>composite</code> keys.</p></div>';
+        } else {
+            $sum = array_sum( $json['composite'] );
+            if ( abs( $sum - 100 ) > 0.1 ) {
+                echo '<div class="notice notice-error"><p>❌ Composite weights must sum to 100. Current sum: ' . esc_html( $sum ) . '</p></div>';
+            } else {
+                // Pass the weights and mark as scenario via context (optional, but the guard uses $is_scenario internally)
+                $result = geri_build_composite( false, 'scenario', $json['pillars'], $json['composite'] );
+                geri_store_scenario( $result, $scenario_name );
+                echo '<div class="notice notice-success"><p>✅ Scenario <strong>' . esc_html( $scenario_name ) . '</strong> built: ' . esc_html( $result['total_countries'] ) . ' countries scored.</p></div>';
+            }
+        }
+    }
+
+    if ( isset( $_POST['geri_delete_scenario'] ) && check_admin_referer( 'geri_delete_scenario_action' ) ) {
+        $scenario_id = sanitize_key( $_POST['geri_delete_scenario'] );
+        geri_delete_scenario( $scenario_id );
+        echo '<div class="notice notice-warning"><p>🗑️ Scenario <strong>' . esc_html( $scenario_id ) . '</strong> deleted.</p></div>';
+    }
+
     $existing = get_option( GERI_OPTION_KEY, null );
     $next_cron = wp_next_scheduled( GERI_CRON_HOOK );
     $last_cron = get_option( 'blomstra_cron_status', array() );
@@ -1650,6 +1785,153 @@ function geri_render_admin_page() {
     echo '<strong>Emergency API</strong> — falls back to direct API calls (use when central cache is broken).<br>';
     echo '<strong>Flush ALL Caches</strong> — deletes all pillar and composite data (destructive).</p>';
     echo '</div></div>';
+
+// ─── SENSITIVITY TESTING SECTION ─────────────────────────────
+$scenarios = geri_list_scenarios();
+$baseline = get_option( GERI_OPTION_KEY );
+
+echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
+echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-generic"></span> 🔬 Sensitivity Testing (Research)</h2></div>';
+echo '<div class="inside">';
+
+// Preset weights
+$preset_weights = array(
+    'baseline'        => array( 'governance' => 25, 'macro' => 25, 'external' => 25, 'fiscal' => 25 ),
+    'gov-heavy'       => array( 'governance' => 60, 'macro' => 20, 'external' => 10, 'fiscal' => 10 ),
+    'gov-light'       => array( 'governance' => 10, 'macro' => 30, 'external' => 30, 'fiscal' => 30 ),
+    'macro-heavy'     => array( 'governance' => 10, 'macro' => 60, 'external' => 20, 'fiscal' => 10 ),
+    'macro-light'     => array( 'governance' => 30, 'macro' => 10, 'external' => 30, 'fiscal' => 30 ),
+    'external-heavy'  => array( 'governance' => 10, 'macro' => 20, 'external' => 60, 'fiscal' => 10 ),
+    'external-light'  => array( 'governance' => 30, 'macro' => 30, 'external' => 10, 'fiscal' => 30 ),
+    'fiscal-heavy'    => array( 'governance' => 10, 'macro' => 20, 'external' => 10, 'fiscal' => 60 ),
+    'fiscal-light'    => array( 'governance' => 30, 'macro' => 30, 'external' => 30, 'fiscal' => 10 ),
+);
+
+// Build a JavaScript object with all presets
+$preset_js = array();
+foreach ( $preset_weights as $key => $weights ) {
+    $preset_js[ $key ] = array(
+        'pillars'   => geri_get_pillar_weights(),
+        'composite' => $weights,
+    );
+}
+$preset_json = wp_json_encode( $preset_js, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT );
+
+echo '<p><strong>Presets:</strong> Click a button to load a predefined weighting scheme.</p>';
+echo '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:15px;">';
+
+foreach ( $preset_weights as $key => $weights ) {
+    $label = str_replace( '-', ' ', $key );
+    $label = ucwords( $label );
+    echo '<button type="button" class="button preset-btn" data-preset="' . esc_attr( $key ) . '">' . esc_html( $label ) . '</button> ';
+}
+echo '</div>';
+
+// JavaScript to handle preset loading
+?>
+<script>
+// Presets stored as a JavaScript object (no escaping issues)
+var geriPresets = <?php echo $preset_json; ?>;
+
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.preset-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var presetName = this.dataset.preset;
+            var preset = geriPresets[presetName];
+            if (preset) {
+                var jsonString = JSON.stringify(preset, null, 4);
+                document.getElementById('geri_custom_weights').value = jsonString;
+                document.getElementById('geri_scenario_name').value = presetName;
+            }
+        });
+    });
+});
+</script>
+<?php
+
+// ─── FORM STARTS HERE ───
+echo '<form method="post" style="margin-top:10px;">';
+wp_nonce_field( 'geri_build_scenario_action' );
+
+// --- MOVED INSIDE THE FORM ---
+echo '<p><strong>Custom Weights JSON</strong></p>';
+echo '<p style="color:#666; font-size:12px;">Edit the JSON below to define custom pillar weights. <code>pillars</code> controls within-pillar indicator weights (rarely changed). <code>composite</code> controls the 4 pillar weights (must sum to 100).</p>';
+$default_json = wp_json_encode( array( 'pillars' => geri_get_pillar_weights(), 'composite' => geri_get_composite_weights() ), JSON_PRETTY_PRINT );
+echo '<textarea id="geri_custom_weights" name="geri_custom_weights" style="width:100%;height:180px;font-family:monospace;font-size:12px;padding:8px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;">' . esc_textarea( $default_json ) . '</textarea>';
+
+// Build inputs (Scenario ID + Build button)
+echo '<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px;">';
+echo '<label><strong>Scenario ID:</strong></label>';
+echo '<input type="text" id="geri_scenario_name" name="geri_scenario_name" placeholder="e.g., gov-heavy-60" style="width:200px;" required pattern="[a-z0-9\-]+">';
+echo '<input type="submit" name="geri_build_scenario" class="button button-primary" value="🔬 Build Scenario">';
+echo '</div>';
+
+echo '</form>';
+// ─── FORM ENDS HERE ───
+
+// Scenario comparison table
+if ( ! empty( $scenarios ) && $baseline ) {
+    echo '<h4 style="margin-top:20px;">Scenario Comparison</h4>';
+    echo '<table class="widefat striped"><thead><tr><th>Scenario</th><th>Countries</th><th>Spearman ρ vs Baseline</th><th>Top Mover</th><th>Action</th></tr></thead><tbody>';
+
+    $baseline_ranks = array();
+    foreach ( $baseline['countries'] as $iso3 => $c ) {
+        if ( isset( $c['rank_display']['best_estimate'] ) ) {
+            $baseline_ranks[ $iso3 ] = $c['rank_display']['best_estimate'];
+        }
+    }
+
+    foreach ( $scenarios as $id => $scenario ) {
+        $scenario_ranks = array();
+        foreach ( $scenario['countries'] as $iso3 => $c ) {
+            if ( isset( $c['rank_display']['best_estimate'] ) ) {
+                $scenario_ranks[ $iso3 ] = $c['rank_display']['best_estimate'];
+            }
+        }
+
+        $common = array_intersect_key( $baseline_ranks, $scenario_ranks );
+        $x = array();
+        $y = array();
+        foreach ( $common as $iso3 => $br ) {
+            $x[] = $br;
+            $y[] = $scenario_ranks[ $iso3 ];
+        }
+
+        $rho = 'N/A';
+        if ( count( $x ) > 2 ) {
+            $rho = round( geri_spearman_correlation( $x, $y ), 3 );
+        }
+
+        $max_delta = 0;
+        $top_mover = '-';
+        foreach ( $common as $iso3 => $br ) {
+            $delta = abs( $br - $scenario_ranks[ $iso3 ] );
+            if ( $delta > $max_delta ) {
+                $max_delta = $delta;
+                $top_mover = $iso3 . ' (±' . $delta . ')';
+            }
+        }
+
+        echo '<tr>';
+        echo '<td><strong>' . esc_html( $id ) . '</strong></td>';
+        echo '<td>' . esc_html( $scenario['total_countries'] ) . '</td>';
+        echo '<td>' . esc_html( $rho ) . '</td>';
+        echo '<td>' . esc_html( $top_mover ) . '</td>';
+        echo '<td>';
+        echo '<form method="post" style="display:inline;">';
+        wp_nonce_field( 'geri_delete_scenario_action' );
+        echo '<input type="hidden" name="geri_delete_scenario" value="' . esc_attr( $id ) . '">';
+        echo '<input type="submit" class="button button-small button-link-delete" value="Delete" onclick="return confirm(\'Delete scenario ' . esc_js( $id ) . '?\');">';
+        echo '</form>';
+        echo '</td>';
+        echo '</tr>';
+    }
+    echo '</tbody></table>';
+} else {
+    echo '<p style="margin-top:10px; color:#666;">No scenarios built yet. Use the presets and build a scenario to see comparison data.</p>';
+}
+
+echo '</div></div>';
 
     // Preview with Rank
     if ( $existing && ! empty( $existing['countries'] ) ) {
