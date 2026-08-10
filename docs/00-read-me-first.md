@@ -1,176 +1,64 @@
-# Blomstra Insights — Read Me First
+# Read Me First
 
-> **You are working inside the Blomstra Insights measurement system.**
-> This is a multi-index research platform, not a collection of independent widgets.
-> Every index shares architecture, methodology standards, and operational patterns.
-> **Do not invent a new solution for a problem already solved elsewhere in this repository.**
-
----
-
-## Mandatory Reading Order
-
-Before changing or adding **anything**, read these in order:
-
-1. **This file** — orientation and rules
-2. [`01-architecture.md`](01-architecture.md) — how the system is organized
-3. [`11-engineering-research-standards.md`](11-engineering-research-standards.md) — *Layer B: Research Standards* — the authoritative rules every index inherits
-4. [`05-index-template.md`](05-index-template.md) — *the checklist* for building a new index
-5. [`03-api-contract.md`](03-api-contract.md) — the JSON schema every endpoint MUST conform to
-6. [`08-reference-data-functions.md`](08-reference-data-functions.md) — what already exists in Reference Data (ingestion layer)
-7. [`09-index-utilities.md`](09-index-utilities.md) — what already exists in the Integrity layer (processing & validation)
-
-Only then:
-- [`02-data-flow.md`](02-data-flow.md) — pipeline details
-- [`04-frontend-engine.md`](04-frontend-engine.md) — frontend behavior
-- [`06-deployment.md`](06-deployment.md) — operations
-- [`07-glossary.md`](07-glossary.md) — vocabulary
-- [`10-methodology-deepdive.md`](10-methodology-deepdive.md) — *Layer C: CII case study* (read for inspiration, not as gospel)
+> **Version:** BMS-1.0.0 (Blomstra Methodology Standard)  
+> **Last updated:** 2026-08-10  
+> **Status:** SERI and SIVI are live and BMS-1.0.0 conformant. GPRI is in planning.
 
 ---
 
-## Three-Layer Architecture
+## Naming: What We Call Things
 
-| Layer | What it is | Example docs |
-|-------|-----------|--------------|
-| **A — Platform** | Software architecture, data flow, deployment, shared utilities | `01`, `02`, `04`, `06`, `08`, `09` |
-| **B — Research Standards** | *How Blomstra measures things* — institutional rules | `11` |
-| **C — Index Methodology** | *Why this specific index measures what it measures* | `10` (CII case study), each index's own `deviations.md` |
+This codebase has undergone two major renames. Documentation always reflects **current truth**.
 
-**Critical rule:** If a problem is solved in Layer B, you MUST reuse that solution unless your index's methodology document explicitly overrides it with a documented justification.
+| Current Name | Former Name | What it is |
+|---|---|---|
+| **SERI** | GERI | Sovereign Economic Resilience Index — 4 pillars (governance, macro, external, fiscal) |
+| **SIVI** | CII / CIVI | Sovereign Infrastructure Vulnerability Index — 3 pillars (energy, HHI, maritime) |
+| **GPRI** | — | Geopolitical Risk Index — planned, not yet built |
+| **BMS** | — | Blomstra Methodology Standard — the architectural standard all indices must follow |
+| **Reference Data** | — | The shared `blomstra-index-utilities.php` snippet that provides country lists, batch fetchers, math utilities |
 
-**New rule:** If a problem is solved in the shared Integrity layer (`09-index-utilities.md`), you MUST reuse that function unless your index explicitly documents why a custom approach is required.
-
----
-
-## The AI / Developer Protocol
-
-All instructions in this repository use [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119) keywords:
-
-- **MUST** / **MUST NOT** — Hard requirement. Violations are bugs.
-- **SHOULD** / **SHOULD NOT** — Strong recommendation. Deviations need justification.
-- **MAY** — Optional. Use if helpful.
-
-### Before writing any backend code
-
-Complete **Gate 0** in [`05-index-template.md`](05-index-template.md). It is a compliance gate, not a suggestion.
-
-### Before adding a new external API
-
-Follow the **New Source Onboarding Protocol** in [`08-reference-data-functions.md`](08-reference-data-functions.md).
-
-### Before processing raw data into an index
-
-Check [`09-index-utilities.md`](09-index-utilities.md) for safe extraction, sanitization, and provenance functions.
-
-### If you need to deviate from a standard
-
-Document it in `src/indices/{slug}/docs/deviations.md` using the template in [`deviations.md`](deviations.md).
+**Do not use old names in new code.** Legacy REST endpoints redirect for backward compatibility, but all internal functions, options, and slugs use the current names.
 
 ---
 
-## Reference Implementation Map
+## How to Read These Docs
 
-| Problem | Reference Implementation | Where to look |
-|---------|------------------------|---------------|
-| Partial pillar coverage / rank uncertainty | CII | `src/indices/cii/cii-backend.php` — `cii_build_composite()` |
-| Structural zero handling | CII Maritime | `blomstra_get_maritime_value()` in Reference Data |
-| Forecast / structural separation | GERI | `src/indices/geri/geri-backend.php` — Forward Pressure layer |
-| Data provenance (per-indicator) | GERI + Utilities | `blomstra_track_source()` in `index-utilities.php` |
-| Historical trajectory / volatility | GERI + Utilities | `blomstra_compute_cagr()` + `blomstra_sanitize_timeseries()` |
-| HHI / concentration | CII | `blomstra_refresh_comtrade_hhi_data()` in Reference Data |
-| Multi-source integration | Governance Capture | (see project docs) |
-| Data refresh safeguards | GERI | Async safeguard, cron 0.8× guard, atomic save |
-| Version / vintage | GERI | `reference_vintage`, `weo_vintage` handling |
-| Cron safety (build lock, freshness gate) | CII | `01-architecture.md` Build Reliability section |
-| Snapshot history | Reference Data | `blomstra_index_snapshot_save()` |
-| Frontend engine | Shared | `04-frontend-engine.md` |
-| Safe numeric extraction | Utilities | `blomstra_safe_numeric()` in `index-utilities.php` |
-| Fallback merging with provenance | Utilities | `blomstra_merge_with_fallback()` in `index-utilities.php` |
-| Definition drift detection | Utilities | `blomstra_validate_pillar_thresholds()` in `index-utilities.php` |
-| Winsorized percentiles | Utilities | `blomstra_compute_percentile_ranks_safe()` in `index-utilities.php` |
+- **Building a new index?** Start with [05-index-template.md](05-index-template.md), then reference [01-architecture.md](01-architecture.md) and [11-engineering-research-standards.md](11-engineering-research-standards.md).
+- **Debugging a live index?** Start with [02-data-flow.md](02-data-flow.md) and [06-deployment.md](06-deployment.md).
+- **Integrating the frontend?** Read [04-frontend-engine.md](04-frontend-engine.md) and [03-api-contract.md](03-api-contract.md).
+- **Writing a research paper?** Read [10-methodology-deepdive.md](10-methodology-deepdive.md) and [11-engineering-research-standards.md](11-engineering-research-standards.md).
 
 ---
 
-## Common Traps
+## Version Policy
 
-| Trap | Why it happens | Prevention |
-|------|---------------|------------|
-| "I'll just build the composite first and fix the pillars later" | Time pressure | [`05-index-template.md`](05-index-template.md) Phase 7: *"Composite/scoring work comes last. Placeholder composite logic always becomes production logic."* |
-| "This index is different, so I need different missing-data handling" | Not checking Layer B | Gate 0 in [`05-index-template.md`](05-index-template.md) forces reference implementation audit |
-| "I'll add the API call logging later" | It works now | [`08-reference-data-functions.md`](08-reference-data-functions.md) New Source Protocol: logging is Step 5, not an afterthought |
-| "The 3-partial CII logic doesn't apply because I have 4 pillars" | Misreading `10` as standard | Read [`11-engineering-research-standards.md`](11-engineering-research-standards.md) BMS-002 for the generalized N-pillar algorithm |
-| "Zero debt means missing debt" | No shared taxonomy | [`11-engineering-research-standards.md`](11-engineering-research-standards.md) BMS-002 Data-State Taxonomy: **Structural Zero ≠ Missing** |
-| "I'll use `empty()` to check if this value exists" | PHP habit | [`09-index-utilities.md`](09-index-utilities.md) Rule 1: `empty(0.0)` is `true`. Use `blomstra_safe_numeric()`. |
-| "The API always returns years in ascending order" | Assumption | [`09-index-utilities.md`](09-index-utilities.md) Rule 2: Use `blomstra_sanitize_timeseries()` before computing trajectories. |
-| "I'll merge IMF fallback data manually" | Not knowing utilities exist | [`09-index-utilities.md`](09-index-utilities.md) Rule 3: Use `blomstra_merge_with_fallback()` to preserve provenance. |
+- **Index version** (e.g., `SERI_VERSION`, `SIVI_VERSION`): Semver. Major bumps for methodology changes. Minor for new indicators. Patch for bug fixes.
+- **BMS version** (e.g., `BMS-1.0.0`): Bumped when the architectural standard itself changes — e.g., a new required field in the API output, a new admin UI pattern, or a new shared utility.
+- **Standard version** is declared in every index's composite output: `'standard_version' => 'BMS-1.0.0'`.
 
 ---
 
-## Where to find what
+## What BMS-1.0.0 Requires
 
-| I want to... | Go to... |
-|-------------|----------|
-| Build a new index | [`05-index-template.md`](05-index-template.md) → Gate 0 → Phase 1 |
-| Add a new API source | [`08-reference-data-functions.md`](08-reference-data-functions.md) → "Adding a New Source" |
-| Understand partial coverage math | [`11-engineering-research-standards.md`](11-engineering-research-standards.md) BMS-002 |
-| See how CII actually does it | [`10-methodology-deepdive.md`](10-methodology-deepdive.md) |
-| Fix a broken cron | [`06-deployment.md`](06-deployment.md) → "Fixing Broken wp-cron" |
-| Add a frontend widget | [`04-frontend-engine.md`](04-frontend-engine.md) |
-| Know the exact API shape | [`03-api-contract.md`](03-api-contract.md) |
-| Understand why we use percentiles | [`10-methodology-deepdive.md`](10-methodology-deepdive.md) Step 1 |
-| Deploy to production | [`06-deployment.md`](06-deployment.md) |
-| Back up historical data | [`06-deployment.md`](06-deployment.md) → "Backup & Recovery" |
-| Safely extract numeric values | [`09-index-utilities.md`](09-index-utilities.md) → "Safe Data Extraction" |
-| Compute trajectories correctly | [`09-index-utilities.md`](09-index-utilities.md) → "Timeseries Sanitization" |
-| Track data sources per-indicator | [`09-index-utilities.md`](09-index-utilities.md) → "Per-Indicator Source Tracking" |
-| Validate my pillar definitions | [`09-index-utilities.md`](09-index-utilities.md) → "Definition Validation" |
+Every index in this repo must implement:
 
----
+1. **Per-pillar storage** as `{index}_{pillar}_data` containing `['data' => [...], 'sources' => [...]]`
+2. **Per-pillar meta** as `{index}_{pillar}_meta` containing `['last_fetched' => '...']`
+3. **Composite storage** as `{index}_composite_index` with scenario-safe builder (`context !== 'scenario'`)
+4. **Async callbacks** per pillar (`{index}_async_fetch_{pillar}`)
+5. **Cron safeguards** — auto-rollback if new build drops below 80% of previous country count
+6. **Sensitivity testing** — preset weights, custom JSON, Spearman correlation vs baseline
+7. **Data quality scores** — per pillar, per country, using `blomstra_pillar_quality_score()`
+8. **Measurement flags** — per country, documenting structural zeros, coverage ratio, missing pillars
+9. **Admin dashboard** — cards, freshness bar, pillar table, composite build section, sensitivity section
+10. **REST endpoint** — canonical + legacy redirect
+11. **Init validation** — `blomstra_validate_pillar_thresholds()` on `init`
 
-## Repository Navigation
-
-```
-docs/
- 00-read-me-first.md          ← You are here
- 01-architecture.md           ← System design
- 02-data-flow.md              ← Pipeline stages
- 03-api-contract.md           ← JSON schema (MUST conform)
- 04-frontend-engine.md        ← Shared widget
- 05-index-template.md         ← New-index checklist
- 06-deployment.md             ← Operations
- 07-glossary.md               ← Vocabulary
- 08-reference-data-functions.md ← Layer 1: Reference Data (ingestion)
- 09-index-utilities.md        ← Layer 1b: Data Integrity (processing)
- 10-methodology-deepdive.md   ← CII case study (Layer C)
- 11-engineering-research-standards.md ← Blomstra-wide rules (Layer B)
- deviations.md                ← Deviation log template
-
-src/
- shared/
-  index-utilities.php         ← Data integrity & processing layer
- reference-data/
-  global-reference-data.php   ← Data ingestion layer
- indices/
-  cii/
-   cii-backend.php            ← Reference: partial coverage, structural zeros
-   cii-shortcode.php
-   docs/
-    deviations.md
-  geri/
-   geri-backend.php           ← Reference: provenance, forecast separation, trajectory
-   docs/
-    deviations.md
-```
+If an index does not have all 11, it is **not BMS-1.0.0 conformant**.
 
 ---
 
-## One-Sentence Reminders
+## Support & Contribution
 
-- **Collection is centralized.** Each index is a thin dispatcher with its own fallback.
-- **Processing is centralized too.** Use `index-utilities.php` for extraction, sanitization, and validation.
-- **Never fabricate missing data.** Simulate, don't impute.
-- **Zero ≠ missing.** Structural zeros are real observations.
-- **Forecast ≠ structural.** They live in separate layers.
-- **Rank is a property of the data, not the view.** Frontend never recalculates.
-- **Document deviations.** If you break a standard, write down why.
-- **`empty()` is not a null check for numbers.** Use `blomstra_safe_numeric()`.
+This is a proprietary codebase. External contributions are not accepted. For internal developers, open an issue with the `BMS-deviation` label if you need to break a standard rule.
