@@ -1,216 +1,172 @@
 # Frontend Engine
 
-The Blomstra Index Widget (BIW) is a single shared frontend that powers every index. It is pillar-count-agnostic: a 2-pillar index and a 4-pillar index both render from the same JavaScript and CSS files, configured entirely through `data-biw-*` attributes on a container `<div>`.
+> **Applies to:** All indices
+> **Standard:** BMS-1.0.0 (clash-proof event handling required)
 
 ---
 
-## Boot Process
+## Philosophy
 
-```javascript
-// On DOMContentLoaded (or immediately if already loaded, handling the case
-// where a page builder injects the shortcode's HTML after initial page load)
-document.querySelectorAll('.biw[data-biw-slug]:not([data-biw-initialized])')
+The frontend engine is **generic and config-driven**. One JavaScript file and one CSS file power all indices. The shortcode passes configuration via `data-*` attributes; the engine reads them and renders the appropriate visualization.
+
+**Critical rule:** The engine must never conflict with other site JavaScript. No global variables. No prototype pollution. All event listeners are namespaced and removable.
+
+---
+
+## Architecture
+
+```
+WordPress Shortcode
+    -> Injects <div data-index="seri" data-view="ranking">
+    -> Loads index-frontend-engine.js (site-wide)
+    -> Engine reads data-* attributes
+    -> Fetches /wp-json/blomstra/v1/{endpoint}
+    -> Renders widget into the div
 ```
 
-Each matched element gets one independent `BlomstraIndexWidget` instance. **All DOM queries inside an instance are scoped to that instance's own container** (`root.querySelector`, never `document.getElementById`) — this is what lets multiple indices, or multiple copies of the same index, coexist on one page without ID collisions or shared state. `data-biw-initialized` is set after boot so a container is never double-initialized (relevant if `window.BlomstraIndexFrontendRescan` is called manually after AJAX-loaded content).
-
 ---
 
-## Configuration API (data-* attributes)
+## Shortcode API
 
-### Required
+### SERI Shortcode
 
-| Attribute | Example | Purpose |
-|---|---|---|
-| `data-biw-slug` | `"cii"` | Unique ID. Used for the localStorage watchlist key (`biw_watchlist_{slug}`), the default history endpoint path, and as the marker that tells the engine "this is a widget container." Must match the slug used in `blomstra_index_snapshot_save()` or rank-delta silently won't find history |
-| `data-biw-endpoint` | `/wp-json/blomstra/v1/critical-infrastructure-index` | REST endpoint for live composite data |
-| `data-biw-pillars` | JSON array, see below | Column definitions — drives every dynamic part of the UI |
-
-### Optional, with defaults
-
-| Attribute | Default | Purpose |
-|---|---|---|
-| `data-biw-names-endpoint` | `/wp-json/blomstra/v1/country-names` | Rarely needs overriding — one shared route serves every index |
-| `data-biw-history-endpoint` | `/wp-json/blomstra/v1/index-history/` | Same — only override if an index's history genuinely needs a different route |
-| `data-biw-title` / `data-biw-subtitle` / `data-biw-eyebrow` | `""` / `""` / `"Strategic Intelligence"` | Header text |
-| `data-biw-score-key` | `"composite_score"` | Must match the API's composite field name |
-| `data-biw-score-label` | `"Composite Score"` | Display label — e.g. CII uses `"Vulnerability Score"` |
-| `data-biw-coverage-key` | `"coverage_type"` | Field for the partial/full badge |
-| `data-biw-band-thresholds` | `"25,50,75"` | Comma-separated cut points splitting scores into 4 bands — **not universal**, pick values suited to your index's own score distribution |
-| `data-biw-band-labels` | `"Low,Medium,High,Extreme"` | Must have exactly 4 entries, matching the 4 bands the thresholds create |
-| `data-biw-band-select-label` | `"All Levels"` | The filter dropdown's "show everything" text — e.g. `"All Vulnerability Levels"` |
-| `data-biw-methodology` | `""` | HTML string, rendered as the methodology footer box |
-
-### Pillar Definition Shape
-
-```json
-[
-  {
-    "key": "energy_dependency_percentile",
-    "raw_key": "energy_dependency_raw",
-    "label": "Energy Dependency",
-    "color": "#60a5fa",
-    "missingNote": "No data for this pillar"
-  }
-]
+```
+[seri_index view="ranking" limit="20"]
+[seri_index view="country" iso3="USA"]
+[seri_index view="map"]
+[seri_index view="comparison" iso3s="USA,CHN,DEU"]
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `key` | Yes | Must match a field name in the API's per-country object |
-| `raw_key` | No | If present, shown in the modal's raw-value grid. Omit for a pillar with no meaningful raw unit |
-| `label` | Yes | Display label — becomes the column header, sort option, legend badge, modal row label |
-| `color` | No (defaults to blue) | Bar-fill color in table/modal — pick something that reads against the dark theme |
-| `missingNote` | No | Tooltip text when this pillar's value is null for a given country |
+### SIVI Shortcode
 
-**This one array is the entire mechanism that makes the engine pillar-count-agnostic.** A 2-pillar index and a 4-pillar index both work with zero engine code changes — verified directly against the real Geopolitical Risk (3 pillars) and Mineral Export & Rent Dependency (2 pillars) pages, not just a design intention.
+```
+[sivi_index view="ranking" limit="20"]
+[sivi_index view="country" iso3="USA"]
+[sivi_index view="map"]
+```
+
+### Common Attributes
+
+| Attribute | Default | Description |
+|---|---|---|
+| `view` | `"ranking"` | `ranking`, `country`, `map`, `comparison`, `sensitivity` |
+| `limit` | `10` | Number of countries to show (ranking view) |
+| `iso3` | -- | Target country (country view) |
+| `iso3s` | -- | Comma-separated list (comparison view) |
+| `sort` | `"desc"` | `desc` (most vulnerable first) or `asc` (least vulnerable first) |
+| `show_partial` | `"true"` | Whether to include partial-index countries |
 
 ---
 
-## State Object
+## Widget Lifecycle
 
-Each widget instance maintains its own independent state:
+### 1. Discovery
 
 ```javascript
-{
-  all: [],           // all countries from API
-  filtered: [],    // after search/filter/sort
-  names: {},         // ISO3 → name map
-  history: {},       // from index-history endpoint
-  indexMeta: null,   // full API response
-  view: 'table',     // 'table' | 'grid'
-  sortKey: 'composite_score',
-  sortAsc: false,
-  showWatchlistOnly: false
+const widgets = document.querySelectorAll('[data-blomstra-index]');
+widgets.forEach(el => {
+    const config = {
+        index: el.dataset.index,      // "seri" or "sivi"
+        view: el.dataset.view,        // "ranking", "country", etc.
+        limit: parseInt(el.dataset.limit || 10),
+        iso3: el.dataset.iso3,
+        // ...
+    };
+    new BlomstraWidget(el, config);
+});
+```
+
+### 2. Fetch
+
+```javascript
+fetch(`/wp-json/blomstra/v1/${config.endpoint}`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) throw new Error(data.error);
+        return data;
+    });
+```
+
+### 3. Render
+
+The engine switches on `config.view`:
+
+- **ranking**: Sortable table with rank, country, composite score, pillar breakdown, coverage badge
+- **country**: Full country profile -- score card, pillar radar chart, data freshness table, measurement flags
+- **map**: Choropleth map (requires external mapping library integration)
+- **comparison**: Side-by-side country cards with delta highlighting
+- **sensitivity**: Embedded scenario comparison table (reads from scenario options)
+
+### 4. Event Handling
+
+All events are namespaced:
+
+```javascript
+// Good -- namespaced and removable
+el.addEventListener('click.blomstra', handler);
+
+// Bad -- will clash with other handlers
+el.onclick = handler;
+```
+
+State is stored per-instance, never globally:
+
+```javascript
+class BlomstraWidget {
+    constructor(container, config) {
+        this.container = container;
+        this.config = config;
+        this.state = { data: null, sort: config.sort, filter: null };
+    }
 }
 ```
 
 ---
 
-## Rendering Pipeline
+## CSS Architecture
 
-1. **loadData()** — fetches composite + names + history in parallel; if the history fetch fails for any reason, the widget degrades gracefully (shows `NEW` everywhere) rather than breaking
-2. **applyFilters()** — search text, band filter, watchlist filter
-3. **sort** — by selected key, asc/desc toggle
-4. **render()** — calls renderTable() + renderGrid(), toggles visibility
-5. **Rank display** — uses `rank_display.string_format` directly from the API
+All styles are prefixed with `.blomstra-`:
 
----
-
-## Rank Rendering (Critical Rule)
-
-**Rank is a property of the DATA, not the VIEW.**
-
-The frontend uses `rank_display.string_format` from the API response. It never recalculates rank. When a user filters by region or sorts by a pillar score, the Rank column still shows the country's **actual global rank**.
-
-```javascript
-// CORRECT — static from API
-renderCell: (row) => `${row.rank_display.string_format}`
-
-// WRONG — never do this
-rows.forEach((row, index) => { row.rank = index + 1; })
+```css
+.blomstra-widget { /* ... */ }
+.blomstra-ranking-table { /* ... */ }
+.blomstra-country-card { /* ... */ }
+.blomstra-pillar-bar { /* ... */ }
+.blomstra-coverage-badge--full { color: #2e7d32; }
+.blomstra-coverage-badge--partial { color: #b26a00; }
 ```
 
-This matters in practice, not just in principle: an earlier, unrelated widget on this system (built before the shared engine existed) computed a `global_rank` field once, client-side, right after the initial data load — which happened to be safe only because it ran *before* any filtering occurred, not because the pattern itself was safe. Any future edit that reordered those two steps would have silently broken it with no error. Reading `rank_display` straight from the API sidesteps that entire failure class — filtering can never touch a value it never computes.
+No global element selectors (e.g., `table { ... }`) that would override theme styles.
 
 ---
 
-## Partial vs. Definitive Presentation Rules
+## Data Attributes Reference
 
-The frontend MUST distinguish Full Index from Partial Index countries visually:
+The shortcode renders a container like this:
 
-| Element | Full Index | Partial Index |
-|---------|-----------|---------------|
-| Rank display | `#14` | `#38–#52*` (asterisk is mandatory) |
-| Coverage badge | `"Full"` (subtle) | `"Partial"` (prominent, e.g., amber) |
-| `is_definitive` | `true` | `false` |
-| Tooltip on rank | None | Shows theoretical bound on hover |
-| Delta arrows | Computed from `best_estimate` | Computed from `best_estimate` (uniformly) |
-
-**Critical:** The asterisk (`*`) in `string_format` is a deliberate visual flag. It MUST NOT be stripped by CSS or JavaScript. It tells the reader this is a projection, not a placement.
-
-**Theoretical bound tooltip:** When hovering over a Partial Index rank, the frontend shows the theoretical range (`#22–#71`) in a tooltip, while the main display shows only the 80% plausible range (`#38–#52*`). This avoids overwhelming the table with two ranges at once while preserving the full uncertainty for interested readers.
-
----
-
-## Rank-Delta Arrows
-
-The frontend computes change by comparing the current row against the previous snapshot in `state.history`:
-
-```javascript
-// Compare current best_estimate vs previous period's best_estimate
-// positive delta = moved toward #1 (improved)
-// Shows ↑3, ↓1, —, or NEW
+```html
+<div
+    data-blomstra-index="seri"
+    data-view="ranking"
+    data-limit="20"
+    data-endpoint="geo-economic-risk-index"
+    data-sort="desc"
+    data-show-partial="true"
+></div>
 ```
 
-Computed from `rank_display.best_estimate` specifically (not the raw `rank` field), since `best_estimate` exists on both Full and Partial Index rows uniformly — this is purely presentational; the rank itself always comes from the backend. Shows `NEW` when fewer than 2 snapshot periods exist for a given country — not an error state, an honest "not enough history yet."
+The engine reads all `data-*` attributes from the container. No inline JavaScript.
 
 ---
 
-## Watchlist
+## Clash-Proof Checklist
 
-Persisted in `localStorage` under key `biw_watchlist_{slug}`. Per-index isolation via the slug means watchlists never leak between indices, even with multiple widgets on one page.
+When modifying the frontend engine, verify:
 
----
-
-## Views
-
-### Table View
-- Sortable columns (click header)
-- Static rank column
-- Bar charts for pillar scores
-- Star button (toggle watchlist)
-- Detail button (open modal)
-- Click row to open modal
-
-### Grid View
-- Cards with badge, rank, delta
-- Metrics grid (3 columns)
-- Star button
-- Click card to open modal
-
-### Modal Detail
-- Big score + band label
-- Pillar progress bars
-- Raw values (if `raw_key` defined)
-- Watchlist toggle
-- Coverage explanation
-- Data source attribution
-- **For Partial Index:** Show `pillars_missing` list and a note: "Rank is projected because {pillar} data is unavailable."
-
-### Watchlist Panel
-- Collapsible chips
-- Remove button
-- Click chip to open modal
-
-### Excluded Panel
-- Collapsible, auto-shown only when `excluded_detail` is non-empty — no config flag needed, it's a pure function of the data
-- Country + reason table
-
----
-
-## Scoping and isolation details worth knowing
-
-- **CSS custom properties are scoped under `.biw`, never `:root`** — every color/spacing token is a `--biw-*` variable declared on the `.biw` class itself. This is also why the engine's CSS never touches bare element selectors (`table`, `select`) without an explicit override — a theme's own bare `table { border: ... }` rule was once found leaking through exactly because the engine hadn't explicitly zeroed the table's own border, producing a stray inherited border that only showed on two edges due to `border-collapse` conflict resolution. Fixed by giving `.biw-table` an explicit `border: none`
-- **Event delegation is container-scoped**: click handlers attach to `root` (the widget's own container), not `document`
-
-## Known cross-browser limitation
-
-Native `<select>` dropdowns cannot be fully styled in some browsers (notably Windows Chrome). The current implementation uses native `<select>` for the band filter and region filter. A future enhancement could replace these with a custom-built dropdown component — a genuinely bigger task than a CSS tweak, not yet done.
-
----
-
-## Design Principles
-
-1. **Pillar-agnostic** — The engine reads pillar definitions from `data-biw-pillars`. It does not know about "Energy" or "HHI".
-2. **Static rank** — Rank comes from API. Frontend never recalculates.
-3. **Instance isolation** — Each `.biw` container gets its own widget. No shared globals.
-4. **Zero hardcoded logic** — No if-statements for specific indices. A 2-pillar and 4-pillar index use the same engine file.
-5. **Honest uncertainty** — Partial Index ranks are displayed with an asterisk and a tooltip. Never pretend a projected rank is definitive.
-
----
-
-## What to read next
-
-- The exact API shape this engine expects → [`03-api-contract.md`](03-api-contract.md)
-- Wiring up a brand new index end-to-end → [`05-index-template.md`](05-index-template.md)
+- [ ] No `window.Blomstra` or other global namespace pollution
+- [ ] All event listeners use `.blomstra` namespace
+- [ ] All CSS classes use `.blomstra-` prefix
+- [ ] No `document.write()` or `innerHTML` with unsanitized user input
+- [ ] Fetch errors are caught and rendered as friendly messages inside the widget
+- [ ] Widget works when multiple instances exist on the same page
+- [ ] Widget works when loaded after DOMContentLoaded (e.g., via lazy loading)
