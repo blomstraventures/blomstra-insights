@@ -1,204 +1,255 @@
 # Reference Data Functions
 
-**File:** `global-reference-data.php`
-
-This is the shared PHP layer that collects, caches, and serves raw data from external APIs to all index backends. Before writing any new collection code, check here — if a function already exists for your data source, reuse it rather than duplicating.
-
-> **Relationship to Index Utilities:**
-> Reference Data (`global-reference-data.php`) is the **ingestion layer**: it fetches, caches, paginates, and retries.
-> [`09-index-utilities.md`](09-index-utilities.md) describes the **integrity layer**: it validates, sanitizes, transforms, and tracks provenance.
-> 
-> **Rule:** Ingestion never applies methodology-specific logic. Integrity never makes API calls.
+> **File:** `src/shared/blomstra-index-utilities.php`
+> **Standard:** BMS-1.0.0
 
 ---
 
-## Shared Utilities
+## Country Lists
 
 ### `blomstra_get_global_country_list()`
-Returns an associative array `iso3 => name` for all countries. Used by every index backend to iterate over the full universe.
 
-### `blomstra_compute_percentile_ranks($values_by_iso3)`
-Takes an associative array `iso3 => raw_value`, returns `iso3 => percentile_rank`.
+Returns an associative array of `iso3 => name` for all World Bank member countries (excluding aggregates like WLD).
 
-- Sorts values ascending
-- Assigns average rank for ties
-- Converts to 0–100: `((rank - 0.5) / n) * 100`
+**Returns:** `array( 'USA' => 'United States', ... )`
 
-**Used by:** Every index backend for normalization. See BMS-003.
-
-> **Note:** For new indices, prefer `blomstra_compute_percentile_ranks_safe()` from `index-utilities.php`, which adds winsorization and stricter tie handling. The Reference Data version is retained for backward compatibility.
-
-### `blomstra_rank_in_full_index($score, $full_composites_sorted_desc)`
-Takes a composite score and an array of Full-Index composite scores sorted descending. Returns the 1-based competition rank (ties get the best available rank).
-
-**Signature:**
-```php
-function blomstra_rank_in_full_index($score, $full_composites_sorted_desc) {
-    // $full_composites_sorted_desc: array of floats, descending
-    // Returns: int (1-based rank)
-}
-```
-
-**Used by:** Partial-coverage rank injection. See BMS-002.
-
-### `blomstra_build_partial_rank_display($ranks_by_injection)`
-Takes an array of ranks from injection simulation and returns the standard `rank_display` object.
-
-**Signature:**
-```php
-function blomstra_build_partial_rank_display($ranks_by_injection) {
-    // $ranks_by_injection: [0 => int, 10 => int, 50 => int, 90 => int, 100 => int]
-    // Returns: {
-    //   is_definitive: false,
-    //   best_estimate: int,
-    //   range_80_low: int,
-    //   range_80_high: int,
-    //   theoretical_low: int,
-    //   theoretical_high: int,
-    //   string_format: "#38–#52*"
-    // }
-}
-```
-
-**Used by:** Every index backend for Partial Index output. See BMS-002.
-
-### `blomstra_build_full_rank_display($rank)`
-Takes a definitive rank and returns the standard `rank_display` object where all fields equal that rank.
-
-**Used by:** Full Index countries.
-
-### `blomstra_index_snapshot_save($slug, $countries)`
-Upserts one row per (index_slug, iso3, YYYY-MM) into `wp_blomstra_index_history`.
-
-**Used by:** Every index backend after successful composite build.
+**Fallback:** If the shared utility is not available, each index has its own `sivi_get_global_country_list_fallback()` that queries the WB API directly.
 
 ---
 
-## Data Collection Functions
+## Batch Fetchers
 
-### `blomstra_get_maritime_raw()`
-- **Source:** World Bank WDI `IS.SHP.GCNW.XQ`
-- **Returns:** `{iso3: {value, year}}`
-- **Structural zero handling:** Landlocked countries receive `value: 0`, `year: null`, marked as structural zero
-- **Cache:** 1-week transient
+### `blomstra_fetch_wb_indicator_batch( $code, $source = null, $force = false )`
 
-### `blomstra_refresh_comtrade_hhi_data()`
-- **Source:** UN Comtrade API
-- **Chunk size:** 50 reporter codes
-- **Lookback:** 4 years
-- **Quota guard:** Detects HTTP 429/403, marks exhausted if retry-after > 24h
-- **Returns:** `{iso3: {value, year, source}}`
-- **Cache:** Option `blomstra_comtrade_hhi_data`
+Fetches a single World Bank indicator for all countries via the shared cache.
 
-### `blomstra_get_eia_raw_data()`
-- **Source:** EIA API v2
-- **Fuels:** 5 product IDs × 2 activities
-- **Chunk size:** 25 countries
-- **Returns:** `{consumption: {fuel_id: {iso3: qbtu}}, production: {...}}`
-- **Confirmed zero:** EIA returns explicit `0` for some cells; this is preserved as real data
-- **Cache:** Option `blomstra_eia_raw_data`
+| Param | Type | Description |
+|---|---|---|
+| `$code` | string | WB indicator code (e.g., `NY.GDP.MKTP.KD.ZG`) |
+| `$source` | int | WB source ID (e.g., `3` for WGI) |
+| `$force` | bool | Bypass cache and refetch |
 
-### `blomstra_fetch_wb_indicator_batch($code, $source, $force)`
-- **Source:** World Bank API v2
-- **Pagination:** `per_page=20000` bulk fetch
-- **Returns:** `{iso3: {value, year, source, data_type, retrieval_date}}`
-- **Cache:** Option `blomstra_wb_indicator_cache[{code}]`
-- **Provenance:** Includes `data_type` (observed/estimated), `retrieval_date`, `source`
-
-> **Processing note:** When consuming this data, pass it through `blomstra_safe_numeric()` before using it in calculations. The API may return `0.0` for legitimate zeros.
-
-### `blomstra_fetch_imf_forecast_batch($code, $horizon, $force)`
-- **Source:** IMF DataMapper API
-- **Returns:** `{iso3: {value, year, source, weo_vintage}}`
-- **Cache:** Option `blomstra_imf_cache[{code}]`
-- **Vintage:** Includes `weo_vintage` (e.g., "April 2026")
+**Returns:** `array( 'USA' => array('value' => 2.5, 'year' => 2023, 'source' => 'WB_WDI'), ... )`
 
 ---
 
-## Adding a New Reference Data Source
+### `blomstra_fetch_imf_indicator_batch( $code, $force = false )`
 
-Before adding a function, the developer MUST document all fields below in a comment block above the function.
+Fetches IMF WEO historical data for all countries.
 
-### Required Documentation Template
+| Param | Type | Description |
+|---|---|---|
+| `$code` | string | IMF indicator code (e.g., `GGXWDG_NGDP`) |
+| `$force` | bool | Bypass cache |
+
+**Returns:** `array( 'USA' => array('value' => 120.5, 'year' => '2023', 'source' => 'IMF_WEO'), ... )`
+
+---
+
+### `blomstra_fetch_imf_forecast_batch( $code, $horizon = 1, $force = false )`
+
+Fetches IMF WEO forecast data.
+
+| Param | Type | Description |
+|---|---|---|
+| `$code` | string | IMF indicator code |
+| `$horizon` | int | Years ahead (1 = next year) |
+| `$force` | bool | Bypass cache |
+
+**Returns:** Same shape as historical batch.
+
+---
+
+### `blomstra_refresh_eia_raw_data( $iso3_list )`
+
+Fetches EIA energy data (consumption + production) for a list of countries.
+
+| Param | Type | Description |
+|---|---|---|
+| `$iso3_list` | array | Array of ISO3 codes |
+
+**Returns:** `array( 'consumption' => array(fuel_id => array(iso3 => value)), 'production' => array(...) )`
+
+---
+
+### `blomstra_refresh_comtrade_hhi_data( $year = null, $iso3_list = null )`
+
+Fetches UN Comtrade import data and computes HHI values.
+
+| Param | Type | Description |
+|---|---|---|
+| `$year` | int | Target year (defaults to last year) |
+| `$iso3_list` | array | Target countries |
+
+**Returns:** `array( 'USA' => array('value' => 1250, 'year' => 2023, 'source' => 'Comtrade'), ... )`
+
+**Side effect:** Updates `blomstra_hhi_refresh_summary` option with run diagnostics.
+
+---
+
+## Math Utilities
+
+### `blomstra_compute_percentile_ranks_safe( $values, $winsorize = 0.0 )`
+
+Computes percentile ranks for an associative array of `iso3 => value`.
+
+| Param | Type | Description |
+|---|---|---|
+| `$values` | array | `iso3 => raw_value` |
+| `$winsorize` | float | Fraction to winsorize at tails (0.0 = none, 0.01 = 1%) |
+
+**Returns:** `array( 'USA' => 45.23, ... )`
+
+**Features:**
+- Handles ties via average rank
+- Never returns null for valid inputs
+- Safe for single-country arrays (returns 50.0)
+
+---
+
+### `blomstra_compute_stddev( $values, $sample = true )`
+
+Standard deviation.
+
+---
+
+### `blomstra_compute_cagr( $timeseries )`
+
+Compound annual growth rate for an associative array of `year => value`.
+
+**Returns:** float or null if insufficient data.
+
+---
+
+### `blomstra_safe_numeric( $value )`
+
+Safely converts a value to float, returning null for non-numeric inputs.
+
+---
+
+### `blomstra_sanitize_timeseries( $years, $min_obs = 4, $max_gap = 2 )`
+
+Cleans a time series by removing gaps and ensuring minimum observations.
+
+| Param | Type | Description |
+|---|---|---|
+| `$years` | array | `year => value` |
+| `$min_obs` | int | Minimum observations required |
+| `$max_gap` | int | Maximum allowed gap between consecutive years |
+
+**Returns:** Filtered array or empty array if invalid.
+
+---
+
+## Source Tracking
+
+### `blomstra_track_source( &$sources, $iso3, $indicator, $source_name, $scope, $year = null )`
+
+Records provenance for an indicator value.
 
 ```php
-/**
- * Source: {Provider Name}
- * API endpoint: {URL}
- * Dataset/indicator ID: {ID}
- * Unit: {unit}
- * Directionality: {higher = X}
- * Country key: {field name}
- * Observation year: {field name}
- * Current vs historical: {semantics}
- * Revision/vintage: {behavior}
- * Missing-value semantics: {null = missing? structural zero?}
- * Rate limits: {requests per minute}
- * Pagination: {chunk size or per_page}
- * Retry strategy: {attempts, backoff}
- * Cache duration: {TTL}
- * Refresh cadence: {cron schedule}
- * Provenance fields: {value, year, source, ...}
- * Fallback policy: {index-level direct API?}
- * Reusable by multiple indices? {yes/no}
- * Transformation belongs in: {Reference Data or Index}
- */
+$sources = array();
+blomstra_track_source( $sources, 'USA', 'gov_debt', 'IMF_WEO', 'general_gov', '2023' );
+// $sources['USA']['gov_debt'] = array( array('source' => 'IMF_WEO', 'scope' => 'general_gov', 'year' => '2023') );
 ```
-
-### Concrete Example: World Bank LSCI (Maritime)
-
-```php
-/**
- * Source: World Bank WDI
- * API endpoint: api.worldbank.org/v2/country/all/indicator/IS.SHP.GCNW.XQ
- * Dataset/indicator ID: IS.SHP.GCNW.XQ
- * Unit: Liner Shipping Connectivity Index (unitless, 0–100+ scale)
- * Directionality: Higher = better connectivity
- * Country key: countryiso3code
- * Observation year: date
- * Current vs historical: Most recent year per country (mrnev=1)
- * Revision/vintage: None (WB WDI revised in place, no version tracking)
- * Missing-value semantics: Null = missing; landlocked = structural zero (value 0)
- * Rate limits: ~100 req/min practical
- * Pagination: per_page=20000 sufficient for single call (~250 countries)
- * Retry strategy: 1 automatic retry, 3s sleep
- * Cache duration: 1 week transient
- * Refresh cadence: Weekly (Monday 02:00 UTC)
- * Provenance fields: value, year, source
- * Fallback policy: Index-level direct API fallback if central cache empty
- * Reusable by multiple indices? Yes — any index needing maritime connectivity
- * Transformation belongs in: Reference Data stores raw LSCI. Index inverts to vulnerability.
- */
-```
-
-### The 8-Step Checklist
-
-1. **Source definition** — Fill the template above
-2. **Fetch function with retry/backoff** — Use `wp_remote_get()` with timeout, retry loop, exponential backoff
-3. **Chunking/pagination** — Loop until API returns no more pages
-4. **Per-chunk checkpointing** — Save partial progress after every chunk into option/transient
-5. **Call logging from day one** — Write to `{source}_call_log` on every request
-6. **Debug info option** — Store HTTP code, body snippet, parsed count in `{source}_debug`
-7. **Admin sandbox integration** — Add test button to Reference Data admin page
-8. **Staggered cron registration** — Register on a day that doesn't conflict with existing weekly crons (Mon=Maritime, Tue=EIA, Wed=HHI, Thu=WB, Fri=IMF)
 
 ---
 
-## Admin Sandbox
+### `blomstra_pillar_quality_score( $all_sources, $iso3, $indicators )`
 
-The Reference Data admin page provides:
-- Per-dataset flush/refresh buttons
-- Cron health dashboard (last run, status, item counts, next scheduled time)
-- API Sandbox: isolated single-target testing without exhausting quotas
-- Comprehensive audit logs (Comtrade, EIA, WB, IMF call logs with outcome tracking)
-- Debug inspector: raw dumps for maritime, reporters, EIA, HHI, WB, IMF summaries
+Computes a 0-3 quality score for a pillar based on source freshness and primary vs fallback usage.
+
+| Param | Type | Description |
+|---|---|---|
+| `$all_sources` | array | Merged sources array from all pillars |
+| `$iso3` | string | Country code |
+| `$indicators` | array | List of indicator names in this pillar |
+
+**Returns:** `int` (0-3)
+
+**Scoring:**
+- 3: All indicators from primary sources, recent years
+- 2: Mixed primary and fallback
+- 1: Mostly fallback or old data
+- 0: No data
 
 ---
 
-## What to read next
+### `blomstra_pillar_source_summary( $sources, $iso3, $indicators )`
 
-- Data processing & validation → [`09-index-utilities.md`](09-index-utilities.md)
-- How indices consume this data → [`02-data-flow.md`](02-data-flow.md)
-- The exact API contract → [`03-api-contract.md`](03-api-contract.md)
-- Building a new index → [`05-index-template.md`](05-index-template.md)
-- The Blomstra-wide research standards → [`11-engineering-research-standards.md`](11-engineering-research-standards.md)
+Returns a structured breakdown of which source provided each indicator.
+
+**Returns:** `array( 'breakdown' => array(...), 'scope_mixed' => bool )`
+
+---
+
+## Rank Builders
+
+### `blomstra_rank_in_full_index( $score, $full_composites_sorted )`
+
+Returns the 1-based rank of a score within the sorted full-index array.
+
+---
+
+### `blomstra_build_full_rank_display( $rank )`
+
+Returns a rank display object for a full-index country.
+
+**Returns:** `array( 'is_definitive' => true, 'best_estimate' => $rank, ... )`
+
+---
+
+### `blomstra_build_partial_rank_display( $ranks_by_injection )`
+
+Returns a rank display object for a partial-index country.
+
+**Parameter:** `array( 0 => rank_at_0pct, 10 => rank_at_10pct, 50 => ..., 90 => ..., 100 => ... )`
+
+**Returns:** `array( 'is_definitive' => false, 'best_estimate' => ..., 'range_80_low' => ..., ... )`
+
+---
+
+## Validation
+
+### `blomstra_validate_pillar_thresholds( $defs, $weights )`
+
+Validates that pillar definition thresholds are consistent with weight definitions.
+
+**Returns:** `array( 'valid' => bool, 'mismatches' => array(...) )`
+
+Called on `init` by every index. If invalid and `WP_DEBUG` is true, the index calls `wp_die()`.
+
+---
+
+## Merge Utilities
+
+### `blomstra_merge_with_fallback( $primary, $fallback, &$sources, $indicator, $primary_name, $fallback_name, $primary_scope, $fallback_scope )`
+
+Merges two data arrays with fallback tracking.
+
+**Returns:** Merged values array. Updates `$sources` to track which source was used per country.
+
+---
+
+## Snapshot
+
+### `blomstra_index_snapshot_save( $index_key, $snapshot )`
+
+Saves a lightweight snapshot of the current composite for historical comparison.
+
+| Param | Type | Description |
+|---|---|---|
+| `$index_key` | string | Short key (e.g., `'seri'`, `'sivi'`) |
+| `$snapshot` | array | `iso3 => array('composite_score', 'rank', 'coverage_type', ...)` |
+
+---
+
+## Cron Status
+
+### `blomstra_update_cron_status( $key, $status, $message, $count = 0 )`
+
+Updates the shared cron status log.
+
+**Stores in:** `blomstra_cron_status` option.
+
+**Shape:** `array( 'seri' => array('status' => 'success', 'last_run' => '...', 'message' => '...', 'count' => 182), ... )`
