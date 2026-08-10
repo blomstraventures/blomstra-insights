@@ -160,6 +160,7 @@ Sensitivity testing can never overwrite the live index.
 src/
 ├── shared/
 │   └── blomstra-index-utilities.php    # BMS-1.0.0 shared layer
+│   └── global-reference-data.php       # Reference Data layer
 ├── indices/
 │   ├── seri/
 │   │   ├── seri-backend.php            # BMS conformant
