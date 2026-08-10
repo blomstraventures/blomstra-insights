@@ -1,98 +1,129 @@
-# Deviation Log Template
+# Known Deviations & Issues
 
-> **Place this file at:** `src/indices/{slug}/docs/deviations.md`
->
-> Every departure from a Blomstra Research Standard (BMS) MUST be documented here.
-> Undocumented deviations are treated as bugs, not features.
+> **Last updated:** 2026-08-10
+> **Applies to:** SERI v4.2.1, SIVI v2.0.0
 
 ---
 
-## Index Information
+## Active Issues
 
-| Field | Value |
-|-------|-------|
-| Index slug | `{slug}` |
-| Index name | `{Full Name}` |
-| Standard version | `BMS-x.y.z` |
-| Last updated | `YYYY-MM-DD` |
+### 1. SIVI Partial Rank Normalization Bug
 
----
+**Status:** Critical -- fix required before next build
+**Location:** `sivi_build_composite()`, partial rank injection
+**Description:** Partial rank injection does not normalize by total weight. Missing pillar injection produces composites ~100x too large, causing all partial countries to rank #1.
+**Fix:** Divide hypothetical composite by `array_sum($pillar_weight_by_name)`.
+**See:** Architecture migration guide, Issue #1
 
-## Deviation #1: {Short Title}
+### 2. SIVI Energy/HHI Meta Keys Not Updated
 
-| Field | Value |
-|-------|-------|
-| Standard ID | `BMS-xxx` |
-| Standard section | `{section name}` |
-| Deviation type | `override` / `extension` / `exception` |
-| Status | `approved` / `proposed` / `under_review` |
-| Approved by | `{name}` |
-| Date approved | `YYYY-MM-DD` |
+**Status:** Critical -- breaks admin freshness display
+**Location:** `sivi_persist_energy_results()`, `sivi_refresh_hhi_pillar_fallback()`
+**Description:** Energy and HHI fetch functions persist data but never update `SIVI_ENERGY_META_KEY` or `SIVI_HHI_META_KEY`. Admin freshness bar shows "Never" for these pillars.
+**Fix:** Add `update_option(SIVI_ENERGY_META_KEY, ...)` and `update_option(SIVI_HHI_META_KEY, ...)` at end of each persistence path.
+**See:** Architecture migration guide, Issue #2
 
-### What the standard says
+### 3. SIVI `energy_is_structural_zero` Flag Is Dead Code
 
-> Quote the relevant rule from [`10-engineering-research-standards.md`](10-engineering-research-standards.md).
+**Status:** Medium -- cosmetic cleanup
+**Location:** `sivi_build_composite()`, measurement flags
+**Description:** Landlocked status affects maritime, not energy. This flag always returns `false`.
+**Fix:** Replace with `maritime_is_structural_zero` or remove.
+**See:** Architecture migration guide, Issue #3
 
-### What this index does instead
+### 4. SIVI Missing `data_freshness` and `pillars` Structure
 
-> Describe the deviation precisely.
+**Status:** Medium -- API shape inconsistency
+**Location:** `sivi_build_composite()` country output
+**Description:** SERI includes `data_freshness` and `pillars` objects per country. SIVI omits them. Frontend widgets expecting SERI shape will fail on SIVI.
+**Fix:** Add both structures to SIVI country output.
+**See:** Architecture migration guide, Issue #4
 
-### Why this deviation is necessary
+### 5. HHI Checkpoint Does Not Merge Sources
 
-> Provide methodological justification. "Because it works better" is not sufficient.
-> Cite external sources if applicable.
-
-### What risks this introduces
-
-> Be honest about what could go wrong.
-
-### How the risk is mitigated
-
-> Describe safeguards, tests, or monitoring.
-
-### Related code
-
-> File and function names where this deviation is implemented.
+**Status:** Medium -- crash recovery gap
+**Location:** `sivi_refresh_hhi_pillar_fallback()`, checkpoint closure
+**Description:** The checkpoint function merges data but not sources. A crash mid-run loses source provenance for already-completed chunks.
+**Fix:** Pass `$sources` into closure and merge.
+**See:** Architecture migration guide, Issue #5
 
 ---
 
-## Deviation #2: {Short Title}
+## Inherited from SERI
 
-(Use same format as above)
+### 6. Partial Rank Logic Ignores Custom Weights
 
----
-
-## No Deviations
-
-If this index conforms to all BMS standards without deviation, state that explicitly:
-
-> **This index conforms to BMS-x.y.z without deviation.**
-> Date: YYYY-MM-DD
-> Verified by: {name}
+**Status:** Low -- academic precision
+**Location:** Both SERI and SIVI
+**Description:** Partial rank injection assumes equal weighting for the missing pillar. Under custom weights, the "best estimate" and 80% range are slightly inaccurate.
+**Impact:** Low. Partial ranks are already projections.
+**Note:** SIVI is actually closer to correct than SERI after Issue #1 is fixed.
 
 ---
 
-## Example: GERI Deviation (Illustrative)
+## Intentional Deviations
 
-### Deviation: GNI→GDP Fallback in Macro Stability
+### 7. REST Endpoint Names Do Not Match Index Names
 
-| Field | Value |
-|-------|-------|
-| Standard ID | `BMS-001` |
-| Standard section | "Fallback values MUST be flagged" |
-| Deviation type | `extension` |
-| Status | `approved` |
-| Approved by | `{name}` |
-| Date approved | `2026-08-01` |
+**SERI:** Endpoint is `/geo-economic-risk-index` (legacy GERI name)
+**SIVI:** Endpoint is `/sovereign-infrastructure-vulnerability-index` (current name)
+**Reason:** Backward compatibility. Changing SERI's endpoint would break existing integrations. A redirect or alias is preferred over a breaking change.
 
-**What the standard says:** Fallback values MUST be flagged with `status: fallback`.
+### 8. SIVI Admin Page Title Uses "SIVI" Not Full Name
 
-**What GERI does:** When GNI growth is missing, GERI uses GDP growth as a fallback but marks it with `macro_base_source: 'gdp_fallback'` instead of `status: fallback` in the provenance object.
+**Location:** Admin menu registration
+**Reason:** Space constraints in WordPress admin sidebar. Full name is displayed in the page header.
 
-**Why:** Historical design decision. The `macro_base_source` field predates BMS-001 and carries more semantic information (distinguishing "primary GNI" from "GNI missing, used GDP" from "both missing").
+### 9. `excluded_countries` vs `excluded` Key Name
 
-**Risk:** Consumers looking only for `status: fallback` may miss that this is a fallback value.
+**SERI:** Uses `excluded_countries` (legacy)
+**SIVI:** Uses `excluded` (BMS-1.0.0 standard)
+**Reason:** SERI retained legacy key name to avoid breaking existing API consumers. SIVI adopted the standard.
 
-**Mitigation:** Both `macro_base_source` AND `status: fallback` are now set. `macro_base_source` is retained for backward compatibility.
+### 10. SERI Composite Key Still Uses `GERI_OPTION_KEY`
 
-**Related code:** `geri-backend.php`, `geri_build_composite()`, lines ~300-320.
+**Location:** `define( 'GERI_OPTION_KEY', 'blomstra_geo_economic_risk_index' )`
+**Reason:** Changing the option key would lose all historical data and break existing API consumers. The constant name was kept even though the index was renamed to SERI.
+
+---
+
+## Resolved Issues
+
+| Issue | Resolution | Version |
+|---|---|---|
+| GERI -> SERI rename | Completed | SERI v4.2.1 |
+| CII -> SIVI rename | Completed | SIVI v2.0.0 |
+| Scenario-safe builder | Implemented | BMS-1.0.0 |
+| Async callbacks | Implemented | BMS-1.0.0 |
+| Cron safeguards | Implemented | BMS-1.0.0 |
+| Sensitivity testing | Implemented | BMS-1.0.0 |
+| Source tracking | Implemented | BMS-1.0.0 |
+| Data quality scores | Implemented | BMS-1.0.0 |
+
+---
+
+## Deferred Work
+
+### GPRI (Geopolitical Risk Index)
+
+**Status:** Planned, not started
+**Blockers:** Need to finalize data sources (UCDP, ACLED, political event databases)
+**Timeline:** Q4 2026
+
+### Geoeconomic Atlas (Paid Tier)
+
+**Status:** Conceptual
+**Blockers:** Need to build sanctions database, supply-chain chokepoint model, energy flow tracker
+**Timeline:** 2027
+
+### OpenAPI Spec
+
+**Status:** Planned
+**Blockers:** Need to stabilize API shape across all indices
+**Timeline:** After GPRI launch
+
+### Frontend Widget Engine v2
+
+**Status:** Conceptual
+**Features:** Drag-and-drop sensitivity sliders, real-time rank updates, export to CSV/PDF
+**Timeline:** 2027
