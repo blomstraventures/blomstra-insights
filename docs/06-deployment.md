@@ -1,190 +1,203 @@
-# Deployment & Operations
+# Deployment
+
+> **Applies to:** All indices
+> **Platform:** WordPress + WPCode (or equivalent snippet manager)
 
 ---
 
-## WPCode Workflow
+## Prerequisites
 
-All PHP, JS, and CSS is deployed as **WPCode snippets** in WordPress.
-
-### Load Order (Critical)
-
-1. **Reference Data PHP** — must be first. Defines functions other snippets call.
-2. **Index Backend PHP** — depends on Reference Data functions.
-3. **Frontend Shortcode PHP** — depends on index backend being registered.
-4. **Common CSS** — site-wide, scoped under `.biw`.
-5. **Common JS** — site-wide, auto-boots widgets.
-
-### Snippet Settings
-
-| File | Snippet Type | Location | Priority |
-|---|---|---|---|
-| Reference Data PHP | PHP | Run Everywhere | 1 |
-| Index Backend PHP | PHP | Run Everywhere | 2 |
-| Shortcode PHP | PHP | Run Everywhere | 3 |
-| Common CSS | CSS | Site Wide Header | 4 |
-| Common JS | JS | Site Wide Footer | 5 |
-
-**Why this order matters:** If the index backend loads before Reference Data, `function_exists('blomstra_get_global_country_list')` returns false and the backend uses its fallback path unnecessarily.
+- WordPress 6.0+ with `wp_remote_get()` enabled (most hosts)
+- WPCode plugin (or any PHP snippet manager that supports "Run Everywhere")
+- API keys:
+  ```php
+  // wp-config.php
+  define('COMTRADE_PRIMARY_KEY', 'your-un-comtrade-key');
+  define('EIA_API_KEY', 'your-eia-key');
+  ```
+- Optional but recommended: WP Crontrol plugin for cron debugging
 
 ---
 
-## Required wp-config.php Definitions
+## Installation Order
+
+**Order matters.** Install in this sequence:
+
+1. **Shared Utilities** -- `src/shared/blomstra-index-utilities.php` -> WPCode -> Run Everywhere
+2. **Index Backend** -- e.g., `src/indices/seri/seri-backend.php` -> WPCode -> Run Everywhere
+3. **Index Shortcode** -- e.g., `src/indices/seri/seri-shortcode.php` -> WPCode -> Run Everywhere
+4. **Frontend CSS** -- `src/frontend/index-frontend-styles.css` -> WPCode -> Site Wide Header
+5. **Frontend JS** -- `src/frontend/index-frontend-engine.js` -> WPCode -> Site Wide Footer
+
+**Why this order:** The backend registers REST endpoints and admin menus on `init`. The shortcode registers on `init`. The frontend loads after the DOM. If you install the backend before utilities, it will fail validation and may wp_die() in debug mode.
+
+---
+
+## WPCode Configuration
+
+### Shared Utilities Snippet
+
+- **Title:** Blomstra Shared Utilities
+- **Code Type:** PHP Snippet
+- **Location:** Run Everywhere
+- **Priority:** 5 (load before indices)
+
+### Index Backend Snippet
+
+- **Title:** SERI Backend (or SIVI Backend)
+- **Code Type:** PHP Snippet
+- **Location:** Run Everywhere
+- **Priority:** 10
+
+### Index Shortcode Snippet
+
+- **Title:** SERI Shortcode (or SIVI Shortcode)
+- **Code Type:** PHP Snippet
+- **Location:** Run Everywhere
+- **Priority:** 10
+
+### Frontend CSS Snippet
+
+- **Title:** Blomstra Frontend Styles
+- **Code Type:** CSS Snippet
+- **Location:** Site Wide Header
+
+### Frontend JS Snippet
+
+- **Title:** Blomstra Frontend Engine
+- **Code Type:** JS Snippet
+- **Location:** Site Wide Footer
+
+---
+
+## First Build
+
+1. Visit **Blomstra Insights -> SERI Index** (or SIVI Index)
+2. Click **"Fetch (Async)"** for each pillar
+3. Wait 2-5 minutes (background tasks need time to complete)
+4. Refresh the page -- pillar status should show "Cached (N)"
+5. Click **"Build Index from Cache"**
+6. Verify composite status shows "Scored (N)"
+7. Visit the REST endpoint in a browser:
+   - `https://yoursite.com/wp-json/blomstra/v1/geo-economic-risk-index`
+   - `https://yoursite.com/wp-json/blomstra/v1/sovereign-infrastructure-vulnerability-index`
+
+---
+
+## Cron Setup
+
+### Automatic (Recommended)
+
+The indices self-schedule on `init`:
 
 ```php
-// UN Comtrade API key
-define('COMTRADE_PRIMARY_KEY', 'your-un-comtrade-key-here');
-
-// EIA API key
-define('EIA_API_KEY', 'your-eia-key-here');
-```
-
-Without these:
-- Comtrade fallback returns error: "COMTRADE_PRIMARY_KEY not defined"
-- EIA fallback returns error: "API key missing"
-- Central paths may still work if Reference Data has cached data
-
----
-
-## Cron Health Monitoring
-
-Two independent signals track cron health — see [`01-architecture.md`](01-architecture.md)'s build-reliability section for why they're kept deliberately separate:
-
-### Signal 1: {slug}_cron_status (option)
-Written by both real cron and "Force Run Now" test button.
-```json
-{
-  "time": "2026-08-05 02:00:00",
-  "status": "success",
-  "details": "Composite built from central cache with 187 countries."
+if ( ! wp_next_scheduled( SERI_DAILY_CRON_HOOK ) ) {
+    wp_schedule_event( time() + 300, 'daily', SERI_DAILY_CRON_HOOK );
 }
 ```
 
-### Signal 2: {slug}_last_wpcron_fired (option)
-Written **only** by the real `{slug}_daily_cron` hook. Cannot be faked by the test button.
+This requires **real WordPress cron** (not the default WP-Cron which only fires on page visits). For production:
 
-**Admin notice fires if:**
-- `{slug}_last_wpcron_fired` is null (never fired)
-- Age > 30 hours (stale schedule)
-
-### Fixing Broken wp-cron
-
-Common on low-traffic sites or hosts with disabled `wp-cron.php`:
-
-**Option A: Real system cron**
+**Option A: System cron calling WP-CLI**
 ```bash
-# Add to crontab
-*/5 * * * * wget -q -O - https://yoursite.com/wp-cron.php?doing_wp_cron >/dev/null 2>&1
+# crontab -e
+*/5 * * * * cd /var/www/html && wp cron event run --due-now > /dev/null 2>&1
 ```
 
-**Option B: WP-CLI**
+**Option B: System cron calling curl**
 ```bash
-# Add to crontab
-0 2 * * * cd /var/www/html && wp cron event run --due-now
+# crontab -e
+*/5 * * * * curl -s https://yoursite.com/wp-cron.php?doing_wp_cron > /dev/null 2>&1
 ```
+
+**Option C: Managed host cron**
+Most managed WordPress hosts (Kinsta, WP Engine, Flywheel) provide a "real cron" toggle in their control panel. Enable it.
+
+### Manual Trigger
+
+In the admin page, click **"Force Daily Cron Now"** to trigger a single run immediately.
 
 ---
 
-## Database Schema
+## Troubleshooting
 
-### Custom Table: wp_blomstra_index_history
+### "No country list available"
 
-Created automatically on first admin page load via `dbDelta()`. See [`08-reference-data-functions.md`](08-reference-data-functions.md) for the save/get functions that read and write this table.
+- Verify the shared utilities snippet is active
+- Check that `blomstra_get_global_country_list()` exists
+- Test the World Bank API directly: `https://api.worldbank.org/v2/country?format=json&per_page=10`
+
+### "Central model not active"
+
+- The index tried to use a shared batch fetcher that does not exist
+- This is normal if you have not installed the reference data snippet
+- The index will fall back to direct API calls automatically
+
+### "HTTP 429" or "quota exhausted"
+
+- **Comtrade:** You have hit the UN Comtrade rate limit. Wait 1 hour and retry.
+- **EIA:** You are making too many requests. The chunking should prevent this, but if it happens, increase `SIVI_EIA_CHUNK_SIZE` or add longer `usleep()` delays.
+
+### "Automated build failed"
+
+- The cron safeguard triggered because the new build had <80% of the previous country count
+- Check the PHP error log for API failures
+- Manually refresh pillars one by one to identify which source is failing
+- Once fixed, click "Build Index from Cache" to restore the composite
+
+### Admin page shows "Never" for a pillar
+
+- The pillar fetch completed but did not update its meta key
+- This is a known issue if the fetch function does not call `update_option( {INDEX}_{PILLAR}_META_KEY, ... )`
+- The data may still be cached correctly -- check the REST endpoint
+
+### Widget not rendering
+
+- Check browser console for JavaScript errors
+- Verify `index-frontend-engine.js` is loaded (check Network tab)
+- Verify the shortcode rendered a `<div data-blomstra-index="...">` element
+- Test the REST endpoint directly -- if it returns 404, the backend snippet may not be active
+
+---
+
+## Updating an Index
+
+1. **Deactivate** the old backend snippet in WPCode
+2. **Paste** the new backend code
+3. **Activate** the new snippet
+4. Visit the admin page and verify version number updated
+5. Run "Build Index from Cache" (no need to re-fetch pillars unless data sources changed)
+
+**Do not** delete old option keys before verifying the new code works. If something breaks, reactivate the old snippet and the previous composite will still be available.
+
+---
+
+## Backup & Restore
+
+All index data is stored in WordPress options:
 
 ```sql
-CREATE TABLE wp_blomstra_index_history (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  index_slug VARCHAR(40) NOT NULL,
-  iso3 VARCHAR(3) NOT NULL,
-  snapshot_period VARCHAR(7) NOT NULL,
-  composite_score DECIMAL(6,2) DEFAULT NULL,
-  rank_value SMALLINT UNSIGNED DEFAULT NULL,
-  coverage_type VARCHAR(10) DEFAULT NULL,
-  pillars_json LONGTEXT DEFAULT NULL,
-  recorded_at DATETIME NOT NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY idx_slug_iso_period (index_slug, iso3, snapshot_period),
-  KEY idx_slug_period (index_slug, snapshot_period)
-);
+-- Backup all SERI data
+SELECT option_name, option_value FROM wp_options 
+WHERE option_name LIKE 'seri_%' OR option_name LIKE 'blomstra_%';
+
+-- Backup all SIVI data
+SELECT option_name, option_value FROM wp_options 
+WHERE option_name LIKE 'sivi_%';
 ```
 
-**Upsert semantics:** `INSERT ... ON DUPLICATE KEY UPDATE`. Rebuilding the same index twice in one month updates the existing row — verified live: rebuilding CII twice in one day kept the country count fixed while `recorded_at` advanced, confirming update-in-place rather than duplication.
-
----
-
-## Troubleshooting Guide
-
-| Symptom | Likely Cause | Fix |
-|---|---|---|
-| "Index not built yet" (404) | Composite never built | Run "Refresh All & Build" on admin page |
-| All ranks show "NEW" | No history snapshots yet | Build composite twice (across two months) or wait for monthly rollover |
-| Pillar shows "Never refreshed" | Reference Data cron not firing | Check wp-cron; use manual refresh buttons |
-| "Quota exhausted" on HHI | Comtrade monthly limit reached | Wait for next month; use cached data |
-| Frontend table empty | JS engine not loaded | Verify Common JS snippet is active and loaded |
-| Rank changes when filtering | Frontend bug (old versions) | Ensure rank comes from API, not array index — see [`04-frontend-engine.md`](04-frontend-engine.md) |
-| Admin page 500 error | PHP memory limit | Increase `memory_limit` in php.ini |
-| Build lock stuck | Previous build crashed | Wait 5 minutes (TTL) or manually clear transient — it self-heals, see [`01-architecture.md`](01-architecture.md) |
-| Partial countries all show same range | Injection simulation bug | Verify `pillar_weight_by_name` sums correctly; check BMS-002 algorithm |
-| Table has a stray border on two sides only | Theme's own `table { border }` leaking through `border-collapse` | Give `.biw-table` an explicit `border: none` — see [`04-frontend-engine.md`](04-frontend-engine.md) |
-| Dropdown list has a white background | Native OS popup ignoring CSS | Known cross-browser limitation on some Windows Chrome builds — see [`04-frontend-engine.md`](04-frontend-engine.md) |
-| GNI→GDP fallback double-counting | GDP growth still scored after fallback | Ensure GDP is skipped when `macro_base_source === 'gdp_fallback'` — see GERI reference |
-| Inflation threshold not applied | Missing `geri_adjust_inflation_percentile()` call | Apply after percentile computation, before composite build |
-| Partial rank shows single point | Injection uses same composite for all percentiles | Implement real BMS-002 algorithm; see [`10-engineering-research-standards.md`](10-engineering-research-standards.md) |
-
----
-
-## Backup & Recovery
-
-### What to Back Up
-
-1. **WPCode snippets** — export from WPCode admin
-2. **WordPress options** — `{slug}_*`, `blomstra_*` options contain all computed data
-3. **Custom table** — `wp_blomstra_index_history` for historical trends
-4. **wp-config.php** — API keys
-
-### Recovery Procedure
-
-1. Re-install snippets in correct load order
-2. Re-define API keys in wp-config.php
-3. Run "Refresh All & Build" from admin page
-4. Verify REST endpoint returns data
-5. Check frontend renders correctly
-
-**Note:** All raw data can be re-fetched from external APIs. The only irreplaceable data is `wp_blomstra_index_history` (historical snapshots) — there is no way to backfill a missed month after the fact, which is why this table is worth backing up more carefully than anything else in this list.
+To restore after a disaster:
+```sql
+-- Restore from backup
+UPDATE wp_options SET option_value = '{backup_json}' WHERE option_name = 'seri_composite_index';
+```
 
 ---
 
 ## Performance Notes
 
-| Operation | Typical Time | Bottleneck |
-|---|---|---|
-| Maritime refresh | 5–10 seconds | World Bank API response |
-| EIA refresh (global) | 10–15 minutes | 5 fuels × 2 activities × ~200 countries / 25 per chunk |
-| HHI refresh (global) | 15–30 minutes | Comtrade pagination + rate limits |
-| WB indicator refresh (bulk) | 30–60 seconds | `per_page=20000` single call |
-| IMF forecast refresh | 5–10 seconds | Per-indicator API call |
-| Composite build | < 1 second | Pure PHP calculation |
-| Frontend load | < 2 seconds | 3 parallel REST requests |
-
-Figures above are approximate, order-of-magnitude guidance rather than precisely benchmarked numbers — worth treating as a rough expectation-setter, not an SLA.
-
-**Optimization:** The daily cron uses `central_cached` (reads options only), so it completes in under 1 second regardless of API speed.
-
----
-
-## Multi-Index Operational Notes
-
-When running multiple indices on the same site:
-
-1. **Stagger weekly crons** — each index's data collection should run on a different day to avoid hitting the same API rate limits simultaneously
-2. **Isolate option keys** — each index MUST use its own option key prefix (e.g., `cii_`, `geri_`) to prevent collision
-3. **Isolate cron hooks** — each index MUST use unique cron hook names
-4. **Shared Reference Data** — one Reference Data snippet serves all indices; do not duplicate
-5. **Snapshot table** — `wp_blomstra_index_history` is shared; the `index_slug` column separates indices
-
----
-
-## What to read next
-
-- System architecture → [`01-architecture.md`](01-architecture.md)
-- Frontend behavior → [`04-frontend-engine.md`](04-frontend-engine.md)
-- Building a new index → [`05-index-template.md`](05-index-template.md)
+- **Shared utilities:** ~50KB loaded on every request. Acceptable.
+- **Index backend:** ~200KB per index. Only loads admin UI for admins.
+- **Frontend:** CSS + JS ~30KB combined. Loaded site-wide but cached.
+- **REST API:** Response is ~500KB-1MB JSON. Enable WordPress object caching (Redis/Memcached) if serving high traffic.
+- **Cron tasks:** Energy fetch (EIA) takes ~3 minutes. HHI fetch (Comtrade) takes ~5-10 minutes. Maritime fetch takes ~10 seconds. Schedule accordingly.
