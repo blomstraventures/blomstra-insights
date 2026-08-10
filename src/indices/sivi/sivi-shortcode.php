@@ -1,4 +1,3 @@
-<?php
 /**
  * SIVI Frontend — Shortcode (PHP)
  * WPCode PHP Snippet.
@@ -40,27 +39,27 @@ if ( ! function_exists( 'sivi_render_index_shortcode' ) ) {
             . 'landlocked countries score a structural zero). '
             . 'Countries with real data for all three pillars receive a definitive rank (Full Index). '
             . 'Countries missing one pillar receive a projected rank range rather than a fabricated fill-in value (Partial Index). '
+            . 'Lower scores indicate lower vulnerability (rank #1 is the least vulnerable country). '
             . '<a href="' . esc_url( 'https://blomstrainsights.com/methodology/sivi' ) . '" target="_blank" rel="noopener">Full methodology →</a>';
 
         ob_start();
         ?>
-        <div class="biw"
-             data-biw-slug="sivi"
-             data-biw-endpoint="/wp-json/blomstra/v1/critical-infrastructure-index"
-             data-biw-names-endpoint="/wp-json/blomstra/v1/country-names"
-             data-biw-title="Sovereign Infrastructure Vulnerability Index"
-             data-biw-subtitle="A country-level assessment of exposure, dependency, and systemic weakness across critical infrastructure sectors"
-             data-biw-eyebrow="Strategic Intelligence"
-             data-biw-score-key="composite_score"
-             data-biw-score-label="Vulnerability Score"
-             data-biw-coverage-key="coverage_type"
-             data-biw-band-thresholds="25,50,75"
-             data-biw-band-labels="Low,Medium,High,Extreme"
-             data-biw-band-select-label="All Vulnerability Levels"
-             data-biw-pillars='<?php echo esc_attr( wp_json_encode( $pillars ) ); ?>'
-             data-biw-methodology="<?php echo esc_attr( $methodology ); ?>"
-             data-biw-sort-direction="asc">
-        </div>
+<div class="biw"
+     data-biw-slug="sivi"
+     data-biw-endpoint="/wp-json/blomstra/v1/critical-infrastructure-index"
+     data-biw-names-endpoint="/wp-json/blomstra/v1/country-names"
+     data-biw-title="Sovereign Infrastructure Vulnerability Index"
+     data-biw-subtitle="A country-level assessment of exposure, dependency, and systemic weakness across critical infrastructure sectors"
+     data-biw-eyebrow="Strategic Intelligence"
+     data-biw-score-key="composite_score"
+     data-biw-score-label="Vulnerability Score"
+     data-biw-coverage-key="coverage_type"
+     data-biw-band-thresholds="25,50,75"
+     data-biw-band-labels="Low,Medium,High,Extreme"
+     data-biw-band-select-label="All Vulnerability Levels"
+     data-biw-pillars='<?php echo esc_attr( wp_json_encode( $pillars ) ); ?>'
+     data-biw-methodology="<?php echo esc_attr( $methodology ); ?>">
+</div>
         <?php
         return ob_get_clean();
     }
