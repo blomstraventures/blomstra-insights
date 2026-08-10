@@ -1,166 +1,175 @@
 # Architecture
 
-## The core idea, in one sentence
-
-**Collection is centralized; each index is a thin dispatcher over that central data, with its own complete fallback if the central data isn't there.**
-
-![System Architecture](../assets/diagram-01-system-architecture.png)
+> **Applies to:** SERI v4.2.1+, SIVI v2.0.0+, all future indices
+> **Standard:** BMS-1.0.0
 
 ---
 
-## Why this shape exists
+## Design Principles
 
-Early on, every index tool collected its own data directly from external APIs — its own EIA calls, its own Comtrade calls, its own World Bank calls, its own caching, its own pagination. That works for one index. It breaks down with 7–10:
-
-- **Shared rate limits and quotas.** Comtrade and EIA both have real quota ceilings. If multiple indices all hit Comtrade independently for the same underlying trade data, they burn through quota N times over.
-- **Duplicated bugs.** A fix discovered in one tool's collection code wouldn't automatically propagate to another tool's separate copy.
-- **Duplicated maintenance surface.** Seven copies of "fetch from EIA, paginate, checkpoint, handle rate limits" is seven places a future bug can hide.
-
-So collection was migrated, pillar by pillar, into one shared layer.
+1. **Transparency over speed.** Every score must be traceable to a public data source. No proprietary black-box models.
+2. **Graceful degradation.** Missing data is not a failure -- it is a signal. Partial indices are first-class citizens.
+3. **Research-grade reproducibility.** Same inputs + same code = same outputs. No random seeds, no expert judgment, no hidden weights.
+4. **Clash-proof frontend.** The widget engine must never conflict with other site JavaScript. No global variables, no prototype pollution.
+5. **Scenario-safe sensitivity.** Testing different weights must never overwrite the live composite.
 
 ---
 
-## The four layers
+## System Layers
 
-### Layer 1: Reference Data
+![System Architecture](../assets/diagram-02-system-architecture.png)
 
-**File:** `blomstra-reference-data.php` (WPCode PHP snippet, "Run Everywhere")
-
-Owns:
-- Global country list and reference lookups (landlocked list, Comtrade reporter code map)
-- Centralized raw collection for each pillar type (Maritime, HHI/Comtrade, EIA/Energy, World Bank indicators, IMF forecasts) — pagination, chunking, per-chunk checkpointing, rate-limit handling
-- Multi-year snapshot history table (`wp_blomstra_index_history`), shared by every index
-- Admin UI under **Blomstra Insights Tools** menu
-- Shared REST routes: `/wp-json/blomstra/v1/country-names` and `/wp-json/blomstra/v1/index-history/{slug}`
-
-**Cron:** Weekly — Mon(Maritime) → Tue(EIA) → Wed(HHI) → Thu(WB) → Fri(IMF) @ 02:00 UTC
-
-Full function-by-function detail: [`08-reference-data-functions.md`](08-reference-data-functions.md).
-
-### Layer 2: Index Backends
-
-**File:** One per index, e.g. `Backend - CII Critical Infra Vulnerability Index.php` (see the naming note in the repo [README](../README.md) — this is CII in code today, CIV is the intended eventual name, not yet renamed)
-
-Each index:
-- Calls Reference Data first
-- Falls back to its own complete collection logic only if central data is missing
-- Owns only what's genuinely index-specific: scoring methodology, REST endpoint, admin page
-- Calls `blomstra_index_snapshot_save()` after every successful build
-
-**Cron:** Daily — reads `central_cached` (zero API calls), builds composite, snapshots
-
-### Layer 3: Frontend
-
-**Files:** `blomstra-index-frontend-engine.js` + `blomstra-index-frontend-styles.css` (site-wide)
-
-- One shared `BlomstraIndexWidget` class
-- Config-driven via `data-biw-*` attributes on a container div
-- Pillar-agnostic: works for 2-pillar, 3-pillar, or 4-pillar indices without code changes — verified directly against the live Geopolitical Risk (3 pillars) and Mineral Export & Rent Dependency (2 pillars) pages, not just a design intention
-
-### Layer 4: Methodology Architecture *(new)*
-
-**Document:** [`10-engineering-research-standards.md`](10-engineering-research-standards.md)
-
-This is the institutional layer that turns implementation discoveries into reusable rules. It exists because CII solved partial coverage, GERI solved forecast separation, and Governance Capture solved multi-source integration — but those solutions lived in code, not in standards. Layer 4 ensures the next index inherits those lessons rather than rediscovering them.
-
-Key contents:
-- **BMS-001:** Data Provenance Standard
-- **BMS-002:** Missing Data & Partial Coverage Standard (generalized to N pillars)
-- **BMS-003:** Normalization Standard
-- **BMS-004:** Weighting Standard
-- **BMS-005:** Temporal Data Standard
-- **BMS-006:** Forecast Separation Standard
-- **BMS-007:** Country Universe Standard
-
-Every new index MUST declare conformance to a Layer B standard version. Deviations MUST be documented in `src/indices/{slug}/docs/deviations.md`.
+```
++-------------------------------------------------------------+
+|                     FRONTEND LAYER                          |
+|  WordPress page -> Shortcode -> Widget Engine -> Visualization |
+|  (index-frontend-engine.js + index-frontend-styles.css)     |
++-------------------------------------------------------------+
+                              |
+                              v REST API
++-------------------------------------------------------------+
+|                     INDEX LAYER                             |
+|  SERI backend  |  SIVI backend  |  GPRI backend (planned)  |
+|  +- Governance |  +- Energy     |                          |
+|  +- Macro      |  +- HHI        |                          |
+|  +- External   |  +- Maritime   |                          |
+|  +- Fiscal     |                |                          |
+|       v Composite Builder (scenario-safe)                  |
+|       v Sensitivity Testing (Spearman correlation)         |
+|       v Cron Safeguards (auto-rollback on data loss)       |
++-------------------------------------------------------------+
+                              |
+                              v shared utilities
++-------------------------------------------------------------+
+|                  REFERENCE DATA LAYER                       |
+|  blomstra-index-utilities.php                               |
+|  +- Country lists (WB API + fallback)                      |
+|  +- Batch fetchers (WB, IMF, Comtrade, EIA)              |
+|  +- Math utilities (percentiles, stddev, CAGR, Spearman) |
+|  +- Source tracking (provenance, quality scoring)          |
+|  +- Rank builders (full + partial with injection)          |
++-------------------------------------------------------------+
+                              |
+                              v raw APIs
++-------------------------------------------------------------+
+|                     DATA SOURCES                            |
+|  World Bank | IMF WEO | UN Comtrade | EIA | UCDP (planned)|
++-------------------------------------------------------------+
+```
 
 ---
 
-## The primary + fallback principle
+## The Three-Layer Risk Model
 
-> An index tool calls the centralized model **first**. Only if that's unavailable, empty, or fails does the index fall back to making its own direct API call.
+![Three-Layer Risk Model](../assets/diagram-01-three-layer-risk-model.png)
 
-Concretely, each pillar dispatcher takes a mode:
+Blomstra Insights does not produce a single "risk score." It produces **three complementary lenses**:
 
-| Mode | Use Case |
-|---|---|
-| `central` | "Fetch from Central Data" admin button — forces live refresh via Reference Data |
-| `central_cached` | Daily cron — zero API calls, reads stored cache |
-| `api` | "Fetch from Direct API" admin button — tests fallback path in isolation |
-| `auto` | Normal operation — central first, fallback silently if empty |
+| Layer | Question | Index | Update Frequency |
+|-------|----------|-------|------------------|
+| **Structural foundations** | How capable is the state of absorbing shocks? | SERI | Quarterly/Annual |
+| **System vulnerability** | How exposed are essential infrastructure systems? | SIVI | Quarterly/Annual |
+| **Event risk** | Is the neighborhood on fire? | GPRI | Monthly/Event-driven |
+| **Exposure overlay** | What weapons are pointed at you? | Geoeconomic Atlas | Quarterly (paid) |
 
----
-
-## Migration status
-
-All three CII pillars have completed migration:
-
-| Pillar | Central Collection | CII's Role |
-|---|---|---|
-| Maritime | `blomstra_get_maritime_raw()` | Dispatcher + fallback; owns inversion/structural-zero/percentile |
-| HHI (Comtrade) | `blomstra_get_comtrade_hhi_data()` | Dispatcher + fallback; full engine lives centrally |
-| Energy (EIA) | `blomstra_get_eia_raw_data()` | Raw per-fuel collection centralized; multi-fuel weighting formula stays in CII |
-
-GERI pillars (World Bank + IMF):
-
-| Pillar | Central Collection | GERI's Role |
-|---|---|---|
-| Governance (WGI) | `blomstra_fetch_wb_indicator_batch()` | Dispatcher; percentile inversion |
-| Macro (WDI) | `blomstra_fetch_wb_indicator_batch()` | Dispatcher; volatility computation; GNI→GDP fallback |
-| External (WDI) | `blomstra_fetch_wb_indicator_batch()` | Dispatcher; divergence calculation |
-| Fiscal (WDI) | `blomstra_fetch_wb_indicator_batch()` | Dispatcher; trajectory computation |
-| Forward Pressure (IMF) | `blomstra_fetch_imf_forecast_batch()` | Dispatcher; delta computation; MUST NOT leak into Structural layer |
+A country's total risk is the **interaction** of these layers, not their sum.
 
 ---
 
-## Case study: the Comtrade reporter-code bug
+## BMS-1.0.0 Conformance
 
-USA/India/Belgium consistently showed "no data" for HHI. The cause: Comtrade lists **multiple reporter entries sharing one ISO3** for countries with a discontinuity — e.g. USA has both a current entry (code 842) and an expired "USA and Puerto Rico" entry (code 841, expired 1980). The original code used last-one-wins overwrite, and Comtrade lists the expired entry *after* the current one.
+### Storage Architecture
 
-**Fix:** an entry with `entryExpiredDate` can never overwrite an already-stored code. This logic lives in `blomstra_get_comtrade_reporter_map()` — any future index touching Comtrade MUST use this shared function.
+Every pillar stores data as a **two-key structure**:
+
+```php
+update_option( 'sivi_energy_data', array(
+    'data'    => array( 'USA' => array('value' => 12.5, 'year' => 2024, 'source' => 'EIA'), ... ),
+    'sources' => array( 'USA' => array( 'energy_dependency' => array( array('source' => 'EIA', 'scope' => 'national', 'year' => 2024) ) ) ),
+), false );
+```
+
+This enables:
+- **Provenance tracking** -- every indicator value knows its origin
+- **Quality scoring** -- `blomstra_pillar_quality_score()` uses the sources array
+- **Crash recovery** -- checkpoints can merge partial data without losing source metadata
+
+### Async Architecture
+
+Each pillar has its own async hook:
+
+```php
+// Scheduled by admin button or cron
+do_action( 'sivi_async_fetch_energy' );
+
+// Handler
+function sivi_async_fetch_energy_callback() {
+    sivi_refresh_energy_pillar( null, 'auto' );
+}
+add_action( 'sivi_async_fetch_energy', 'sivi_async_fetch_energy_callback' );
+```
+
+This prevents shared-host timeouts by breaking a 5-minute fetch into 3x 90-second background tasks.
+
+### Cron Safeguards
+
+```php
+if ( $context === 'cron' && $previous && ! empty( $previous['countries'] ) ) {
+    $prev_count = count( $previous['countries'] );
+    $new_count = count( $output['countries'] );
+    if ( $new_count < 0.8 * $prev_count && $new_count < 50 ) {
+        // Keep old composite, log failure, set transient alert
+        return $previous;
+    }
+}
+```
+
+This prevents a single API outage from wiping your live index.
+
+### Scenario-Safe Builder
+
+```php
+function sivi_build_composite( $force = false, $context = 'manual', $custom_weights = null, $custom_composite_weights = null ) {
+    $is_scenario = ( $custom_weights !== null || $custom_composite_weights !== null );
+    // ... compute ...
+    if ( ! $is_scenario && $context !== 'scenario' ) {
+        update_option( SIVI_OPTION_KEY, $output, false );
+    }
+    return $output;
+}
+```
+
+Sensitivity testing can never overwrite the live index.
 
 ---
 
-## Build reliability pattern (any future index's automation MUST copy this)
+## Migration History
 
-CII's automation isn't just "run a cron job" — it has four independent safety mechanisms worth reusing verbatim in future indices, because each one exists to close a real failure mode that was actually hit:
-
-**1. Self-healing build lock.** A transient (`cii_building_lock`, 5-minute TTL) prevents two builds running concurrently. If a previous run crashed and left the lock set, it isn't permanent — any lock older than the TTL is treated as stale and force-cleared automatically. No manual unlock step exists or is needed.
-
-**2. Freshness gate before every cron build.** Before the daily cron builds anything, it checks whether *every* pillar's most recent `last_updated` timestamp is within `CII_FRESHNESS_PILLAR` (10 days). If any pillar is missing or stale, the entire build is skipped for that day (`status: 'skipped_stale_refdata'`) rather than silently publishing a composite built on stale or absent pillar data. A never-yet-built composite is always treated as fresh (bootstrapping case) so the very first build isn't blocked by having nothing to compare against.
-
-**3. Cron and its manual test share one code path.** `cii_daily_cron_callback()` and an admin "Force Run Daily Cron Now" button both call the exact same `cii_run_daily_build_logic()` — same freshness gate, same build function. This directly closes a real bug class hit in an earlier version, where cron called a *second, independently-written* composite implementation that quietly diverged from the real one (wrong Energy formula, silently dropped landlocked countries, a cruder rank approximation, a REST payload shape that changed every night then changed back on the next manual rebuild). One implementation, called from both places, makes that entire bug class structurally impossible rather than something to remember to keep in sync.
-
-**4. Two deliberately separate health signals.** `cii_cron_status` is updated by *both* the real cron and the manual test button — it answers "did the last logical run succeed." `cii_last_wpcron_fired` is stamped *only* by the real `wp-cron` hook, unconditionally, before anything else runs — it answers "is the schedule itself actually alive." This separation exists specifically so clicking the test button can't mask a genuinely broken `wp-cron` schedule (a common, easy-to-miss WordPress failure mode, especially on low-traffic sites where `wp-cron.php` only fires on page visits). An admin notice fires if that second signal goes stale (>30h) or was never set, distinct from — and in addition to — whatever the first signal says. See [`06-deployment.md`](06-deployment.md) for how to fix a genuinely broken `wp-cron` schedule.
-
-Every future index's cron/automation MUST follow this same four-part shape, not just "add a `wp_schedule_event` and hope."
+| Date | Change | From | To |
+|---|---|---|---|
+| 2026-08 | SERI architecture migration | GERI v3.x | SERI v4.2.1 (BMS-1.0.0) |
+| 2026-08 | SIVI architecture migration | CII v1.0.0 | SIVI v2.0.0 (BMS-1.0.0) |
+| 2026-08 | Naming standardization | GERI / CII / CIVI | SERI / SIVI / GPRI |
+| 2026-08 | BMS standard introduced | Ad-hoc per-index | BMS-1.0.0 unified architecture |
 
 ---
 
-## Reference Implementation Mapping
+## File Organization
 
-When building a new index, consult this table before inventing a new pattern:
+```
+src/
+├── shared/
+│   └── blomstra-index-utilities.php    # BMS-1.0.0 shared layer
+├── indices/
+│   ├── seri/
+│   │   ├── seri-backend.php            # BMS conformant
+│   │   └── seri-shortcode.php
+│   └── sivi/
+│       ├── sivi-backend.php            # BMS conformant
+│       └── sivi-shortcode.php
+└── frontend/
+    ├── index-frontend-engine.js        # Generic, config-driven
+    └── index-frontend-styles.css
+```
 
-| Problem | Reference Implementation | Standard |
-|---------|------------------------|----------|
-| Partial pillar coverage / rank uncertainty | CII | BMS-002 |
-| Structural zero handling | CII Maritime | BMS-002 |
-| Forecast / structural separation | GERI | BMS-006 |
-| Data provenance | GERI | BMS-001 |
-| Historical trajectory / volatility | GERI | BMS-005 |
-| HHI / concentration | CII | — |
-| Multi-source integration | Governance Capture | BMS-007 |
-| Data refresh safeguards | GERI | — |
-| Version / vintage | GERI | BMS-005 |
-| Cron safety | CII | — |
-| Snapshot history | Reference Data | — |
-
----
-
-## What to read next
-
-- The full data pipeline, stage by stage → [`02-data-flow.md`](02-data-flow.md)
-- Every Reference Data function, precisely → [`08-reference-data-functions.md`](08-reference-data-functions.md)
-- Why CII scores the way it does → [`09-methodology-deepdive.md`](09-methodology-deepdive.md)
-- The Blomstra-wide research standards → [`10-engineering-research-standards.md`](10-engineering-research-standards.md)
-- Building a new index → [`05-index-template.md`](05-index-template.md)
+Every index backend is **self-contained** except for the shared utilities. No cross-index dependencies.
