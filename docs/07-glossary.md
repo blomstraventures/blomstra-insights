@@ -1,58 +1,99 @@
 # Glossary
 
-| Term | Definition |
-|---|---|
-| **Band** | A score category (Low, Medium, High, Extreme) defined by thresholds. Used for color-coding and filtering. |
-| **BIW** | Short for "Blomstra Index Widget" — the CSS/JS class prefix (`.biw`, `data-biw-*`) used throughout the shared frontend engine. |
-| **Build Lock** | A short-TTL transient (5 minutes) preventing two composite builds from running concurrently. Self-healing — a lock older than its TTL is treated as stale and cleared automatically, no manual intervention needed. |
-| **Central Cache** | Reference Data's stored options (`blomstra_eia_raw_data`, `blomstra_comtrade_hhi_data`, etc.). The primary data source for index backends. |
-| **Central Path** | Data flow where the index backend calls Reference Data functions. No direct API calls. |
-| **Chunk** | A batch of countries processed in one API request. EIA uses 25, Comtrade uses 50. |
-| **CII / CIV** | CII is the current name in code (function names, REST slug, shortcode) for the platform's first index. CIV (Critical Infrastructure Vulnerability Index) is the intended eventual name — the rename is deferred, not yet done. See the [README](../README.md). |
-| **Composite** | The final weighted score combining all pillars into a single 0–100 number. |
-| **Collection Failure** | A technical or API failure that prevented data retrieval. Distinct from "missing" because a retry may succeed. |
-| **Confirmed Zero** | A value of exactly zero that is verified by the source as a real observation, not a null placeholder. EIA uses this distinction. |
-| **Coverage Ratio** | `pillars_used / total_pillars`. A 3/4 index has coverage ratio 0.75. |
-| **Coverage Type** | Classification of data completeness: `full` (all pillars), `partial` (minimum met but not all), or excluded (< minimum). |
-| **Data Freshness** | Per-indicator metadata: observation year, source, retrieval date, and status. See BMS-001. |
-| **Data Provenance** | The complete chain of custody for a data point: where it came from, when it was retrieved, what version, and whether it was transformed. |
-| **Definitive Rank** | An exact ordinal position (e.g., #14) assigned only to Full-Index countries. |
-| **Deviation** | A documented, justified departure from a Blomstra Research Standard. Every deviation MUST be recorded in `src/indices/{slug}/docs/deviations.md`. |
-| **Dispatcher Mode** | One of `central` / `central_cached` / `api` / `auto` — the parameter every pillar-refresh function takes, controlling whether it calls Reference Data, reads Reference Data's cache only, calls its own fallback API directly, or tries central first with silent fallback. |
-| **Estimated** | A value that the source itself identifies as an estimate rather than an observed fact. |
-| **Excluded Panel** | The frontend's collapsible list of countries with too little data to score, shown only when the API response's `excluded_detail` is non-empty. |
-| **Fallback Path** | Data flow where the index backend makes its own API calls because central cache is empty or failed. |
-| **Forecast** | A forward-looking projection (e.g., IMF WEO T+1). MUST be quarantined from structural layers. See BMS-006. |
-| **Freshness Gate** | The check the daily cron runs before building anything — skips the build entirely if any pillar's data is missing or older than the freshness threshold (10 days), rather than publishing a composite built on stale data. |
-| **Full Index** | A country with real data for all pillars. Receives a definitive rank. |
-| **HHI** | Herfindahl-Hirschman Index. Measures market concentration. In Blomstra, applied to import partner concentration (0–10000 scale). |
-| **Indicator** | A single measurable variable (e.g., GDP growth, inflation). One or more indicators form a pillar. |
-| **Injection Simulation** | Method for projecting rank ranges for Partial-Index countries by simulating the missing pillar at five percentile points (0, 10, 50, 90, 100). See BMS-002. |
-| **Is Definitive** | Boolean flag: `true` if the country's rank is based on complete data, `false` if projected from partial data. |
-| **LSCI** | Liner Shipping Connectivity Index. World Bank maritime metric. Higher = better connected. |
-| **Methodology Architecture** | Layer 4 of the Blomstra system: the institutional standards that govern how all indices measure things. See [`10-engineering-research-standards.md`](10-engineering-research-standards.md). |
-| **Missing** | No usable observation exists for this indicator/country. Do not fabricate. |
-| **Not Applicable** | The indicator genuinely does not apply to this country (e.g., maritime connectivity for a landlocked country is NOT "not applicable" — it's a structural zero). |
-| **Normalized Indicator** | An indicator converted to a comparable scale (e.g., 0–100 percentile rank) before entering composite calculation. |
-| **Observed** | A real published value from an authoritative source. |
-| **Partial Index** | A country missing one or more pillars but meeting the minimum threshold. Receives a projected rank range, not a definitive rank. |
-| **Percentile Rank** | A 0–100 score representing where a country sits in the global distribution for a given pillar. See BMS-003. |
-| **Pillar** | A single data dimension composed of one or more indicators (e.g., Energy Dependency, Supplier Concentration, Maritime Exposure, Macro Stability). |
-| **Projected Rank Range** | A rank interval (e.g., #38–#52*) reported for Partial-Index countries, with 80% and theoretical bounds. |
-| **QBTU** | Quadrillion British Thermal Units. EIA energy unit. |
-| **Raw Indicator** | The pre-normalized value in its original unit (e.g., GDP growth in percent, HHI in 0–10000). |
-| **Reference Data** | The shared PHP layer that collects, caches, and serves raw data from external APIs to all index backends. |
-| **Reference Implementation** | An existing index or function that solves a problem in a standard way. Future indices SHOULD reuse it unless they document a deviation. |
-| **Renormalization** | Adjusting weights so that available pillars sum to 1.0 within a subset. See BMS-004. |
-| **Snapshot** | A monthly historical record stored in `wp_blomstra_index_history`. One row per (index, country, month), upserted — not appended — within a given month. |
-| **Source Hierarchy** | The precedence rules when multiple sources exist for the same conceptual indicator. Primary → Acceptable fallback → Prohibited fallback → Separate layer. See [`02-data-flow.md`](02-data-flow.md). |
-| **Standard Version** | The version of Layer B (Research Standards) that an index build conforms to. Exposed in `_meta.standard_version`. |
-| **Stale** | A value that exists but exceeds the methodology's acceptable age threshold. Do not use in scoring. |
-| **Structural Zero** | A known-zero value that is real data, not missing data. Example: landlocked countries have LSCI = 0. See BMS-002. |
-| **Theoretical Bound** | The rank range derived from injecting the missing pillar at the 0th and 100th percentiles. Represents absolute best/worst case. |
-| **Unavailable** | Expected data cannot currently be obtained. Treat as missing. |
-| **Vintage** | The specific publication or revision of a dataset (e.g., "IMF WEO April 2026"). See BMS-005. |
-| **Volatility** | The standard deviation of an indicator over a historical window (typically 5 years). See BMS-005. |
-| **Watchlist** | A user's saved list of countries, persisted per-index in `localStorage` under `biw_watchlist_{slug}`. Isolated per index — never shared or leaked between different index widgets. |
-| **WPCode** | WordPress plugin used to inject PHP, JS, and CSS snippets without editing theme files. |
-| **80% Plausible Range** | The rank range derived from injecting the missing pillar at the 10th and 90th percentiles. Represents "likely" rank if the missing data were known. |
+> **Standard:** BMS-1.0.0
+
+---
+
+## A
+
+**Async callback** -- A WordPress action hook scheduled via `wp_schedule_single_event()` that runs a pillar fetch in the background. Prevents shared-host timeouts by breaking long operations into discrete tasks.
+
+## B
+
+**BMS (Blomstra Methodology Standard)** -- The architectural and methodological standard that all indices must follow. Current version: BMS-1.0.0. Defines storage shapes, API contracts, admin UI patterns, and cron safeguards.
+
+**Baseline** -- The default composite build with standard weights (e.g., 25/25/25/25 for SERI, 33.33/33.33/33.34 for SIVI). All sensitivity scenarios are compared against this baseline.
+
+## C
+
+**Central Data / Reference Data** -- The shared `blomstra-index-utilities.php` layer that provides batch fetchers, country lists, and math utilities. Indices call this first, then fall back to direct API calls.
+
+**Checkpoint** -- A mid-run persistence write that saves partial pillar data to the WordPress options table. Enables crash recovery for long-running fetches (e.g., Comtrade HHI).
+
+**Composite** -- The final index score for a country, computed as a weighted average of pillar percentile scores.
+
+**Coverage** -- `"full"` if all required pillars are present; `"partial"` if at least `MIN_PILLARS_REQUIRED` are present but not all; excluded if below minimum.
+
+**Cron safeguard** -- The auto-rollback mechanism that keeps the previous composite if a new automated build drops below 80% of the previous country count.
+
+## D
+
+**Data quality score** -- A 0-3 scale per pillar indicating the freshness and reliability of source data. 3 = good (recent, primary source); 0 = no data.
+
+**Direct API** -- Fallback fetch functions that call public APIs directly (World Bank, IMF, EIA, Comtrade) without using the shared Reference Data cache.
+
+## E
+
+**Excluded country** -- A country that does not meet the minimum pillar coverage threshold and therefore receives no composite score or rank.
+
+## F
+
+**Forward pressure** -- A SERI-specific metric derived from IMF WEO forecast deltas. Indicates whether a country's structural risk is likely to deteriorate, improve, or remain stable.
+
+**Full index** -- A country with data for all pillars. Receives a definitive rank.
+
+## H
+
+**HHI (Herfindahl-Hirschman Index)** -- A measure of market concentration. In SIVI, applied to import partner concentration (0-10,000 scale). Higher = more concentrated = more vulnerable.
+
+## I
+
+**Indicator** -- The lowest-level data point within a pillar (e.g., "rule of law" within governance, "energy dependency" within energy).
+
+**Injection** -- The process of simulating a missing pillar value at different percentiles (0, 10, 50, 90, 100) to compute a rank range for partial-index countries.
+
+## L
+
+**Landlocked structural zero** -- A SIVI-specific rule that assigns maritime connectivity = 0.0 for landlocked countries, with source flagged as "structural zero." These countries are scored in the Full Index, not the Partial Index.
+
+## M
+
+**Measurement flag** -- Per-country metadata documenting data anomalies, structural zeros, fallback usage, and coverage ratio.
+
+## P
+
+**Partial index** -- A country with at least `MIN_PILLARS_REQUIRED` pillars but not all. Receives a projected rank range instead of a definitive rank.
+
+**Percentile rank** -- The position of a country's raw indicator value within the global cross-section, expressed as 0-100. Higher = more vulnerable (for most indicators).
+
+**Pillar** -- A thematic dimension of the index (e.g., governance, macro, energy, maritime). Each pillar contains one or more indicators.
+
+## R
+
+**Rank display** -- A structured object containing definitive or projected rank information, including best estimate, 80% plausible range, and theoretical bounds.
+
+**Reference Data** -- See "Central Data."
+
+## S
+
+**Scenario** -- A custom-weighted composite build used for sensitivity testing. Stored separately from the live composite and never overwrites it.
+
+**Sensitivity testing** -- The process of rebuilding the composite with altered pillar weights to measure how much rankings change. Reported via Spearman correlation (rho) and top mover.
+
+**Source tracking** -- The provenance system that records which API, scope (national/regional), and year produced each indicator value.
+
+**Spearman correlation (rho)** -- A rank correlation coefficient measuring the similarity between two sets of rankings. rho = 1 means identical order; rho = 0 means no relationship.
+
+**Standard version** -- The BMS version declared in composite output metadata (e.g., `"BMS-1.0.0"`).
+
+**Structural zero** -- A zero value that is methodologically correct (e.g., landlocked countries have zero maritime connectivity), not a missing data placeholder.
+
+## T
+
+**Top mover** -- The country whose rank changes the most (in absolute terms) between a scenario and the baseline.
+
+## V
+
+**Vulnerability** -- The concept measured by SIVI: exposure to disruption across essential infrastructure systems. Distinct from "resilience" (capacity to absorb) and "risk" (probability of adverse events).
+
+**Volatility** -- A derived indicator measuring the standard deviation of a time series (e.g., 5-year GDP growth volatility). Captures instability, not level.
