@@ -1,7 +1,7 @@
 # Read Me First
 
-> **Version:** BMS-1.0.0 (Blomstra Methodology Standard)  
-> **Last updated:** 2026-08-10  
+> **Version:** BMS-1.0.0 (Blomstra Methodology Standard)
+> **Last updated:** 2026-08-10
 > **Status:** SERI and SIVI are live and BMS-1.0.0 conformant. GPRI is in planning.
 
 ---
@@ -12,11 +12,11 @@ This codebase has undergone two major renames. Documentation always reflects **c
 
 | Current Name | Former Name | What it is |
 |---|---|---|
-| **SERI** | GERI | Sovereign Economic Resilience Index — 4 pillars (governance, macro, external, fiscal) |
-| **SIVI** | CII / CIVI | Sovereign Infrastructure Vulnerability Index — 3 pillars (energy, HHI, maritime) |
-| **GPRI** | — | Geopolitical Risk Index — planned, not yet built |
-| **BMS** | — | Blomstra Methodology Standard — the architectural standard all indices must follow |
-| **Reference Data** | — | The shared `blomstra-index-utilities.php` snippet that provides country lists, batch fetchers, math utilities |
+| **SERI** | GERI | Sovereign Economic Resilience Index -- 4 pillars (governance, macro, external, fiscal) |
+| **SIVI** | CII / CIVI | Sovereign Infrastructure Vulnerability Index -- 3 pillars (energy, HHI, maritime) |
+| **GPRI** | -- | Geopolitical Risk Index -- planned, not yet built |
+| **BMS** | -- | Blomstra Methodology Standard -- the architectural standard all indices must follow |
+| **Reference Data** | -- | The shared `blomstra-index-utilities.php` snippet that provides country lists, batch fetchers, math utilities |
 
 **Do not use old names in new code.** Legacy REST endpoints redirect for backward compatibility, but all internal functions, options, and slugs use the current names.
 
@@ -34,7 +34,7 @@ This codebase has undergone two major renames. Documentation always reflects **c
 ## Version Policy
 
 - **Index version** (e.g., `SERI_VERSION`, `SIVI_VERSION`): Semver. Major bumps for methodology changes. Minor for new indicators. Patch for bug fixes.
-- **BMS version** (e.g., `BMS-1.0.0`): Bumped when the architectural standard itself changes — e.g., a new required field in the API output, a new admin UI pattern, or a new shared utility.
+- **BMS version** (e.g., `BMS-1.0.0`): Bumped when the architectural standard itself changes -- e.g., a new required field in the API output, a new admin UI pattern, or a new shared utility.
 - **Standard version** is declared in every index's composite output: `'standard_version' => 'BMS-1.0.0'`.
 
 ---
@@ -47,13 +47,13 @@ Every index in this repo must implement:
 2. **Per-pillar meta** as `{index}_{pillar}_meta` containing `['last_fetched' => '...']`
 3. **Composite storage** as `{index}_composite_index` with scenario-safe builder (`context !== 'scenario'`)
 4. **Async callbacks** per pillar (`{index}_async_fetch_{pillar}`)
-5. **Cron safeguards** — auto-rollback if new build drops below 80% of previous country count
-6. **Sensitivity testing** — preset weights, custom JSON, Spearman correlation vs baseline
-7. **Data quality scores** — per pillar, per country, using `blomstra_pillar_quality_score()`
-8. **Measurement flags** — per country, documenting structural zeros, coverage ratio, missing pillars
-9. **Admin dashboard** — cards, freshness bar, pillar table, composite build section, sensitivity section
-10. **REST endpoint** — canonical + legacy redirect
-11. **Init validation** — `blomstra_validate_pillar_thresholds()` on `init`
+5. **Cron safeguards** -- auto-rollback if new build drops below 80% of previous country count
+6. **Sensitivity testing** -- preset weights, custom JSON, Spearman correlation vs baseline
+7. **Data quality scores** -- per pillar, per country, using `blomstra_pillar_quality_score()`
+8. **Measurement flags** -- per country, documenting structural zeros, coverage ratio, missing pillars
+9. **Admin dashboard** -- cards, freshness bar, pillar table, composite build section, sensitivity section
+10. **REST endpoint** -- canonical + legacy redirect
+11. **Init validation** -- `blomstra_validate_pillar_thresholds()` on `init`
 
 If an index does not have all 11, it is **not BMS-1.0.0 conformant**.
 
