@@ -94,7 +94,7 @@ blomstra-insights/
 ├── src/
 │   ├── shared/
 │   │   └── blomstra-index-utilities.php
-        └── global-reference-data.php
+│   │   └── global-reference-data.php
 │   ├── indices/
 │   │   ├── seri/
 │   │   │   ├── seri-backend.php
