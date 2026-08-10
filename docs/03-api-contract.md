@@ -1,230 +1,230 @@
 # API Contract
 
-All Blomstra index endpoints MUST conform to this schema. This prevents field-name drift between indices 2 and 10 — the exact failure mode the old, pre-shared-engine Geopolitical Risk widget had (`risk_score`/`militarization_score` instead of `composite_score`/pillar-percentile fields), which is why it needed its own bespoke frontend instead of the shared engine.
+> **Applies to:** SERI v4.2.1+, SIVI v2.0.0+
+> **Standard:** BMS-1.0.0
 
 ---
 
-## Endpoints
+## REST Endpoints
 
-| Method | Endpoint | Auth | Description |
+### SERI
+
+| Endpoint | Method | Auth | Description |
 |---|---|---|---|
-| GET | `/wp-json/blomstra/v1/{index-key}` | public | Live composite data |
-| GET | `/wp-json/blomstra/v1/country-names` | public | ISO3 → name map |
-| GET | `/wp-json/blomstra/v1/index-history/{slug}` | public | Historical snapshots |
-| GET | `/wp-json/blomstra/v1/index-history/{slug}?iso3=USA` | public | Single-country history |
+| `/wp-json/blomstra/v1/geo-economic-risk-index` | GET | Public | Canonical endpoint (legacy name preserved for compatibility) |
 
-All routes are currently public/unauthenticated (`permission_callback => '__return_true'`) — intentional for now, since frontend widgets need to read these without auth, but worth revisiting once a paid API tier exists.
+**Legacy redirects:** The old slug remains registered and returns identical data.
+
+### SIVI
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/wp-json/blomstra/v1/sovereign-infrastructure-vulnerability-index` | GET | Public | Canonical endpoint |
+| `/wp-json/blomstra/v1/critical-infrastructure-index` | GET | Public | Legacy endpoint (backward compatibility) |
 
 ---
 
-## Composite Response Schema
+## Top-Level Response Fields
 
-### Top-Level Fields
-
-```json
-{
-  "version": "3.1.2",
-  "last_updated": "2026-08-05 12:00:00",
-  "total_countries": 187,
-  "excluded": 23,
-  "excluded_detail": { ... },
-  "methodology_url": "https://blomstrainsights.com/methodology/cii",
-  "methodology_summary": "string",
-  "footnote": "string",
-  "global_averages_informational_only": { ... },
-  "weights": { ... },
-  "_meta": { ... },
-  "countries": { ... }
-}
-```
+Every BMS-1.0.0 conformant index returns these top-level keys:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `version` | string | Yes | Semantic version of the index backend |
-| `last_updated` | string | Yes | ISO datetime of last composite build |
-| `total_countries` | int | Yes | Number of scored countries (Full + Partial) |
-| `excluded` | int | Yes | Number of countries with insufficient data |
-| `excluded_detail` | object | Yes | ISO3 → `{reason, pillars_present, pillars_missing}` |
-| `methodology_url` | string | Yes | Link to full methodology page |
-| `methodology_summary` | string | Yes | One-paragraph summary |
-| `footnote` | string | Yes | Important caveats (e.g. partial rank disclaimer) |
-| `global_averages_informational_only` | object | Yes | Raw value means — **never used in scoring**; the field name and its own `note` subfield say this explicitly, as a guardrail against a future reader (human or code) mistaking it for something used in composite math |
-| `weights` | object | Yes | Pillar name → weight mapping, echoed back rather than only living in code, so a reader always sees the true current weights even if they change later |
-| `_meta` | object | Yes | `{built_at, source, status, standard_version}` |
-| `countries` | object | Yes | ISO3 → country data — **always a keyed object, never an array** |
+| `version` | string | yes | Index version (e.g., "4.2.1") |
+| `last_updated` | string | yes | MySQL datetime, UTC |
+| `total_countries` | int | yes | Number of countries in `countries` object |
+| `excluded_countries` / `excluded` | int | yes | Number of countries excluded (naming varies by index legacy) |
+| `excluded_detail` | object | yes | Map of `iso3 => reason` for excluded countries |
+| `weights` | object | yes | Composite pillar weights used for this build |
+| `methodology_note` / `methodology_summary` | string | yes | Human-readable methodology summary |
+| `countries` | object | yes | Map of `iso3 => country_data` |
+| `_meta` | object | yes | Build metadata: `built_at`, `source`, `status`, `standard_version` |
 
-### Per-Country Schema
+**SERI-specific top-level fields:**
 
-```json
-{
-  "YEM": {
-    "composite_score": 94.2,
-    "coverage_type": "full",
-    "coverage_ratio": 1.0,
-    "is_definitive": true,
-    "rank": 1,
-    "rank_display": {
-      "is_definitive": true,
-      "best_estimate": 1,
-      "range_80_low": 1,
-      "range_80_high": 1,
-      "theoretical_low": 1,
-      "theoretical_high": 1,
-      "string_format": "#1"
-    },
-    "energy_dependency_percentile": 98.5,
-    "energy_dependency_raw": 87.3,
-    "supplier_concentration_percentile": 92.1,
-    "supplier_concentration_raw": 7845.2,
-    "hhi_source": "Comtrade",
-    "maritime_connectivity_percentile": 12.4,
-    "maritime_vulnerability_percentile": 87.6,
-    "maritime_connectivity_raw": 1.2,
-    "maritime_source": "World Bank WDI (IS.SHP.GCNW.XQ)",
-    "is_landlocked": false,
-    "pillars_used": 3,
-    "pillars_missing": [],
-    "data_freshness": {
-      "energy": { "year": 2024, "source": "EIA", "status": "observed" },
-      "hhi": { "year": 2023, "source": "Comtrade", "status": "observed" },
-      "maritime": { "year": 2024, "source": "World Bank WDI", "status": "observed" }
-    },
-    "last_updated": "2026-08-05 12:00:00"
-  }
-}
-```
+| Field | Type | Description |
+|---|---|---|
+| `reference_vintage` | string | Year of reference data |
+| `weo_vintage` | string | IMF WEO vintage (e.g., "April 2026") |
+| `min_pillars_required` | int | Minimum pillars for inclusion (3 for SERI) |
+| `forward_direction` | string | "Deteriorating", "Improving", or "Stable" (per country) |
+| `geri_forward_pressure` | float | Forward pressure score (0-100) |
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `composite_score` | float | Yes | Final 0–100 score |
-| `coverage_type` | string | Yes | `"full"` or `"partial"` |
-| `coverage_ratio` | float | Yes | `pillars_used / total_pillars` (e.g., 0.75 for 3/4) |
-| `is_definitive` | bool | Yes | `true` for Full Index, `false` for Partial Index |
-| `rank` | int\|null | Yes | Definitive rank (null for partial — never a fabricated single number) |
-| `rank_display` | object | Yes | See below. **Always include this object, even for Full Index rows** (where every field is just the same single number and `is_definitive: true`) — the frontend's rank-delta feature reads `rank_display.best_estimate` uniformly across both Full and Partial rows, and a Full-only index that omits this object silently breaks delta computation |
-| `{pillar}_percentile` | float\|null | Yes | Normalized pillar score |
-| `{pillar}_raw` | float\|null | No | Raw pre-normalized value |
-| `{pillar}_source` | string | **MUST** for every pillar | Free-text provenance. Every pillar MUST have a source field. See BMS-001. |
-| `pillars_used` | int | Yes | Count of pillars with real data |
-| `pillars_missing` | array | Yes | Names of missing pillars |
-| `data_freshness` | object | **MUST** | Per-pillar provenance: `{year, source, status, retrieval_date?}`. See BMS-001. |
-| `last_updated` | string | Yes | ISO datetime |
+**SIVI-specific top-level fields:**
 
-### Rank Display Schema
+| Field | Type | Description |
+|---|---|---|
+| `footnote` | string | Extended methodology note about partial ranks and structural zeros |
 
-**Full Index (definitive):**
+---
+
+## Country Object Schema
+
+### Required Fields (All Indices)
+
+| Field | Type | Description |
+|---|---|---|
+| `iso3` | string | 3-letter country code |
+| `name` | string | Country name |
+| `{index}_structural` / `composite_score` | float | The composite score (0-100) |
+| `coverage` | string | `"full"` or `"partial"` |
+| `pillars_missing` | array | List of missing pillar names (empty for full) |
+| `data_quality` | object | Per-pillar quality scores (0-3 scale) |
+| `measurement_flags` | object | Structural metadata about this country's data |
+| `rank_display` | object | Rank information (see below) |
+| `pillars` | object | Per-pillar `score` and `weight` |
+
+### SERI Country Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `geri_structural` | float | Composite score |
+| `governance_percentile` | float | Governance pillar percentile |
+| `macro_percentile` | float | Macro pillar percentile |
+| `external_percentile` | float | External pillar percentile |
+| `fiscal_percentile` | float | Fiscal pillar percentile |
+| `geri_forward_pressure` | float | Forward pressure (IMF WEO forecast delta) |
+| `forward_direction` | string | Directional signal |
+| `forward_delta_avg` | float | Average forecast delta |
+| `data_freshness` | object | Per-indicator year and source |
+| `fiscal_source_summary` | object | Debt/balance/trajectory source provenance |
+
+### SIVI Country Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `sivi_structural` | float | Composite score |
+| `energy_dependency_percentile` | float | Energy pillar percentile |
+| `energy_dependency_raw` | float | Raw dependency percentage |
+| `supplier_concentration_percentile` | float | HHI pillar percentile |
+| `supplier_concentration_raw` | float | Raw HHI value (0-10,000) |
+| `maritime_connectivity_percentile` | float | Maritime connectivity percentile (inverted for vulnerability) |
+| `maritime_vulnerability_percentile` | float | Maritime vulnerability percentile |
+| `maritime_connectivity_raw` | float | Raw LSCI value |
+| `is_landlocked` | bool | Whether country is landlocked |
+| `pillars_used` | int | Number of pillars with data |
+
+---
+
+## Rank Display Object
+
 ```json
 {
   "is_definitive": true,
-  "best_estimate": 14,
-  "range_80_low": 14,
-  "range_80_high": 14,
-  "theoretical_low": 14,
-  "theoretical_high": 14,
-  "string_format": "#14"
+  "best_estimate": 45,
+  "range_80_low": 45,
+  "range_80_high": 45,
+  "theoretical_low": 45,
+  "theoretical_high": 45,
+  "string_format": "#45",
+  "total": 182
 }
 ```
 
-**Partial Index (projected):**
+### For Partial Index Countries
+
 ```json
 {
   "is_definitive": false,
   "best_estimate": 45,
   "range_80_low": 38,
   "range_80_high": 52,
-  "theoretical_low": 22,
-  "theoretical_high": 71,
-  "string_format": "#38–#52*"
+  "theoretical_low": 12,
+  "theoretical_high": 89,
+  "string_format": "#38-#52*",
+  "total": 182
 }
 ```
 
-> **Generalized Partial Coverage (N pillars, exactly 1 missing):**
-> For any index with N pillars where `MIN_PILLARS_REQUIRED = N-1`, the Partial Index rank range is derived by:
-> 1. Computing the known weighted sum from (N-1) present pillars at their real percentile values and real weights.
-> 2. For the one missing pillar, injecting five candidate percentile values: `0, 10, 50, 90, 100`.
-> 3. For each injected value, computing a hypothetical composite: `(known_weighted_sum + injected_value × missing_pillar_weight) / total_weight`.
-> 4. Finding what rank that hypothetical score would occupy among real Full-Index countries' actual scores.
-> 5. `best_estimate` = rank from injecting **50**; `range_80_low/high` = ranks from **10/90**; `theoretical_low/high` = ranks from **0/100**.
->
-> See [`10-engineering-research-standards.md`](10-engineering-research-standards.md) BMS-002 for the full generalized algorithm, pseudocode, and the important note on why this assumes exactly one missing pillar.
-
-### _meta Schema
-
-```json
-{
-  "built_at": "2026-08-05 12:00:00",
-  "source": "manual|cron_central_cached|cron",
-  "status": "valid",
-  "standard_version": "BMS-1.0.0"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `built_at` | string | ISO datetime of build completion |
-| `source` | string | What triggered the build |
-| `status` | string | `"valid"` or `"degraded"` (e.g., stale pillars) |
-| `standard_version` | string | Layer B standard version this build conforms to |
+| Field | Meaning |
+|---|---|
+| `best_estimate` | Rank if missing pillar were at global median (50th percentile) |
+| `range_80_low/high` | Rank if missing pillar were at 10th/90th percentile |
+| `theoretical_low/high` | Rank if missing pillar were at 0th/100th percentile |
+| `string_format` | Human-readable rank string |
+| `total` | Total countries in full index |
 
 ---
 
-## History Response Schema
+## Data Quality Object
 
 ```json
 {
-  "YEM": [
-    {
-      "period": "2026-07",
-      "composite_score": 93.8,
-      "rank": 1,
-      "coverage_type": "full",
-      "pillars": { ... }
-    },
-    {
-      "period": "2026-08",
-      "composite_score": 94.2,
-      "rank": 1,
-      "coverage_type": "full",
-      "pillars": { ... }
-    }
-  ]
+  "governance": 3,
+  "macro": 2,
+  "external": 3,
+  "fiscal": 1
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `period` | string | `YYYY-MM` snapshot period |
-| `composite_score` | float\|null | Score at that period |
-| `rank` | int\|null | Rank at that period |
-| `coverage_type` | string\|null | `"full"` or `"partial"` |
-| `pillars` | object | Full pillar data from that snapshot, including the complete `rank_display` object — this is what lets the frontend's delta feature compare `best_estimate` across periods even when a country's coverage type changed between them |
+Scale: 0 = no data, 1 = poor (old or fallback), 2 = mixed, 3 = good (recent, primary source).
+
+---
+
+## Measurement Flags Object
+
+### SERI
+
+```json
+{
+  "gni_is_gdp_fallback": false,
+  "fiscal_scope_mixed": false,
+  "trajectory_quality": "good",
+  "trajectory_observations": 5,
+  "trajectory_span_years": 4,
+  "coverage_ratio": 1.0,
+  "is_definitive": true,
+  "missing_pillars": []
+}
+```
+
+### SIVI
+
+```json
+{
+  "is_landlocked": false,
+  "maritime_is_structural_zero": false,
+  "coverage_ratio": 1.0,
+  "is_definitive": true,
+  "missing_pillars": []
+}
+```
 
 ---
 
 ## Error Responses
 
-| Status | Code | Message | When | Status in current code |
-|---|---|---|---|---|
-| 404 | `no_data` | "Index not built yet." | Composite option empty | **Implemented** |
-| 500 | `build_error` | "Composite build failed: ..." | Exception during build | **Recommended** — wrap build in try/catch |
-| 503 | `stale_data` | "Composite built on stale pillar data." | Freshness gate triggered | **Recommended** |
+### Index Not Built
+
+```json
+{
+  "code": "no_data",
+  "message": "Index has not been generated yet.",
+  "data": { "status": 404 }
+}
+```
+
+### No Country List
+
+```json
+{
+  "error": "No country list available"
+}
+```
 
 ---
 
-## Versioning Rules
+## Versioning
 
-1. **Backend version** (`version` field) follows SemVer: `MAJOR.MINOR.PATCH`
-2. **Breaking schema changes** require MAJOR bump and frontend compatibility review
-3. **New optional fields** are MINOR bumps
-4. **Bug fixes** are PATCH bumps
-5. **All indices must expose `_meta.built_at`** for freshness tracking
-6. **All indices must declare `_meta.standard_version`** so consumers know which Layer B rules the build followed
+The API is **not versioned in the URL**. Versioning is declarative inside the response:
 
----
+```json
+{
+  "version": "4.2.1",
+  "_meta": {
+    "standard_version": "BMS-1.0.0"
+  }
+}
+```
 
-## What to read next
-
-- How the frontend consumes this shape → [`04-frontend-engine.md`](04-frontend-engine.md)
-- The reasoning behind the rank-range structure → [`09-methodology-deepdive.md`](09-methodology-deepdive.md)
-- The generalized standard → [`10-engineering-research-standards.md`](10-engineering-research-standards.md) BMS-002
-- Building a new index against this contract → [`05-index-template.md`](05-index-template.md)
+Breaking changes to the response shape will be signaled by a BMS version bump (e.g., BMS-2.0.0), not a URL version change.
