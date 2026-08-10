@@ -46,17 +46,18 @@ if ( ! function_exists( 'sivi_render_index_shortcode' ) ) {
         ?>
 <div class="biw"
      data-biw-slug="sivi"
-     data-biw-endpoint="/wp-json/blomstra/v1/critical-infrastructure-index"
+     data-biw-endpoint="/wp-json/blomstra/v1/sovereign-infrastructure-vulnerability-index"
      data-biw-names-endpoint="/wp-json/blomstra/v1/country-names"
      data-biw-title="Sovereign Infrastructure Vulnerability Index"
      data-biw-subtitle="A country-level assessment of exposure, dependency, and systemic weakness across critical infrastructure sectors"
      data-biw-eyebrow="Strategic Intelligence"
-     data-biw-score-key="composite_score"
+     data-biw-score-key="sivi_structural"
      data-biw-score-label="Vulnerability Score"
-     data-biw-coverage-key="coverage_type"
+     data-biw-coverage-key="coverage"
      data-biw-band-thresholds="25,50,75"
      data-biw-band-labels="Low,Medium,High,Extreme"
      data-biw-band-select-label="All Vulnerability Levels"
+     data-biw-sort-direction="desc"
      data-biw-pillars='<?php echo esc_attr( wp_json_encode( $pillars ) ); ?>'
      data-biw-methodology="<?php echo esc_attr( $methodology ); ?>">
 </div>
