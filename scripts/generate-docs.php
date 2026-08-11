@@ -2,46 +2,40 @@
 /**
  * Blomstra Insights — Documentation Generator v3.0
  *
- * SINGLE SOURCE OF TRUTH for the doc pipeline. Previously this logic
- * was duplicated: this file only produced api.json/api-reference.md,
- * while the actual deployed HTML site (sidebar, search, portal,
- * markdown rendering) lived as an inline ~280-line PHP block inside
- * .github/workflows/gemini-doc.yml — untestable, unlintable, and out
- * of sync with what DOCUMENTATION-SETUP.md claimed it did.
+ * SINGLE SOURCE OF TRUTH for the documentation pipeline.
  *
- * v3.0 merges both into one file the workflow simply calls. Nothing
- * about the code-parsing engine below changed from v2.0 — that part
- * already worked, so it's untouched on purpose. What's new:
- *   1. The actual HTML/portal generation (ported from the YAML, not
- *      rewritten from scratch, to minimize behavior drift)
- *   2. Exclusion filtering — see EXCLUDED_DOC_FILES / EXCLUDED_DOC_DIRS
- *      below. deviations.md and anything under docs/internal/ never
- *      reach the public site.
- *   3. Real brand styling — .biw obsidian/champagne tokens, matching
- *      src/frontend/index-frontend-styles.css, instead of the
- *      generic slate/emerald theme the old inline version hardcoded.
+ * This script does everything:
+ *   1. Scans src/ for PHP and JavaScript files
+ *   2. Extracts PHPDoc/JSDoc comments (functions, constants, hooks, pillars)
+ *   3. Generates a searchable, interactive API reference (api-reference.html)
+ *   4. Converts all Markdown files from docs/ to styled HTML
+ *   5. Excludes sensitive files (deviations.md, docs/internal/)
+ *   6. Builds a portal/index page (index.html) linking to everything
+ *   7. Produces machine‑readable metadata (api.json, docs_manifest.json)
+ *
+ * The output is a complete, self‑contained documentation site that can
+ * be deployed to GitHub Pages or any static hosting service.
  *
  * @package Blomstra\Insights\Docs
  * @since   1.0.0
  * @version 3.0.0
  */
 
-// ─── CONFIG ─────────────────────────────────────────────────────────
+// ─── CONFIGURATION ─────────────────────────────────────────────────────
 
 $srcDir  = $argv[1] ?? './src';
 $docsDir = $argv[2] ?? './docs';
 $outDir  = $argv[3] ?? './docs-site';
 
-// Doc files that must NEVER be published, by exact basename, anywhere
-// under $docsDir. Add to this list rather than deleting the file from
-// the repo — internal roadmap/bug-tracking docs still belong in git,
+// Files that must NEVER be published — add to this list rather than
+// deleting the file from the repo. Internal docs still belong in git,
 // they just don't belong on a public GitHub Pages site.
 const EXCLUDED_DOC_FILES = [
     'deviations.md',
 ];
 
 // Any doc whose path contains one of these directory segments is
-// excluded wholesale. Drop future internal-only docs in docs/internal/
+// excluded wholesale. Place future internal-only docs in docs/internal/
 // and they're excluded automatically — no script edit needed.
 const EXCLUDED_DOC_DIRS = [
     'internal',
@@ -50,6 +44,8 @@ const EXCLUDED_DOC_DIRS = [
 if (!is_dir($outDir)) {
     mkdir($outDir, 0777, true);
 }
+
+// ─── EXCLUSION CHECK ──────────────────────────────────────────────────
 
 function isExcludedDoc(string $relativePath): bool
 {
@@ -66,9 +62,7 @@ function isExcludedDoc(string $relativePath): bool
     return false;
 }
 
-// ─── SHARED BIW STYLE BLOCK (embedded once, reused by every page) ──
-// Matches src/frontend/index-frontend-styles.css tokens exactly, so
-// the doc site and the live product read as the same system.
+// ─── STYLING (matches src/frontend/index-frontend-styles.css) ────────
 
 function biwStyleBlock(): string
 {
@@ -128,7 +122,7 @@ document.addEventListener('DOMContentLoaded', function() {
 JS;
 }
 
-// ─── CODE PARSING ENGINE (unchanged from v2.0 — this part worked) ──
+// ─── CODE PARSING ENGINE ─────────────────────────────────────────────
 
 function extractDocComment(string $content, int $pos): ?string
 {
@@ -231,8 +225,7 @@ if (is_dir($srcDir)) {
 
 file_put_contents("$outDir/api.json", json_encode($docs, JSON_PRETTY_PRINT));
 
-// Markdown reference (kept — this output already worked, some
-// consumers may fetch it directly for a machine-readable summary)
+// Markdown reference (kept for machine‑readable summary)
 $md = "# Blomstra Insights — Full Stack API Reference\n\n";
 $md .= "> Auto-generated from PHP & JS source code on " . date('Y-m-d H:i') . " UTC\n\n";
 foreach (['indices' => 'Indices (PHP Backend)', 'shared' => 'Shared Utilities (PHP)', 'frontend' => 'Frontend Engine (JavaScript)'] as $key => $heading) {
@@ -337,7 +330,7 @@ function renderApiReferenceHtml(array $docs, string $outDir): void
 
 renderApiReferenceHtml($docs, $outDir);
 
-// ─── HTML: architecture/methodology docs from docs/*.md ────────────
+// ─── MARKDOWN RENDERER ─────────────────────────────────────────────
 
 function renderMarkdown(string $text): string
 {
@@ -351,13 +344,6 @@ function renderMarkdown(string $text): string
         return '<pre><code class="language-' . ($lang ?: 'text') . '">' . $m[2] . '</code></pre>';
     }, $text);
 
-    // Real markdown tables: a header row, a |---|---| separator row,
-    // then body rows. Verified against the actual docs before adding
-    // this — 10+ genuine tables across the doc set were previously
-    // falling through to plain paragraph text with literal pipes and
-    // dashes, since the original renderer never handled this syntax.
-    // Runs line-by-line, before the block-split step below, so a
-    // detected table block is protected from being re-wrapped in <p>.
     $lines = explode("\n", $text);
     $out = [];
     $i = 0;
@@ -374,7 +360,7 @@ function renderMarkdown(string $text): string
                 $tableHtml .= '<th>' . $c . '</th>';
             }
             $tableHtml .= "</tr></thead><tbody>";
-            $i += 2; // skip header + separator
+            $i += 2;
             while ($i < $n && preg_match('/^\s*\|(.+)\|\s*$/', $lines[$i])) {
                 $rowCells = array_map('trim', explode('|', trim(trim($lines[$i]), '|')));
                 $tableHtml .= '<tr>';
@@ -440,6 +426,8 @@ function docPageTemplate(string $title, string $body): string
     return $html;
 }
 
+// ─── CONVERT MARKDOWN FILES ─────────────────────────────────────────
+
 $manifest = [];
 if (is_dir($docsDir)) {
     $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($docsDir));
@@ -454,8 +442,6 @@ if (is_dir($docsDir)) {
             continue;
         }
 
-        // Flatten nested paths (docs/api/indices/seri.md) into a safe,
-        // unique output filename so nothing collides or 404s.
         $slug = preg_replace('/[^a-z0-9\-]+/i', '-', pathinfo($relative, PATHINFO_FILENAME) . '-' . dirname($relative));
         $slug = trim(preg_replace('/-+/', '-', strtolower($slug)), '-');
         $basename = basename($pathName, '.md') === $slug ? $slug : $slug;
@@ -480,7 +466,7 @@ if (is_dir($docsDir)) {
 usort($manifest, fn($a, $b) => strcmp($a['title'], $b['title']));
 file_put_contents("$outDir/docs_manifest.json", json_encode($manifest, JSON_PRETTY_PRINT));
 
-// ─── HTML: portal / index.html ──────────────────────────────────────
+// ─── BUILD PORTAL / INDEX.HTML ──────────────────────────────────────
 
 $portalHtml = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">';
 $portalHtml .= '<title>Blomstra Insights — Developer Portal</title>';
