@@ -21,24 +21,20 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Create Docs Output Directory
+      - name: Prepare Output Directory
         run: mkdir -p ./docs-site
 
-      # -------------------------------------------------------------
-      # 1. PARSE PHP & JS CODE FUNCTIONS FROM ./src
-      # -------------------------------------------------------------
-      - name: Parse Source Code Functions
+      - name: Build Documentation Site
         run: |
+          set -e
+
+          # 1. Parse Code Engine Files
           cat << 'EOF' > parse_code.php
           <?php
           $srcDir = './src';$outDir = './docs-site';
           if (!is_dir($outDir)) mkdir($outDir, 0777, true);
 
-          $docs = [
-              'indices'  => [],
-              'shared'   => [],
-              'frontend' => [],
-          ];
+          $docs = ['indices' => [], 'shared' => [], 'frontend' => []];
 
           function extractDocComment(string $content, int $pos): ?string {$sub = substr($content, 0,$pos);
               $start = strrpos($sub, '/**');
@@ -49,7 +45,7 @@ jobs:
               return trim(preg_replace('/^\s*\*\s?/m', '', $comment));
           }
 
-          function parseFile(string $path, string $type): array {$content  = file_get_contents($path);$basename = basename($path);$ext      = pathinfo($path, PATHINFO_EXTENSION);$functions = [];
+          function parseFile(string $path, string $type): array {$content   = file_get_contents($path);$basename  = basename($path);$ext       = pathinfo($path, PATHINFO_EXTENSION);$functions = [];
               $constants = [];$pillars   = [];
 
               if ($ext === 'php') {
@@ -64,11 +60,6 @@ jobs:
                           $functions[] = ['name' =>$name, 'params' => trim($params), 'doc' =>$doc];
                       }
                   }
-
-                  if (preg_match_all("/['\"](\w+)['\"]\s*=>\s*array\(\s*['\"]name['\"]\s*=>\s*['\"](.*?)['\"]/", $content, $pm)) {
-                      foreach ($pm[1] as $i => $key) { $pillars[] = ['key' => $key, 'name' => $pm[2][$i]]; }
-                  }
-
               } elseif ($ext === 'js') {
                   preg_match_all('/(?:async\s+)?function\s+(\w+)\s*\((.*?)\)/s', $content,$jm1, PREG_OFFSET_CAPTURE);
                   if (!empty($jm1[0])) {
@@ -76,7 +67,6 @@ jobs:
                           $functions[] = ['name' =>$jm1[1][$i][0], 'params' => trim($jm1[2][$i][0]), 'doc' => extractDocComment($content, $jm1[0][$i][1])];
                       }
                   }
-
                   preg_match_all('/(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\((.*?)\)\s*=>/s', $content,$jm2, PREG_OFFSET_CAPTURE);
                   if (!empty($jm2[0])) {
                       foreach ($jm2[0] as $i =>$match) {
@@ -111,9 +101,8 @@ jobs:
 
           file_put_contents("$outDir/api.json", json_encode($docs, JSON_PRETTY_PRINT));
 
-          // SIDEBAR HTML & SEARCH (BLOMSTRA BRAND COLORS)
           $html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
-          $html .= '<title>Blomstra Code API Reference</title>';$html .= '<script src="[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js)"></script>';
+          $html .= '<title>Blomstra Code API Reference</title>';$html .= '<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>';
           $html .= '<style>';$html .= '* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; min-height: 100vh; }';
           $html .= '.sidebar { width: 320px; background: #1e293b; border-right: 1px solid #334155; position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 1.5rem 1rem; flex-shrink: 0; }';
           $html .= '.search-box { width: 100%; padding: 0.6rem 0.8rem; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; margin-bottom: 1.5rem; }';
@@ -191,22 +180,184 @@ jobs:
           </script></body></html>';
 
           file_put_contents("$outDir/api-reference.html", $html);
-          echo "parse_code.php finished cleanly.\n";
           EOF
           php parse_code.php
 
-      # -------------------------------------------------------------
-      # 2. CONVERT MARKDOWN DOCS IN ./docs TO STYLED HTML
-      # -------------------------------------------------------------
-      - name: Convert Markdown Documents to HTML
-        run: |
+          # 2. Convert Markdown Files
           cat << 'EOF' > convert_markdown.php
           <?php
-          function renderMarkdown(string $text): string {
-              // Convert inline .md link targets to .html
-              $text = preg_replace_callback('/\[([^\]]+)\]\(([^)]+\.md)\)/', function($m) {
+          function renderMarkdown(string $text): string {$text = preg_replace_callback('/\[([^\]]+)\]\(([^)]+\.md)\)/', function($m) {
                   $url = str_replace('.md', '.html',$m[2]);
                   return '[' . $m[1] . '](' .$url . ')';
               }, $text);
 
-              // Code blocks (
+              $text = preg_replace_callback('/```(\w+)?\n(.*?)\n```/s', function($m) {
+                  $lang = strtolower(trim($m[1] ?? ''));
+                  $code = htmlspecialchars($m[2]);
+                  if ($lang === 'mermaid') {
+                      return '<div class="mermaid">' . trim($m[2]) . '</div>';
+                  }
+                  return '<pre><code class="language-' . ($lang ?: 'text') . '">' . $code . '</code></pre>';
+              }, $text);
+
+              $text = preg_replace('/^#### (.*$)/m', '<h4>$1</h4>',$text);
+              $text = preg_replace('/^### (.*$)/m', '### $1',$text);
+              $text = preg_replace('/^## (.*$)/m', '## $1',$text);
+              $text = preg_replace('/^# (.*$)/m', '<h1>$1</h1>',$text);
+
+              $text = preg_replace('/^>\s*(.*$)/m', '<blockquote>$1</blockquote>', $text);$text = preg_replace('/\*\*(.*?)\*\*/', '<strong>$1</strong>', $text);$text = preg_replace('/`([^`]+)`/', '<code>$1</code>', $text);
+
+              $blocks = explode("\n\n", $text);
+              $out = [];
+              foreach ($blocks as $b) {
+                  $b = trim($b);
+                  if (empty($b)) continue;
+                  if (preg_match('/^<(h[1-6]|pre|blockquote|div|table)/i', $b)) {
+                      $out[] = $b;
+                  } else {
+                      $out[] = '<p>' . nl2br($b) . '</p>';
+                  }
+              }
+              return implode("\n\n", $out);
+          }
+
+          $docsDir  = './docs';
+          $outDir   = './docs-site';
+          $manifest = [];
+
+          if (is_dir($docsDir)) {
+              $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($docsDir));
+
+              foreach ($rii as $file) {
+                  if ($file->isDir() || strtolower($file->getExtension()) !== 'md') continue;
+
+                  $pathName = $file->getPathname();
+                  $basename = basename($pathName, '.md');
+                  $rawMd    = file_get_contents($pathName);
+
+                  $title = ucfirst(str_replace(['-', '_'], ' ', $basename));
+                  if (preg_match('/^#\s+(.+)$/m', $rawMd, $matches)) {
+                      $title = trim($matches[1]);
+                  }
+
+                  $convertedBody = renderMarkdown($rawMd);
+
+                  $pageHtml = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
+                  $pageHtml .= '<title>' . htmlspecialchars($title) . ' — Blomstra Insights</title>';
+                  $pageHtml .= '<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>';
+                  $pageHtml .= '<style>';
+                  $pageHtml .= 'body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.7; max-width: 920px; margin: 0 auto; padding: 2rem 1.5rem; }';
+                  $pageHtml .= 'header { padding-bottom: 1.5rem; margin-bottom: 2rem; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }';
+                  $pageHtml .= 'header a { color: #10b981; text-decoration: none; font-weight: 600; font-size: 0.95rem; } header a:hover { color: #34d399; }';
+                  $pageHtml .= 'h1, h2, h3, h4 { color: #10b981; margin-top: 1.8rem; margin-bottom: 0.8rem; }';
+                  $pageHtml .= 'h1 { font-size: 2.2rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }';
+                  $pageHtml .= 'p, li { color: #cbd5e1; margin-bottom: 1rem; }';
+                  $pageHtml .= 'code { background: #1e293b; padding: 0.2rem 0.4rem; border-radius: 4px; color: #f59e0b; font-family: monospace; font-size: 0.9em; }';
+                  $pageHtml .= 'pre { background: #1e293b; padding: 1.2rem; border-radius: 8px; overflow-x: auto; margin-bottom: 1.5rem; border: 1px solid #334155; }';
+                  $pageHtml .= 'pre code { background: transparent; padding: 0; color: #e2e8f0; }';
+                  $pageHtml .= 'table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; background: #1e293b; border-radius: 8px; overflow: hidden; }';
+                  $pageHtml .= 'th, td { padding: 0.8rem 1rem; text-align: left; border-bottom: 1px solid #334155; }';
+                  $pageHtml .= 'th { background: #0f172a; color: #34d399; }';
+                  $pageHtml .= 'blockquote { border-left: 4px solid #10b981; padding-left: 1rem; margin: 1.5rem 0; color: #94a3b8; font-style: italic; }';
+                  $pageHtml .= '#back-to-top { position: fixed; bottom: 2rem; right: 2rem; background: #10b981; color: #0f172a; border: none; border-radius: 50%; width: 44px; height: 44px; font-size: 1.4rem; font-weight: bold; cursor: pointer; display: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }';
+                  $pageHtml .= '#back-to-top:hover { background: #34d399; }';
+                  $pageHtml .= '</style></head><body>';
+                  $pageHtml .= '<button id="back-to-top" onclick="scrollToTop()">↑</button>';
+                  $pageHtml .= '<header><a href="index.html">← Back to Portal Hub</a><a href="api-reference.html">⚡ Code API Docs</a></header>';
+                  $pageHtml .= '<main>' . $convertedBody . '</main>';
+                  $pageHtml .= '<script>
+                  window.onscroll = function() {
+                      var btn = document.getElementById("back-to-top");
+                      if (btn) btn.style.display = (document.documentElement.scrollTop > 300 || document.body.scrollTop > 300) ? "block" : "none";
+                  };
+                  function scrollToTop() { window.scrollTo({top: 0, behavior: "smooth"}); }
+                  document.addEventListener("DOMContentLoaded", function() {
+                      mermaid.initialize({ startOnLoad: true, theme: "dark" });
+                  });
+                  </script></body></html>';
+
+                  file_put_contents("$outDir/$basename.html", $pageHtml);
+
+                  $manifest[] = [
+                      'file'  => "$basename.html",
+                      'title' => $title,
+                      'slug'  => $basename
+                  ];
+              }
+          }
+
+          usort($manifest, function($a, $b) { return strcmp($a['slug'], $b['slug']); });
+          file_put_contents("$outDir/docs_manifest.json", json_encode($manifest, JSON_PRETTY_PRINT));
+          EOF
+          php convert_markdown.php
+
+          # 3. Generate Landing Index Portal
+          cat << 'EOF' > generate_portal.php
+          <?php
+          $outDir = './docs-site';
+          $manifest = [];
+          if (file_exists("$outDir/docs_manifest.json")) {
+              $manifest = json_decode(file_get_contents("$outDir/docs_manifest.json"), true);
+          }
+
+          $html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">';
+          $html .= '<title>Blomstra Insights — Strategic Developer Portal</title><style>';
+          $html .= '* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; line-height: 1.6; }';
+          $html .= '.hero { text-align: center; padding: 4rem 1.5rem; background: #1e293b; border-bottom: 1px solid #334155; }';
+          $html .= '.hero h1 { font-size: 2.5rem; color: #10b981; margin-bottom: 0.5rem; }';
+          $html .= '.hero p { color: #94a3b8; font-size: 1.1rem; }';
+          $html .= '.container { max-width: 1000px; margin: 3rem auto; padding: 0 1.5rem; }';
+          $html .= '.section-title { color: #34d399; font-size: 1.3rem; margin-bottom: 1.2rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #334155; padding-bottom: 0.4rem; }';
+          $html .= '.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.2rem; margin-bottom: 3rem; }';
+          $html .= '.card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1.4rem; text-decoration: none; color: inherit; transition: transform 0.2s, border-color 0.2s; display: block; }';
+          $html .= '.card:hover { transform: translateY(-3px); border-color: #10b981; }';
+          $html .= '.card h3 { color: #10b981; margin-bottom: 0.4rem; font-size: 1.15rem; }';
+          $html .= '.card p { color: #94a3b8; font-size: 0.9rem; }';
+          $html .= '.badge { display: inline-block; margin-top: 0.8rem; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: rgba(16,185,129,0.15); color: #34d399; }';
+          $html .= '</style></head><body>';
+
+          $html .= '<div class="hero"><h1>Blomstra Insights Portal</h1><p>Strategic Intelligence Documentation Hub & Code Engine API</p></div>';
+          $html .= '<div class="container">';
+
+          $html .= '<div class="section-title">⚡ Developer Code API</div>';
+          $html .= '<div class="grid">';
+          $html .= '<a class="card" href="api-reference.html"><h3>Interactive Code API Reference</h3><p>Parsed PHP/JS functions, JSDoc, parameters, and hooks with real-time search.</p><span class="badge">Auto-Generated</span></a>';
+          $html .= '<a class="card" href="api.json" download><h3>Machine API JSON Schema</h3><p>Download full structured JSON schema of all parsed classes and functions.</p><span class="badge">Raw Metadata</span></a>';
+          $html .= '</div>';
+
+          if (!empty($manifest)) {
+              $html .= '<div class="section-title">📘 Architecture & Methodology Guides</div>';
+              $html .= '<div class="grid">';
+              foreach ($manifest as $doc) {
+                  $html .= '<a class="card" href="' . $doc['file'] . '"><h3>' . htmlspecialchars($doc['title']) . '</h3><p>Documentation guide from docs/' . $doc['slug'] . '.md</p><span class="badge">Architecture Doc</span></a>';
+              }
+              $html .= '</div>';
+          }
+
+          $html .= '</div></body></html>';
+
+          file_put_contents("$outDir/index.html", $html);
+          EOF
+          php generate_portal.php
+
+      - name: Disable GitHub Pages Jekyll Engine
+        run: touch ./docs-site/.nojekyll
+
+      - name: Upload GitHub Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./docs-site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
