@@ -2,97 +2,124 @@ name: gemini-doc
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  generate-docs:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # -------------------------------------------------------------
-      # 1. SETUP ENVIRONMENTS (Node 22 + Extended PHP Tooling)
-      # -------------------------------------------------------------
       - name: Setup PHP Environment
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
-          extensions: mbstring, xml, ctype, iconv, intl, dom
-          tools: phpdocumentor
-          ini-values: memory_limit=-1
 
-      - name: Setup Node.js Environment
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+      - name: Parse PHP & JS Codebase
+        run: php scripts/generate-gemini-docs.php ./src ./docs-site
 
-      - name: Install JSDoc
-        run: npm install -g jsdoc
-
-      # -------------------------------------------------------------
-      # 2. GENERATE DOCUMENTATION
-      # -------------------------------------------------------------
-      - name: Create Target Directories
-        run: mkdir -p ./docs/api/php ./docs/api/js
-
-      - name: Run phpDocumentor (Backend PHP)
+      - name: Copy Assets and Methodology
         run: |
-          phpdocumentor -d ./src -t ./docs/api/php --ignore="*/vendor/*,*/node_modules/*" || echo "PHP doc warnings ignored"
-
-      - name: Run JSDoc (Frontend JS)
-        run: |
-          if [ -d "./src" ]; then
-            jsdoc -r ./src -d ./docs/api/js --ignore node_modules || echo "No JS files or non-fatal JSDoc warnings found"
+          mkdir -p ./docs-site/assets
+          cp -r assets/* ./docs-site/assets/ 2>/dev/null || true
+          if [ -f "public-methodology.md" ]; then
+            cp public-methodology.md ./docs-site/
           fi
 
-      # -------------------------------------------------------------
-      # 3. CREATE CENTRAL HUB LANDING PAGE (index.html)
-      # -------------------------------------------------------------
-      - name: Generate API Hub Index
+      - name: Convert Markdown Files to HTML
         run: |
-          cat << 'EOF' > ./docs/api/index.html
+          php -r '
+          foreach (glob("./docs-site/*.md") as $md) {
+              $base = basename($md, ".md");
+              $text = file_get_contents($md);
+              $text = htmlspecialchars($text, ENT_QUOTES, "UTF-8");
+              $text = preg_replace("/^### (.*)$/m", "<h3>$1</h3>", $text);
+              $text = preg_replace("/^## (.*)$/m", "<h2>$1</h2>", $text);
+              $text = preg_replace("/^# (.*)$/m", "<h1>$1</h1>", $text);
+              $text = preg_replace("/\*\*(.*?)\*\*/", "<strong>$1</strong>", $text);
+              $text = preg_replace("/```(.*?)```/s", "<pre><code>$1</code></pre>", $text);
+              $text = preg_replace("/`(.*?)`/", "<code>$1</code>", $text);
+              $text = preg_replace("/^- (.*)$/m", "<li>$1</li>", $text);
+              $text = nl2br($text);
+              
+              $html = "<!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>$base</title><style>";
+              $html .= "body{font-family:system-ui,-apple-system,sans-serif;max-width:950px;margin:2rem auto;padding:0 1.5rem;background:#0f172a;color:#e2e8f0;line-height:1.7}";
+              $html .= "h1,h2,h3{color:#60a5fa;border-bottom:1px solid #334155;padding-bottom:.3rem}";
+              $html .= "code{background:#1e293b;padding:.15rem .4rem;border-radius:4px;color:#f59e0b}";
+              $html .= "pre{background:#1e293b;padding:1rem;border-radius:8px;overflow-x:auto}";
+              $html .= "pre code{color:#e2e8f0}";
+              $html .= "ul{padding-left:1.5rem}";
+              $html .= "</style></head><body>$text</body></html>";
+              
+              file_put_contents("./docs-site/$base.html", $html);
+          }
+          '
+
+      - name: Generate Central Portal Index
+        run: |
+          cat << 'EOF' > ./docs-site/index.html
           <!DOCTYPE html>
           <html lang="en">
           <head>
               <meta charset="UTF-8">
               <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>Blomstra Insights - Developer API Documentation</title>
+              <title>Blomstra Insights — Developer Portal</title>
               <style>
-                  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-                  .container { text-align: center; background: #1e293b; padding: 3rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 500px; width: 90%; }
-                  h1 { margin-bottom: 0.5rem; font-size: 1.8rem; }
-                  p { color: #94a3b8; margin-bottom: 2rem; font-size: 0.95rem; }
-                  .btn-group { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-                  .btn { padding: 0.8rem 1.5rem; border-radius: 6px; text-decoration: none; font-weight: bold; color: #fff; transition: all 0.2s; }
-                  .btn-php { background: #6366f1; }
-                  .btn-js { background: #f59e0b; color: #000; }
-                  .btn:hover { transform: translateY(-2px); opacity: 0.9; }
+                  body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 0; }
+                  .hero { text-align: center; padding: 4rem 1rem; background: #1e293b; border-bottom: 1px solid #334155; }
+                  .hero h1 { font-size: 2.5rem; color: #60a5fa; margin-bottom: 0.5rem; }
+                  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; max-width: 900px; margin: 3rem auto; padding: 0 1rem; }
+                  .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1.5rem; text-decoration: none; color: inherit; transition: transform 0.2s; }
+                  .card:hover { transform: translateY(-3px); border-color: #60a5fa; }
+                  .card h3 { color: #34d399; margin-top: 0; }
               </style>
           </head>
           <body>
-              <div class="container">
-                  <h1>Blomstra Insights API Reference</h1>
-                  <p>Automated documentation generated by <strong>gemini-doc</strong>.</p>
-                  <div class="btn-group">
-                      <a class="btn btn-php" href="./php/">🐘 Backend PHP Docs</a>
-                      <a class="btn btn-js" href="./js/">⚡ Frontend JS Docs</a>
-                  </div>
+              <div class="hero">
+                  <h1>Blomstra Insights Developer Hub</h1>
+                  <p>Auto-generated API documentation powered by <strong>gemini-doc</strong>.</p>
+              </div>
+              <div class="grid">
+                  <a class="card" href="public-methodology.html">
+                      <h3>📘 Methodology</h3>
+                      <p>View public data rules, normalization, and index formulas.</p>
+                  </a>
+                  <a class="card" href="api-reference.html">
+                      <h3>⚡ Full Stack API Docs</h3>
+                      <p>Explore parsed PHP backend and JavaScript chart engine functions.</p>
+                  </a>
+                  <a class="card" href="api.json" download>
+                      <h3>📦 Machine API JSON</h3>
+                      <p>Download structured JSON data for tools and automated scripts.</p>
+                  </a>
               </div>
           </body>
           </html>
           EOF
 
-      # -------------------------------------------------------------
-      # 4. PUBLISH TO GITHUB PAGES
-      # -------------------------------------------------------------
-      - name: Deploy to GitHub Pages
-        uses: PeaceIris/actions-gh-pages@v3
+      - name: Upload Page Artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/api
+          path: ./docs-site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
