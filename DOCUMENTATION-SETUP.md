@@ -20,7 +20,7 @@ The entire documentation site is rebuilt and deployed to GitHub Pages via `scrip
 
 ## ⚠️ What never gets published
 
-Not everything in `docs/` is meant to be public. `scripts/generate-gemini-docs.php`
+Not everything in `docs/` is meant to be public. `scripts/generate-claude-docs.php`
 excludes:
 
 - Any file whose **exact basename** is listed in `EXCLUDED_DOC_FILES` at the top
@@ -44,7 +44,7 @@ If you're setting this up for the first time, follow these steps.
 ### Step 1: Add the Generator Script
 
 1.  In the root of your repository, create a folder named `scripts/`.
-2.  Add `generate-gemini-docs.php` inside it (copy from this repo).
+2.  Add `generate-claude-docs.php` inside it (copy from this repo).
 
 **What this script actually does** (all of it — this is the only place the
 logic lives):
@@ -66,9 +66,9 @@ logic lives):
 
 ### Step 2: Add the Workflow
 
-1.  Add `.github/workflows/gemini-doc.yml` (copy from this repo).
+1.  Add `.github/workflows/claude-doc.yml` (copy from this repo).
 2.  It checks out the repo, installs PHP, runs
-    `php scripts/generate-gemini-docs.php ./src ./docs ./docs-site`, runs the
+    `php scripts/generate-claude-docs.php ./src ./docs ./docs-site`, runs the
     excluded-content safety check, then deploys `./docs-site` to Pages.
 
 | Section | Purpose |
