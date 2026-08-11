@@ -27,9 +27,9 @@ On every push to `main` that changes a file in `src/`:
 blomstra-insights/
 ├── .github/
 │   └── workflows/
-│       └── docs.yml          <-- COPY THIS
+│       └── kimi-docs.yml          <-- COPY THIS
 ├── scripts/
-│   └── generate-docs.php     <-- COPY THIS
+│   └── generate-kimi-docs.php     <-- COPY THIS
 └── src/                      <-- YOUR EXISTING CODE
     ├── shared/
     ├── indices/
