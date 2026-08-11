@@ -1,4 +1,4 @@
-name: gemini-doc
+name: Generate Blomstra Insights API Docs
 
 on:
   push:
@@ -26,14 +26,10 @@ jobs:
         with:
           php-version: '8.2'
 
-      - name: Build Documentation Site
-        run: php scripts/generate-gemini-docs.php ./src ./docs ./docs-site
+      - name: Generate Documentation Site
+        run: php scripts/generate-docs.php ./src ./docs ./docs-site
 
-      - name: Fail loudly if excluded content leaked
-        # Belt-and-suspenders check independent of the generator script
-        # itself — if this ever matches, stop the deploy rather than
-        # publish. Extend this list if EXCLUDED_DOC_FILES in the
-        # script grows.
+      - name: Fail if Excluded Content Leaked
         run: |
           if grep -rl "Paid Tier" ./docs-site 2>/dev/null; then
             echo "::error::Excluded content found in generated output — aborting deploy."
