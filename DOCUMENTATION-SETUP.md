@@ -10,7 +10,96 @@ The entire documentation site is automatically rebuilt and deployed to GitHub Pa
 
 ---
 
-## How It Works
+## 🚀 Getting Started – Setting Up the Documentation Pipeline
+
+If you're setting this up for the first time, follow these steps to ensure everything works correctly.
+
+### Step 1: Create the `scripts/` Folder and Add the PHP Generator
+
+1.  In the root of your repository, create a new folder named `scripts/`.
+2.  Inside `scripts/`, create a new PHP file called `generate-gemini-docs.php`.
+3.  Copy the contents from [this link](https://github.com/blomstraventures/blomstra-insights/blob/main/scripts/generate-gemini-docs.php) into your new file.
+
+**What this PHP script does:**
+
+- Recursively scans the `src/` directory for `.php` and `.js` files.
+- Extracts PHPDoc and JSDoc comment blocks (`/** ... */`) to collect:
+  - Function/method names
+  - Parameters and their types
+  - Return types
+  - Descriptions
+  - Version tags (`@since`, `@deprecated`)
+- Organises the extracted data into a structured format.
+- Generates a single, searchable **`api-reference.html`** page with a clean dark‑theme interface.
+- Applies the shared CSS (`src/frontend/index-frontend-styles.css`) to ensure brand consistency.
+
+---
+
+### Step 2: Create the `.github/workflows/` Folder and Add the YAML Workflow
+
+1.  In the root of your repository, create a new folder named `.github/workflows/`.
+2.  Inside `.github/workflows/`, create a new YAML file called `gemini-doc.yml`.
+3.  Copy the contents from [this link](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/gemini-doc.yml) into your new file.
+
+**What this YAML workflow does:**
+
+| Section | Purpose |
+|---------|---------|
+| **Trigger (`on`)** | Runs automatically when code is pushed to the `main` branch. Can also be triggered manually via the GitHub Actions UI. |
+| **Environment (`runs-on`)** | Spins up a fresh `ubuntu-latest` virtual machine to run the build. |
+| **Checkout** | Pulls the latest code from your repository. |
+| **Setup PHP** | Installs the required PHP version (e.g., 8.2) using the `shivammathur/setup-php` action. |
+| **Run Generator** | Executes `php scripts/generate-gemini-docs.php` to create the HTML documentation. |
+| **Deploy to Pages** | Uses the `peaceiris/actions-gh-pages` action to commit the generated files to the `gh-pages` branch, which GitHub Pages then serves. |
+
+> **Note:** The workflow output (HTML files) is deployed to the **`gh-pages`** branch of your repository. Do not edit this branch manually — the workflow overwrites it on every successful run.
+
+---
+
+### Step 3: Configure GitHub Pages to Use Actions as the Source
+
+By default, GitHub Pages may be set to deploy from a branch (e.g., `main` or `gh-pages`). To use the automated workflow, you must change the source to **GitHub Actions**.
+
+1.  Go to your repository on GitHub.
+2.  Click on **Settings** (the tab at the top).
+3.  In the left sidebar, click **Pages** (under "Code and automation").
+4.  Under **"Build and deployment"**, find the **"Source"** dropdown.
+5.  Change the selection from **"Deploy from a branch"** to **"GitHub Actions"**.
+6.  The page will refresh, and you'll see a confirmation that your site is now built and deployed by the Actions workflow.
+
+> **Important:** If you do not change this to **GitHub Actions**, your workflow will still run, but GitHub Pages will not serve the generated files. The site will remain outdated or show a 404. Setting the source to Actions ensures GitHub Pages looks at the output of your workflow instead of a static branch.
+
+---
+
+### Step 4: Run the Workflow Manually (Optional)
+
+The workflow runs automatically on every push to `main`. However, you can also trigger it manually if you want to test changes without pushing code.
+
+1.  Go to your repository on GitHub.
+2.  Click on the **Actions** tab.
+3.  In the left sidebar, find and select the **"gemini-doc"** workflow.
+4.  Click the **"Run workflow"** button (a dropdown will appear).
+5.  Select the branch (usually `main`) and click **"Run workflow"** again.
+6.  Wait a few moments. You will see a new workflow run appear in the list. Click on it to watch the build progress in real time.
+
+---
+
+### Step 5: View the Generated Documentation
+
+Once the workflow completes successfully:
+
+- **Live Site:** The documentation is automatically available at:
+  [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
+
+- **Build Artifacts (for debugging):** You can also download the generated files from the workflow run.
+  1. Go to the **Actions** tab.
+  2. Click on the specific workflow run.
+  3. Scroll down to the **"Artifacts"** section.
+  4. Download the `gh-pages` artifact to inspect the HTML files locally.
+
+---
+
+## 🔧 How the System Works (Detailed)
 
 | Layer | Source Directory | Generated Output | Description |
 |-------|------------------|------------------|-------------|
@@ -20,70 +109,13 @@ The entire documentation site is automatically rebuilt and deployed to GitHub Pa
 
 ---
 
-## Folder & File Structure
-
-The documentation pipeline relies on the following key directories and files:
-
-### `.github/workflows/`
-
-Contains the GitHub Actions workflow files that orchestrate the entire documentation build and deployment process.
-
-| File | Purpose |
-|------|---------|
-| [`gemini-doc.yml`](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/gemini-doc.yml) | **Primary workflow.** Triggers on pushes to `main`. Sets up PHP, installs dependencies, runs the PHP documentation generator, and deploys the output to the `gh-pages` branch. |
-| [`kimi-docs.yml`](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/kimi-docs.yml) | **Secondary workflow.** Likely used for testing, alternative builds, or documentation previews. |
-
-### `scripts/`
-
-Contains the PHP scripts that parse your source code and generate the API documentation.
-
-| File | Purpose |
-|------|---------|
-| [`generate-gemini-docs.php`](https://github.com/blomstraventures/blomstra-insights/blob/main/scripts/generate-gemini-docs.php) | **Primary generator.** Scans the `src/` directory, extracts PHPDoc and JSDoc blocks from PHP and JavaScript files, and builds the `api-reference.html` file with a searchable interface. |
-| [`generate-kimi-docs.php`](https://github.com/blomstraventures/blomstra-insights/blob/main/scripts/generate-kimi-docs.php) | **Alternative generator.** May produce a different format or serve as a backup/experimental version. |
-
-### `src/frontend/`
-
-Contains the shared CSS file:
-
-| File | Purpose |
-|------|---------|
-| [`index-frontend-styles.css`](https://github.com/blomstraventures/blomstra-insights/blob/main/src/frontend/index-frontend-styles.css) | Used by **both** the live index frontend and the documentation site, ensuring a consistent visual identity across all Blomstra products. |
-
----
-
 ## 🎨 Visual Features & Styling
 
-- **Brand Alignment:** The documentation site uses the same `index-frontend-styles.css` as the live indices, ensuring a consistent look and feel across the entire product.
+- **Brand Alignment:** The documentation site uses the same [`index-frontend-styles.css`](https://github.com/blomstraventures/blomstra-insights/blob/main/src/frontend/index-frontend-styles.css) as the live indices, ensuring a consistent look and feel across the entire product.
 - **Dark‑Mode Optimised:** All pages use a dark theme matching the Blomstra brand.
 - **Mermaid.js Diagrams:** Any Markdown code block using ` ```mermaid ` is automatically rendered as an interactive SVG diagram.
 - **Back‑to‑Top Scrolling:** A smooth‑scroll button is automatically added to all documentation pages for easy navigation.
 - **Live Search:** The API reference includes a searchable function index.
-
----
-
-## ⚙️ GitHub Pages Configuration
-
-To enable automatic deployment, you must set the **build source** to **GitHub Actions**:
-
-1. Go to your repository **Settings → Pages**.
-2. Under **"Build and deployment"**, find the **"Source"** dropdown.
-3. Select **"GitHub Actions"**.
-4. Save the settings.
-
-> **Note:** The [`gemini-doc.yml`](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/gemini-doc.yml) workflow is the source of truth for the build process. It defines the environment, dependencies, and steps required to generate and deploy the documentation site. Once the source is set to GitHub Actions, every push to `main` will automatically trigger the workflow.
-
----
-
-## 🚀 Triggering a Manual Build
-
-You can manually trigger the workflow at any time:
-
-1. Go to the repository **Actions** tab.
-2. Select the **gemini-doc** workflow from the left sidebar.
-3. Click **"Run workflow"** → select the branch → click **"Run workflow"**.
-
-This is useful for testing changes before they are merged to `main`.
 
 ---
 
@@ -98,33 +130,12 @@ This is useful for testing changes before they are merged to `main`.
 
 ---
 
-## 📄 Output Location
-
-All generated HTML files and assets are built and deployed to the **`gh-pages`** branch of this repository. From there, GitHub Pages serves the live site.
-
-**Live URL:** [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
-
-**Build Artifacts:** The generated HTML files (including `index.html`, `api-reference.html`, and all converted Markdown pages) are also available for download from the **"Artifacts"** section of each workflow run in the Actions tab. This is useful for debugging or manual inspection.
-
----
-
-## 🔧 Customising the Build
-
-| What to Change | Where to Look |
-|----------------|---------------|
-| **CSS** | Modify `src/frontend/index-frontend-styles.css`. Changes apply to both the documentation and the live frontend. |
-| **Workflow** | Edit `.github/workflows/gemini-doc.yml` to adjust PHP versions, add new build steps, or modify deployment settings. |
-| **PHP Scripts** | Update the relevant `.php` files in the `scripts/` folder to change how documentation is parsed, rendered, or structured. |
-| **Portal Layout** | Edit the HTML generation logic inside `generate-gemini-docs.php` or `generate-kimi-docs.php` to customise the index page layout. |
-
----
-
 ## 🧪 Testing Locally
 
 To test the documentation build locally before pushing:
 
-1. Clone the repository.
-2. Ensure PHP is installed locally.
-3. Run the generator script directly:
-   ```bash
-   php scripts/generate-gemini-docs.php
+1.  Clone the repository.
+2.  Ensure PHP is installed locally (version 8.0 or higher recommended).
+3.  Run the generator script directly:
+    ```bash
+    php scripts/generate-gemini-docs.php
