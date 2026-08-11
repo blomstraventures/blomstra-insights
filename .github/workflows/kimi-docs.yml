@@ -8,7 +8,7 @@ on:
       - 'scripts/**'
       - 'assets/**'
       - 'public-methodology.md'
-      - '.github/workflows/docs.yml'
+      - '.github/workflows/kimi-docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -33,7 +33,7 @@ jobs:
           php-version: '8.2'
 
       - name: Parse source code
-        run: php scripts/generate-docs.php ./src ./docs-site
+        run: php scripts/generate-kimi-docs.php ./src ./docs-site
 
       - name: Copy public methodology
         run: |
