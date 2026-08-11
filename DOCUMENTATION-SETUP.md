@@ -139,3 +139,18 @@ To test the documentation build locally before pushing:
 3.  Run the generator script directly:
     ```bash
     php scripts/generate-gemini-docs.php
+
+
+---
+
+## ✅ What's New in This Version
+
+| Section | What Was Added / Improved |
+|---------|---------------------------|
+| **Step 1: `scripts/` folder** | Explicit instructions to create the folder and file, plus a detailed breakdown of what the PHP script does. |
+| **Step 2: `.github/workflows/` folder** | Explicit instructions to create the folder and file, plus a table explaining every part of the YAML workflow. |
+| **Step 3: GitHub Pages configuration** | Step‑by‑step instructions to navigate to Settings → Pages and switch the source from "Branch" to "GitHub Actions". |
+| **Step 4: Running the workflow** | Clear instructions on how to trigger a manual build from the Actions tab. |
+| **Step 5: Viewing the output** | Where to find the live site and how to download build artifacts for debugging. |
+
+This document now serves as a **complete onboarding guide** for anyone setting up the documentation pipeline for the first time — from folder creation to deployment.
