@@ -46,7 +46,7 @@ blomstra-insights/
 ### Step 3: Push to main
 
 ```bash
-git add .github/workflows/docs.yml scripts/generate-docs.php
+git add .github/workflows/kimi-docs.yml scripts/generate-kimi-docs.php
 git commit -m "ci: add auto-documentation pipeline"
 git push origin main
 ```
