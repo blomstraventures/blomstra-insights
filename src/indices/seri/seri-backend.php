@@ -1,12 +1,11 @@
 /**
  * Sovereign Economic Resilience Index (SERI) — v4.2.1
- * Formerly known as GERI (Geo-Economic Risk Index).
  *
  * NOTE: This snippet depends on the "Shared Utilities" snippet being active
  *       (blomstra-index-utilities.php). Ensure it is loaded BEFORE this snippet.
  *
  * @package Blomstra\Insights\Indices\SERI
- * @since   3.5.5
+ * @since   3.5.5 (as GERI)
  * @version 4.2.1
  *
  * CHANGES (v4.2.1):
@@ -29,30 +28,30 @@ if ( ! defined( 'ABSPATH' ) ) {
 // DO NOT uncomment require_once unless running in a plugin folder.
 // require_once __DIR__ . '/../../shared/blomstra-index-utilities.php';
 
-// ─── CONSTANTS (kept for backward compatibility) ──────────────────
+// ─── CONSTANTS ──────────────────────────────────────────────────────
 
-define( 'GERI_VERSION', '4.2.1' );
-define( 'GERI_OPTION_KEY', 'blomstra_geo_economic_risk_index' );
-define( 'GERI_CRON_HOOK', 'blomstra_geo_economic_weekly_refresh' );
-define( 'GERI_DAILY_CRON_HOOK', 'blomstra_geri_daily_cron' );
-define( 'GERI_REFRESH_HOOK', 'blomstra_geri_async_refresh' );
-define( 'GERI_MIN_PILLARS_REQUIRED', 3 );
+define( 'SERI_VERSION', '4.2.1' );
+define( 'SERI_OPTION_KEY', 'seri_composite_index' );
+define( 'SERI_CRON_HOOK', 'seri_weekly_refresh' );
+define( 'SERI_DAILY_CRON_HOOK', 'seri_daily_cron' );
+define( 'SERI_REFRESH_HOOK', 'seri_async_refresh' );
+define( 'SERI_MIN_PILLARS_REQUIRED', 3 );
 
 // Pillar data storage keys
-define( 'GERI_GOVERNANCE_KEY', 'blomstra_geri_governance_data' );
-define( 'GERI_MACRO_KEY', 'blomstra_geri_macro_data' );
-define( 'GERI_EXTERNAL_KEY', 'blomstra_geri_external_data' );
-define( 'GERI_FISCAL_KEY', 'blomstra_geri_fiscal_data' );
+define( 'SERI_GOVERNANCE_KEY', 'seri_governance_data' );
+define( 'SERI_MACRO_KEY', 'seri_macro_data' );
+define( 'SERI_EXTERNAL_KEY', 'seri_external_data' );
+define( 'SERI_FISCAL_KEY', 'seri_fiscal_data' );
 
 // Pillar meta storage keys
-define( 'GERI_GOVERNANCE_META_KEY', 'blomstra_geri_governance_meta' );
-define( 'GERI_MACRO_META_KEY', 'blomstra_geri_macro_meta' );
-define( 'GERI_EXTERNAL_META_KEY', 'blomstra_geri_external_meta' );
-define( 'GERI_FISCAL_META_KEY', 'blomstra_geri_fiscal_meta' );
+define( 'SERI_GOVERNANCE_META_KEY', 'seri_governance_meta' );
+define( 'SERI_MACRO_META_KEY', 'seri_macro_meta' );
+define( 'SERI_EXTERNAL_META_KEY', 'seri_external_meta' );
+define( 'SERI_FISCAL_META_KEY', 'seri_fiscal_meta' );
 
 // ─── PILLAR WEIGHT DEFINITIONS ──────────────────────────────────────
 
-function geri_get_pillar_weights() {
+function seri_get_pillar_weights() {
     return array(
         'governance' => array(
             'name' => 'Governance',
@@ -102,7 +101,7 @@ function geri_get_pillar_weights() {
 
 // ─── INDICATOR DEFINITIONS ──────────────────────────────────────────
 
-function geri_get_pillar_defs() {
+function seri_get_pillar_defs() {
     return array(
         'governance' => array(
             'name' => 'Governance',
@@ -146,7 +145,7 @@ function geri_get_pillar_defs() {
     );
 }
 
-function geri_get_imf_forecast_defs() {
+function seri_get_imf_forecast_defs() {
     return array(
         'NGDP_RPCH'   => 'gdp_growth_forecast',
         'PCPIPCH'     => 'inflation_forecast',
@@ -159,7 +158,7 @@ function geri_get_imf_forecast_defs() {
 
 // ─── COMPOSITE WEIGHTS ─────────────────────────────────────────────
 
-function geri_get_composite_weights() {
+function seri_get_composite_weights() {
     return array(
         'governance' => 25,
         'macro'      => 25,
@@ -170,20 +169,20 @@ function geri_get_composite_weights() {
 
 // ─── DATA FETCH HELPERS ────────────────────────────────────────────
 
-function geri_fetch_wb_indicator( $code, $source = null, $force = false, $direct_api = false, $date_params = null ) {
+function seri_fetch_wb_indicator( $code, $source = null, $force = false, $direct_api = false, $date_params = null ) {
     if ( function_exists( 'blomstra_fetch_wb_indicator_batch' ) && ! $direct_api ) {
         if ( $date_params ) {
-            return geri_direct_wb_fetch( $code, $source, $date_params );
+            return seri_direct_wb_fetch( $code, $source, $date_params );
         }
         $data = blomstra_fetch_wb_indicator_batch( $code, $source, $force );
         if ( ! empty( $data ) ) {
             return $data;
         }
     }
-    return geri_direct_wb_fetch( $code, $source, $date_params );
+    return seri_direct_wb_fetch( $code, $source, $date_params );
 }
 
-function geri_direct_wb_fetch( $code, $source = null, $date_params = null ) {
+function seri_direct_wb_fetch( $code, $source = null, $date_params = null ) {
     $url = "https://api.worldbank.org/v2/country/all/indicator/{$code}?format=json&per_page=20000";
     if ( $source ) {
         $url .= "&source={$source}";
@@ -193,7 +192,7 @@ function geri_direct_wb_fetch( $code, $source = null, $date_params = null ) {
     } else {
         $url .= '&mrnev=1';
     }
-    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'SERI-Direct/' . GERI_VERSION ) );
+    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'SERI-Direct/' . SERI_VERSION ) );
     if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
         return array();
     }
@@ -227,19 +226,19 @@ function geri_direct_wb_fetch( $code, $source = null, $date_params = null ) {
 
 // ─── IMF DATA FETCH ─────────────────────────────────────────────────
 
-function geri_fetch_imf_indicator( $code, $direct_api = false ) {
+function seri_fetch_imf_indicator( $code, $direct_api = false ) {
     if ( function_exists( 'blomstra_fetch_imf_indicator_batch' ) && ! $direct_api ) {
         $data = blomstra_fetch_imf_indicator_batch( $code, false );
         if ( ! empty( $data ) ) {
             return $data;
         }
     }
-    return geri_direct_imf_fetch_historical( $code );
+    return seri_direct_imf_fetch_historical( $code );
 }
 
-function geri_direct_imf_fetch_historical( $code ) {
+function seri_direct_imf_fetch_historical( $code ) {
     $url = "https://www.imf.org/external/datamapper/api/v1/{$code}";
-    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'SERI-Direct/' . GERI_VERSION ) );
+    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'SERI-Direct/' . SERI_VERSION ) );
     if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
         return array();
     }
@@ -267,19 +266,19 @@ function geri_direct_imf_fetch_historical( $code ) {
     return $out;
 }
 
-function geri_fetch_imf_forecast( $code, $horizon = 1, $force = false, $direct_api = false ) {
+function seri_fetch_imf_forecast( $code, $horizon = 1, $force = false, $direct_api = false ) {
     if ( function_exists( 'blomstra_fetch_imf_forecast_batch' ) && ! $direct_api ) {
         $data = blomstra_fetch_imf_forecast_batch( $code, $horizon, $force );
         if ( ! empty( $data ) ) {
             return $data;
         }
     }
-    return geri_direct_imf_fetch( $code, $horizon );
+    return seri_direct_imf_fetch( $code, $horizon );
 }
 
-function geri_direct_imf_fetch( $code, $horizon = 1 ) {
+function seri_direct_imf_fetch( $code, $horizon = 1 ) {
     $url = "https://www.imf.org/external/datamapper/api/v1/{$code}";
-    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'SERI-Direct/' . GERI_VERSION ) );
+    $response = wp_remote_get( $url, array( 'timeout' => 60, 'user-agent' => 'SERI-Direct/' . SERI_VERSION ) );
     if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
         return array();
     }
@@ -307,11 +306,11 @@ function geri_direct_imf_fetch( $code, $horizon = 1 ) {
 
 // ─── VOLATILITY & HISTORY HELPERS ──────────────────────────────────
 
-function geri_fetch_history_5yr( $code, $source = null, $direct_api = false ) {
+function seri_fetch_history_5yr( $code, $source = null, $direct_api = false ) {
     $current_year = (int) current_time( 'Y' );
     $start_year = $current_year - 5;
     $end_year = $current_year;
-    $data = geri_fetch_wb_indicator( $code, $source, false, $direct_api, array( 'start_year' => $start_year, 'end_year' => $end_year ) );
+    $data = seri_fetch_wb_indicator( $code, $source, false, $direct_api, array( 'start_year' => $start_year, 'end_year' => $end_year ) );
     $out = array();
     foreach ( $data as $iso3 => $years ) {
         if ( is_array( $years ) ) {
@@ -324,7 +323,7 @@ function geri_fetch_history_5yr( $code, $source = null, $direct_api = false ) {
 
 // ─── PILLAR FETCH FUNCTIONS ────────────────────────────────────────
 
-function geri_fetch_governance( $force = false, $direct_api = false ) {
+function seri_fetch_governance( $force = false, $direct_api = false ) {
     $raw = array();
     $sources = array();
     $concepts = array(
@@ -334,7 +333,7 @@ function geri_fetch_governance( $force = false, $direct_api = false ) {
     );
 
     foreach ( $concepts as $name => $code ) {
-        $data = geri_fetch_wb_indicator( $code, 3, $force, $direct_api );
+        $data = seri_fetch_wb_indicator( $code, 3, $force, $direct_api );
         if ( ! empty( $data ) && is_array( $data ) ) {
             foreach ( $data as $iso3 => $row ) {
                 if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -347,18 +346,18 @@ function geri_fetch_governance( $force = false, $direct_api = false ) {
         }
     }
 
-    update_option( GERI_GOVERNANCE_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
-    update_option( GERI_GOVERNANCE_KEY, array( 'data' => $raw, 'sources' => $sources ), false );
+    update_option( SERI_GOVERNANCE_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
+    update_option( SERI_GOVERNANCE_KEY, array( 'data' => $raw, 'sources' => $sources ), false );
     return $raw;
 }
 
-function geri_fetch_macro( $force = false, $direct_api = false ) {
+function seri_fetch_macro( $force = false, $direct_api = false ) {
     $raw = array();
     $sources = array();
 
     // 1. GNI growth – primary: aggregate GNI growth. Fallback: GNI per-capita growth (documented).
-    $gni_data = geri_fetch_wb_indicator( 'NY.GNP.MKTP.KD.ZG', null, $force, $direct_api );
-    $gni_per_capita_data = geri_fetch_wb_indicator( 'NY.GNP.PCAP.KD.ZG', null, $force, $direct_api );
+    $gni_data = seri_fetch_wb_indicator( 'NY.GNP.MKTP.KD.ZG', null, $force, $direct_api );
+    $gni_per_capita_data = seri_fetch_wb_indicator( 'NY.GNP.PCAP.KD.ZG', null, $force, $direct_api );
 
     if ( ! empty( $gni_data ) && is_array( $gni_data ) ) {
         foreach ( $gni_data as $iso3 => $row ) {
@@ -388,7 +387,7 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
     }
 
     // 2. Inflation
-    $inf_data = geri_fetch_wb_indicator( 'FP.CPI.TOTL.ZG', null, $force, $direct_api );
+    $inf_data = seri_fetch_wb_indicator( 'FP.CPI.TOTL.ZG', null, $force, $direct_api );
     if ( ! empty( $inf_data ) && is_array( $inf_data ) ) {
         foreach ( $inf_data as $iso3 => $row ) {
             if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -401,7 +400,7 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
     }
 
     // 3. Unemployment
-    $unem_data = geri_fetch_wb_indicator( 'SL.UEM.TOTL.ZS', null, $force, $direct_api );
+    $unem_data = seri_fetch_wb_indicator( 'SL.UEM.TOTL.ZS', null, $force, $direct_api );
     if ( ! empty( $unem_data ) && is_array( $unem_data ) ) {
         foreach ( $unem_data as $iso3 => $row ) {
             if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -414,7 +413,7 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
     }
 
     // 4. GDP growth (for divergence only, not a fallback for GNI)
-    $gdp_data = geri_fetch_wb_indicator( 'NY.GDP.MKTP.KD.ZG', null, $force, $direct_api );
+    $gdp_data = seri_fetch_wb_indicator( 'NY.GDP.MKTP.KD.ZG', null, $force, $direct_api );
     foreach ( $gdp_data as $iso3 => $row ) {
         if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
         $val = blomstra_safe_numeric( $row['value'] ?? null );
@@ -425,7 +424,7 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
     }
 
     // 5. GDP volatility (derived)
-    $gdp_history = geri_fetch_history_5yr( 'NY.GDP.MKTP.KD.ZG', null, $direct_api );
+    $gdp_history = seri_fetch_history_5yr( 'NY.GDP.MKTP.KD.ZG', null, $direct_api );
     foreach ( $gdp_history as $iso3 => $values ) {
         if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
         $vals = array_values( $values );
@@ -441,7 +440,7 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
     }
 
     // 6. Inflation volatility (derived)
-    $inf_history = geri_fetch_history_5yr( 'FP.CPI.TOTL.ZG', null, $direct_api );
+    $inf_history = seri_fetch_history_5yr( 'FP.CPI.TOTL.ZG', null, $direct_api );
     foreach ( $inf_history as $iso3 => $values ) {
         if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
         $vals = array_values( $values );
@@ -456,12 +455,12 @@ function geri_fetch_macro( $force = false, $direct_api = false ) {
         }
     }
 
-    update_option( GERI_MACRO_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
-    update_option( GERI_MACRO_KEY, array( 'data' => $raw, 'sources' => $sources ), false );
+    update_option( SERI_MACRO_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
+    update_option( SERI_MACRO_KEY, array( 'data' => $raw, 'sources' => $sources ), false );
     return $raw;
 }
 
-function geri_fetch_external( $force = false, $direct_api = false ) {
+function seri_fetch_external( $force = false, $direct_api = false ) {
     $raw = array();
     $sources = array();
 
@@ -473,7 +472,7 @@ function geri_fetch_external( $force = false, $direct_api = false ) {
     );
 
     foreach ( $indicators as $code => $name ) {
-        $data = geri_fetch_wb_indicator( $code, null, $force, $direct_api );
+        $data = seri_fetch_wb_indicator( $code, null, $force, $direct_api );
         if ( ! empty( $data ) && is_array( $data ) ) {
             foreach ( $data as $iso3 => $row ) {
                 if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
@@ -490,22 +489,22 @@ function geri_fetch_external( $force = false, $direct_api = false ) {
     // a different concept (annual % growth) than DT.DOD.DECT.GN.ZS (debt % GNI).
     // Missing data is now correctly treated as missing.
 
-    update_option( GERI_EXTERNAL_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
-    update_option( GERI_EXTERNAL_KEY, array( 'data' => $raw, 'sources' => $sources ), false );
+    update_option( SERI_EXTERNAL_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
+    update_option( SERI_EXTERNAL_KEY, array( 'data' => $raw, 'sources' => $sources ), false );
     return $raw;
 }
 
-function geri_fetch_fiscal( $force = false, $direct_api = false ) {
+function seri_fetch_fiscal( $force = false, $direct_api = false ) {
     $raw = array();
     $sources = array();
 
     // 1. PRIMARY: IMF WEO (general government debt)
-    $imf_debt = geri_fetch_imf_indicator( 'GGXWDG_NGDP', $direct_api );
-    $imf_balance = geri_fetch_imf_indicator( 'GGXCNL_NGDP', $direct_api );
+    $imf_debt = seri_fetch_imf_indicator( 'GGXWDG_NGDP', $direct_api );
+    $imf_balance = seri_fetch_imf_indicator( 'GGXCNL_NGDP', $direct_api );
 
     // 2. FALLBACK: World Bank (central government debt)
-    $wb_debt = geri_fetch_wb_indicator( 'GC.DOD.TOTL.GD.ZS', null, $force, $direct_api );
-    $wb_balance = geri_fetch_wb_indicator( 'GC.NLD.TOTL.GD.ZS', null, $force, $direct_api );
+    $wb_debt = seri_fetch_wb_indicator( 'GC.DOD.TOTL.GD.ZS', null, $force, $direct_api );
+    $wb_balance = seri_fetch_wb_indicator( 'GC.NLD.TOTL.GD.ZS', null, $force, $direct_api );
 
     // 3. Extract numeric values and years from the returned data
     $imf_debt_vals = array();
@@ -576,7 +575,7 @@ function geri_fetch_fiscal( $force = false, $direct_api = false ) {
     }
 
     // 7. Debt trajectory — CAGR from WB history (derived)
-    $debt_hist = geri_fetch_history_5yr( 'GC.DOD.TOTL.GD.ZS', null, $direct_api );
+    $debt_hist = seri_fetch_history_5yr( 'GC.DOD.TOTL.GD.ZS', null, $direct_api );
     foreach ( $debt_hist as $iso3 => $years ) {
         if ( ! isset( $raw[ $iso3 ] ) ) $raw[ $iso3 ] = array();
         $ts = blomstra_sanitize_timeseries( $years, 4, 2 );
@@ -603,24 +602,24 @@ function geri_fetch_fiscal( $force = false, $direct_api = false ) {
 
     // Store sources and data
     $fiscal_store = array( 'data' => $raw, 'sources' => $sources );
-    update_option( GERI_FISCAL_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
-    update_option( GERI_FISCAL_KEY, $fiscal_store, false );
+    update_option( SERI_FISCAL_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
+    update_option( SERI_FISCAL_KEY, $fiscal_store, false );
     return $raw;
 }
 
 // ─── SCENARIO STORAGE ─────────────────────────────────────────────
 
-function geri_store_scenario( $output, $scenario_id ) {
-    $key = GERI_OPTION_KEY . '_scenario_' . sanitize_key( $scenario_id );
+function seri_store_scenario( $output, $scenario_id ) {
+    $key = SERI_OPTION_KEY . '_scenario_' . sanitize_key( $scenario_id );
     update_option( $key, $output, false );
 }
 
-function geri_list_scenarios() {
+function seri_list_scenarios() {
     global $wpdb;
     $results = array();
-    $rows = $wpdb->get_results( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'blomstra_geo_economic_risk_index_scenario_%'" );
+    $rows = $wpdb->get_results( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'seri_composite_index_scenario_%'" );
     foreach ( $rows as $row ) {
-        $id = str_replace( 'blomstra_geo_economic_risk_index_scenario_', '', $row->option_name );
+        $id = str_replace( 'seri_composite_index_scenario_', '', $row->option_name );
         $data = get_option( $row->option_name );
         if ( $data ) {
             $results[ $id ] = $data;
@@ -629,13 +628,13 @@ function geri_list_scenarios() {
     return $results;
 }
 
-function geri_delete_scenario( $scenario_id ) {
-    delete_option( GERI_OPTION_KEY . '_scenario_' . sanitize_key( $scenario_id ) );
+function seri_delete_scenario( $scenario_id ) {
+    delete_option( SERI_OPTION_KEY . '_scenario_' . sanitize_key( $scenario_id ) );
 }
 
 // ─── SPEARMAN CORRELATION ─────────────────────────────────────────
 
-function geri_spearman_correlation( $x, $y ) {
+function seri_spearman_correlation( $x, $y ) {
     $n = count( $x );
     if ( $n < 2 ) {
         return 0;
@@ -663,8 +662,8 @@ function geri_spearman_correlation( $x, $y ) {
 
 // ─── COMPOSITE BUILDER ─────────────────────────────────────────────
 
-function geri_build_composite( $force = false, $context = 'manual', $custom_weights = null, $custom_composite_weights = null ) {
-    // 🔧 FIX: detect if this is a scenario build (custom weights were passed)
+function seri_build_composite( $force = false, $context = 'manual', $custom_weights = null, $custom_composite_weights = null ) {
+    // Detect if this is a scenario build
     $is_scenario = ( $custom_weights !== null || $custom_composite_weights !== null );
 
     if ( function_exists( 'set_time_limit' ) ) {
@@ -672,10 +671,10 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
     }
 
     // Load data and sources for each pillar
-    $gov_store = get_option( GERI_GOVERNANCE_KEY, array() );
-    $macro_store = get_option( GERI_MACRO_KEY, array() );
-    $ext_store = get_option( GERI_EXTERNAL_KEY, array() );
-    $fisc_store = get_option( GERI_FISCAL_KEY, array() );
+    $gov_store = get_option( SERI_GOVERNANCE_KEY, array() );
+    $macro_store = get_option( SERI_MACRO_KEY, array() );
+    $ext_store = get_option( SERI_EXTERNAL_KEY, array() );
+    $fisc_store = get_option( SERI_FISCAL_KEY, array() );
 
     $gov_data = $gov_store['data'] ?? array();
     $macro_data = $macro_store['data'] ?? array();
@@ -721,8 +720,8 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
     unset( $row );
 
     // Use custom weights if provided, else fallback to default
-    $weight_defs = $custom_weights ?? geri_get_pillar_weights();
-    $composite_weights = $custom_composite_weights ?? geri_get_composite_weights();
+    $weight_defs = $custom_weights ?? seri_get_pillar_weights();
+    $composite_weights = $custom_composite_weights ?? seri_get_composite_weights();
 
     // Ensure composite weights are valid
     $all_pillars = array( 'governance', 'macro', 'external', 'fiscal' );
@@ -882,7 +881,7 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
         $valid_pillars = array_filter( $pillars, function( $v ) { return $v !== null; } );
         $coverage = count( $valid_pillars );
 
-        if ( $coverage < GERI_MIN_PILLARS_REQUIRED ) {
+        if ( $coverage < SERI_MIN_PILLARS_REQUIRED ) {
             $excluded[ $iso3 ] = 'Insufficient pillar coverage: ' . $coverage . '/4 pillars available.';
             continue;
         }
@@ -1011,14 +1010,12 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
         );
 
         // ─── FISCAL SOURCE SUMMARY ──────────────────────────────
-        // Defensive check: ensure fisc_sources is an array
         $fisc_sources_safe = is_array( $fisc_sources ) ? $fisc_sources : array();
         $fiscal_summary = blomstra_pillar_source_summary(
             $fisc_sources_safe, $iso3,
             array( 'gov_debt', 'gov_balance', 'debt_trajectory' )
         );
 
-        // If summary is null, provide default values
         if ( $fiscal_summary === null ) {
             $fiscal_summary = array(
                 'breakdown' => array(
@@ -1054,7 +1051,7 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
         $country_output[ $iso3 ] = array(
             'iso3' => $iso3,
             'name' => $countries[ $iso3 ] ?? $iso3,
-            'geri_structural' => round( $composite, 2 ),
+            'seri_structural' => round( $composite, 2 ),
             'coverage' => $coverage_type,
             'pillars_missing' => $missing_pillars_list,
             'data_freshness' => $freshness,
@@ -1080,9 +1077,9 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
         $partial_countries = array();
         foreach ( $country_output as $iso3 => $out ) {
             if ( $out['coverage'] === 'full' ) {
-                $full_countries[ $iso3 ] = $out['geri_structural'];
+                $full_countries[ $iso3 ] = $out['seri_structural'];
             } else {
-                $partial_countries[ $iso3 ] = $out['geri_structural'];
+                $partial_countries[ $iso3 ] = $out['seri_structural'];
             }
         }
 
@@ -1165,10 +1162,10 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
     }
 
     // 8. Forward Pressure
-    $imf_defs = geri_get_imf_forecast_defs();
+    $imf_defs = seri_get_imf_forecast_defs();
     $imf_forecast = array();
     foreach ( $imf_defs as $code => $name ) {
-        $data = geri_fetch_imf_forecast( $code, 1, false, false );
+        $data = seri_fetch_imf_forecast( $code, 1, false, false );
         $imf_forecast[ $name ] = $data;
     }
     $imf_current = array();
@@ -1217,7 +1214,7 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
         }
         if ( count( $fwd_scores ) >= 4 ) {
             $fwd = array_sum( $fwd_scores ) / count( $fwd_scores );
-            $out['geri_forward_pressure'] = round( $fwd, 2 );
+            $out['seri_forward_pressure'] = round( $fwd, 2 );
             if ( count( $direction_signals ) >= 4 ) {
                 $avg_delta = array_sum( $direction_signals ) / count( $direction_signals );
                 $out['forward_delta_avg'] = round( $avg_delta, 2 );
@@ -1232,7 +1229,7 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
                 $out['forward_direction'] = null;
             }
         } else {
-            $out['geri_forward_pressure'] = null;
+            $out['seri_forward_pressure'] = null;
             $out['forward_direction'] = null;
             $out['forward_delta_avg'] = null;
         }
@@ -1242,11 +1239,11 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
     // 9. Output
     $weo_vintage = function_exists( 'blomstra_get_weo_vintage' ) ? blomstra_get_weo_vintage() : 'April 2026';
     $output = array(
-        'version'            => GERI_VERSION,
+        'version'            => SERI_VERSION,
         'last_updated'       => current_time( 'mysql', true ),
         'reference_vintage'  => date( 'Y' ),
         'weo_vintage'        => $weo_vintage,
-        'min_pillars_required' => GERI_MIN_PILLARS_REQUIRED,
+        'min_pillars_required' => SERI_MIN_PILLARS_REQUIRED,
         'weights' => array(
             'governance' => $composite_weights['governance'] ?? 25,
             'macro'      => $composite_weights['macro'] ?? 25,
@@ -1261,16 +1258,16 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
     );
 
     // 10. Cron safeguards
-    $previous = get_option( GERI_OPTION_KEY, null );
+    $previous = get_option( SERI_OPTION_KEY, null );
     $should_keep_old = false;
 
-    // Skip cron safeguard for scenario builds (they shouldn't trigger false alarms)
+    // Skip cron safeguard for scenario builds
     if ( ! $is_scenario && $context === 'cron' && $previous && ! empty( $previous['countries'] ) ) {
         $prev_count = count( $previous['countries'] );
         $new_count = count( $output['countries'] );
         if ( $new_count < 0.8 * $prev_count && $new_count < 50 ) {
             error_log( 'SERI: Automated build failed – new country count (' . $new_count . ') is significantly lower than previous (' . $prev_count . '). Keeping old composite.' );
-            set_transient( 'geri_auto_build_failed', 'yes', DAY_IN_SECONDS );
+            set_transient( 'seri_auto_build_failed', 'yes', DAY_IN_SECONDS );
             $should_keep_old = true;
         }
     }
@@ -1279,18 +1276,18 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
         return $previous;
     }
 
-    // 🔒 Only persist to the live option if this is a REAL build (not a scenario)
+    // Only persist to the live option if this is a REAL build (not a scenario)
     if ( ! $is_scenario ) {
-        $staging_key = GERI_OPTION_KEY . '_tmp';
+        $staging_key = SERI_OPTION_KEY . '_tmp';
         update_option( $staging_key, $output, false );
-        update_option( GERI_OPTION_KEY, $output, false );
+        update_option( SERI_OPTION_KEY, $output, false );
         delete_option( $staging_key );
 
         if ( function_exists( 'blomstra_index_snapshot_save' ) ) {
             $snap = array();
             foreach ( $country_output as $iso3 => $data ) {
                 $snap[ $iso3 ] = array(
-                    'composite_score' => $data['geri_structural'] ?? null,
+                    'composite_score' => $data['seri_structural'] ?? null,
                     'rank' => $data['rank_display']['best_estimate'] ?? null,
                     'coverage_type' => $data['coverage'] ?? 'full',
                     'governance' => $data['pillars']['governance']['score'] ?? null,
@@ -1299,7 +1296,7 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
                     'fiscal'     => $data['pillars']['fiscal']['score'] ?? null,
                 );
             }
-            blomstra_index_snapshot_save( 'geri', $snap );
+            blomstra_index_snapshot_save( 'seri', $snap );
         }
     }
 
@@ -1308,8 +1305,8 @@ function geri_build_composite( $force = false, $context = 'manual', $custom_weig
 
 // ─── VALIDATION ON INIT ─────────────────────────────────────────────
 
-function geri_initialize() {
-    $validation = blomstra_validate_pillar_thresholds( geri_get_pillar_defs(), geri_get_pillar_weights() );
+function seri_initialize() {
+    $validation = blomstra_validate_pillar_thresholds( seri_get_pillar_defs(), seri_get_pillar_weights() );
     if ( ! $validation['valid'] ) {
         foreach ( $validation['mismatches'] as $m ) {
             error_log( 'SERI Definition Mismatch: ' . $m['issue'] );
@@ -1319,111 +1316,111 @@ function geri_initialize() {
         }
     }
 }
-add_action( 'init', 'geri_initialize' );
+add_action( 'init', 'seri_initialize' );
 
 // ─── ASYNC FETCH CALLBACKS ─────────────────────────────────────────
 
-function geri_async_fetch_governance_callback() {
-    geri_fetch_governance( true, false );
+function seri_async_fetch_governance_callback() {
+    seri_fetch_governance( true, false );
 }
-add_action( 'geri_async_fetch_governance', 'geri_async_fetch_governance_callback' );
+add_action( 'seri_async_fetch_governance', 'seri_async_fetch_governance_callback' );
 
-function geri_async_fetch_macro_callback() {
-    geri_fetch_macro( true, false );
+function seri_async_fetch_macro_callback() {
+    seri_fetch_macro( true, false );
 }
-add_action( 'geri_async_fetch_macro', 'geri_async_fetch_macro_callback' );
+add_action( 'seri_async_fetch_macro', 'seri_async_fetch_macro_callback' );
 
-function geri_async_fetch_external_callback() {
-    geri_fetch_external( true, false );
+function seri_async_fetch_external_callback() {
+    seri_fetch_external( true, false );
 }
-add_action( 'geri_async_fetch_external', 'geri_async_fetch_external_callback' );
+add_action( 'seri_async_fetch_external', 'seri_async_fetch_external_callback' );
 
-function geri_async_fetch_fiscal_callback() {
-    geri_fetch_fiscal( true, false );
+function seri_async_fetch_fiscal_callback() {
+    seri_fetch_fiscal( true, false );
 }
-add_action( 'geri_async_fetch_fiscal', 'geri_async_fetch_fiscal_callback' );
+add_action( 'seri_async_fetch_fiscal', 'seri_async_fetch_fiscal_callback' );
 
 // ─── ASYNC REFRESH ─────────────────────────────────────────────────
 
-function geri_async_refresh_callback() {
-    $direct_api = get_option( 'geri_emergency_direct_api_flag', false );
+function seri_async_refresh_callback() {
+    $direct_api = get_option( 'seri_emergency_direct_api_flag', false );
     if ( $direct_api ) {
-        delete_option( 'geri_emergency_direct_api_flag' );
+        delete_option( 'seri_emergency_direct_api_flag' );
     }
 
-    $previous = get_option( GERI_OPTION_KEY, null );
+    $previous = get_option( SERI_OPTION_KEY, null );
 
-    geri_fetch_governance( true, $direct_api );
-    geri_fetch_macro( true, $direct_api );
-    geri_fetch_external( true, $direct_api );
-    geri_fetch_fiscal( true, $direct_api );
+    seri_fetch_governance( true, $direct_api );
+    seri_fetch_macro( true, $direct_api );
+    seri_fetch_external( true, $direct_api );
+    seri_fetch_fiscal( true, $direct_api );
 
-    $result = geri_build_composite( false, 'async' );
+    $result = seri_build_composite( false, 'async' );
 
     if ( isset( $result['error'] ) && $previous ) {
         error_log( 'SERI Async: Build failed, keeping previous composite.' );
-        set_transient( 'geri_auto_build_failed', 'yes', DAY_IN_SECONDS );
-        if ( get_option( GERI_OPTION_KEY, null ) !== $previous ) {
-            update_option( GERI_OPTION_KEY, $previous, false );
+        set_transient( 'seri_auto_build_failed', 'yes', DAY_IN_SECONDS );
+        if ( get_option( SERI_OPTION_KEY, null ) !== $previous ) {
+            update_option( SERI_OPTION_KEY, $previous, false );
         }
     }
 }
-add_action( GERI_REFRESH_HOOK, 'geri_async_refresh_callback' );
+add_action( SERI_REFRESH_HOOK, 'seri_async_refresh_callback' );
 
 // ─── DAILY CRON ─────────────────────────────────────────────────────
 
 add_action( 'init', function () {
-    if ( ! wp_next_scheduled( GERI_DAILY_CRON_HOOK ) ) {
-        wp_schedule_event( time() + 300, 'daily', GERI_DAILY_CRON_HOOK );
+    if ( ! wp_next_scheduled( SERI_DAILY_CRON_HOOK ) ) {
+        wp_schedule_event( time() + 300, 'daily', SERI_DAILY_CRON_HOOK );
     }
 } );
 
-add_action( GERI_DAILY_CRON_HOOK, function () {
+add_action( SERI_DAILY_CRON_HOOK, function () {
     if ( function_exists( 'blomstra_update_cron_status' ) ) {
-        blomstra_update_cron_status( 'geri_daily', 'running', 'Daily cron: refreshing pillar data...' );
+        blomstra_update_cron_status( 'seri_daily', 'running', 'Daily cron: refreshing pillar data...' );
     }
-    geri_fetch_governance( true, false );
-    geri_fetch_macro( true, false );
-    geri_fetch_external( true, false );
-    geri_fetch_fiscal( true, false );
-    $result = geri_build_composite( false, 'cron' );
+    seri_fetch_governance( true, false );
+    seri_fetch_macro( true, false );
+    seri_fetch_external( true, false );
+    seri_fetch_fiscal( true, false );
+    $result = seri_build_composite( false, 'cron' );
     if ( function_exists( 'blomstra_update_cron_status' ) ) {
         $msg = isset( $result['total_countries'] ) ? $result['total_countries'] . ' countries scored.' : 'Build completed.';
-        blomstra_update_cron_status( 'geri_daily', 'success', $msg, $result['total_countries'] ?? 0 );
+        blomstra_update_cron_status( 'seri_daily', 'success', $msg, $result['total_countries'] ?? 0 );
     }
 } );
 
 // ─── WEEKLY CRON ────────────────────────────────────────────────────
 
 add_action( 'init', function () {
-    if ( ! wp_next_scheduled( GERI_CRON_HOOK ) ) {
-        wp_schedule_event( time() + 300, 'weekly', GERI_CRON_HOOK );
+    if ( ! wp_next_scheduled( SERI_CRON_HOOK ) ) {
+        wp_schedule_event( time() + 300, 'weekly', SERI_CRON_HOOK );
     }
 } );
 
-add_action( GERI_CRON_HOOK, function () {
+add_action( SERI_CRON_HOOK, function () {
     if ( function_exists( 'blomstra_update_cron_status' ) ) {
-        blomstra_update_cron_status( 'geri', 'running', 'SERI weekly cron started...' );
+        blomstra_update_cron_status( 'seri', 'running', 'SERI weekly cron started...' );
     }
-    geri_fetch_governance( true, false );
-    geri_fetch_macro( true, false );
-    geri_fetch_external( true, false );
-    geri_fetch_fiscal( true, false );
-    $result = geri_build_composite( false, 'cron' );
+    seri_fetch_governance( true, false );
+    seri_fetch_macro( true, false );
+    seri_fetch_external( true, false );
+    seri_fetch_fiscal( true, false );
+    $result = seri_build_composite( false, 'cron' );
     if ( function_exists( 'blomstra_update_cron_status' ) ) {
         $msg = isset( $result['total_countries'] ) ? $result['total_countries'] . ' countries scored.' : 'Build completed.';
-        blomstra_update_cron_status( 'geri', 'success', $msg, $result['total_countries'] ?? 0 );
+        blomstra_update_cron_status( 'seri', 'success', $msg, $result['total_countries'] ?? 0 );
     }
 } );
 
 // ─── REST ENDPOINT ──────────────────────────────────────────────────
 
 add_action( 'rest_api_init', function () {
-    register_rest_route( 'blomstra/v1', '/geo-economic-risk-index', array(
+    register_rest_route( 'blomstra/v1', '/sovereign-economic-resilience-index', array(
         'methods'             => 'GET',
         'permission_callback' => '__return_true',
         'callback'            => function () {
-            $data = get_option( GERI_OPTION_KEY, null );
+            $data = get_option( SERI_OPTION_KEY, null );
             if ( ! $data ) {
                 return new WP_Error( 'no_data', 'Index has not been generated yet.', array( 'status' => 404 ) );
             }
@@ -1441,7 +1438,7 @@ add_action( 'admin_menu', function () {
         'SERI Index',
         'manage_options',
         'blomstra-sovereign-economic-resilience-index',
-        'geri_render_admin_page'
+        'seri_render_admin_page'
     );
 } );
 
@@ -1453,108 +1450,108 @@ add_action( 'admin_init', function() {
     }
 } );
 
-function geri_render_admin_page() {
+function seri_render_admin_page() {
     // ── Handle actions ────────────────────────────────────────────
-    if ( isset( $_POST['geri_fetch_governance'] ) && check_admin_referer( 'geri_fetch_governance_action' ) ) {
-        wp_schedule_single_event( time(), 'geri_async_fetch_governance' );
+    if ( isset( $_POST['seri_fetch_governance'] ) && check_admin_referer( 'seri_fetch_governance_action' ) ) {
+        wp_schedule_single_event( time(), 'seri_async_fetch_governance' );
         echo '<div class="notice notice-info"><p>⏳ Governance fetch queued as background task. Refresh the page shortly.</p></div>';
     }
-    if ( isset( $_POST['geri_fetch_macro'] ) && check_admin_referer( 'geri_fetch_macro_action' ) ) {
-        wp_schedule_single_event( time(), 'geri_async_fetch_macro' );
+    if ( isset( $_POST['seri_fetch_macro'] ) && check_admin_referer( 'seri_fetch_macro_action' ) ) {
+        wp_schedule_single_event( time(), 'seri_async_fetch_macro' );
         echo '<div class="notice notice-info"><p>⏳ Macro fetch queued as background task. Refresh the page shortly.</p></div>';
     }
-    if ( isset( $_POST['geri_fetch_external'] ) && check_admin_referer( 'geri_fetch_external_action' ) ) {
-        wp_schedule_single_event( time(), 'geri_async_fetch_external' );
+    if ( isset( $_POST['seri_fetch_external'] ) && check_admin_referer( 'seri_fetch_external_action' ) ) {
+        wp_schedule_single_event( time(), 'seri_async_fetch_external' );
         echo '<div class="notice notice-info"><p>⏳ External fetch queued as background task. Refresh the page shortly.</p></div>';
     }
-    if ( isset( $_POST['geri_fetch_fiscal'] ) && check_admin_referer( 'geri_fetch_fiscal_action' ) ) {
-        wp_schedule_single_event( time(), 'geri_async_fetch_fiscal' );
+    if ( isset( $_POST['seri_fetch_fiscal'] ) && check_admin_referer( 'seri_fetch_fiscal_action' ) ) {
+        wp_schedule_single_event( time(), 'seri_async_fetch_fiscal' );
         echo '<div class="notice notice-info"><p>⏳ Fiscal fetch queued as background task. Refresh the page shortly.</p></div>';
     }
 
     // ── API Direct ──────────────────────────────────────────────────
-    if ( isset( $_POST['geri_fetch_api_governance'] ) && check_admin_referer( 'geri_fetch_api_governance_action' ) ) {
-        $data = geri_fetch_governance( true, true );
+    if ( isset( $_POST['seri_fetch_api_governance'] ) && check_admin_referer( 'seri_fetch_api_governance_action' ) ) {
+        $data = seri_fetch_governance( true, true );
         echo '<div class="notice notice-success"><p>✅ Governance: fetched from API directly (' . count( $data ) . ' countries).</p></div>';
     }
-    if ( isset( $_POST['geri_fetch_api_macro'] ) && check_admin_referer( 'geri_fetch_api_macro_action' ) ) {
-        $data = geri_fetch_macro( true, true );
+    if ( isset( $_POST['seri_fetch_api_macro'] ) && check_admin_referer( 'seri_fetch_api_macro_action' ) ) {
+        $data = seri_fetch_macro( true, true );
         echo '<div class="notice notice-success"><p>✅ Macro: fetched from API directly (' . count( $data ) . ' countries).</p></div>';
     }
-    if ( isset( $_POST['geri_fetch_api_external'] ) && check_admin_referer( 'geri_fetch_api_external_action' ) ) {
-        $data = geri_fetch_external( true, true );
+    if ( isset( $_POST['seri_fetch_api_external'] ) && check_admin_referer( 'seri_fetch_api_external_action' ) ) {
+        $data = seri_fetch_external( true, true );
         echo '<div class="notice notice-success"><p>✅ External: fetched from API directly (' . count( $data ) . ' countries).</p></div>';
     }
-    if ( isset( $_POST['geri_fetch_api_fiscal'] ) && check_admin_referer( 'geri_fetch_api_fiscal_action' ) ) {
-        $data = geri_fetch_fiscal( true, true );
+    if ( isset( $_POST['seri_fetch_api_fiscal'] ) && check_admin_referer( 'seri_fetch_api_fiscal_action' ) ) {
+        $data = seri_fetch_fiscal( true, true );
         echo '<div class="notice notice-success"><p>✅ Fiscal: fetched from API directly (' . count( $data ) . ' countries).</p></div>';
     }
 
     // ── Flush per pillar ──────────────────────────────────────────
-    if ( isset( $_POST['geri_flush_governance'] ) && check_admin_referer( 'geri_flush_governance_action' ) ) {
-        delete_option( GERI_GOVERNANCE_KEY );
-        delete_option( GERI_GOVERNANCE_META_KEY );
+    if ( isset( $_POST['seri_flush_governance'] ) && check_admin_referer( 'seri_flush_governance_action' ) ) {
+        delete_option( SERI_GOVERNANCE_KEY );
+        delete_option( SERI_GOVERNANCE_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ Governance pillar cache flushed.</p></div>';
     }
-    if ( isset( $_POST['geri_flush_macro'] ) && check_admin_referer( 'geri_flush_macro_action' ) ) {
-        delete_option( GERI_MACRO_KEY );
-        delete_option( GERI_MACRO_META_KEY );
+    if ( isset( $_POST['seri_flush_macro'] ) && check_admin_referer( 'seri_flush_macro_action' ) ) {
+        delete_option( SERI_MACRO_KEY );
+        delete_option( SERI_MACRO_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ Macro pillar cache flushed.</p></div>';
     }
-    if ( isset( $_POST['geri_flush_external'] ) && check_admin_referer( 'geri_flush_external_action' ) ) {
-        delete_option( GERI_EXTERNAL_KEY );
-        delete_option( GERI_EXTERNAL_META_KEY );
+    if ( isset( $_POST['seri_flush_external'] ) && check_admin_referer( 'seri_flush_external_action' ) ) {
+        delete_option( SERI_EXTERNAL_KEY );
+        delete_option( SERI_EXTERNAL_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ External pillar cache flushed.</p></div>';
     }
-    if ( isset( $_POST['geri_flush_fiscal'] ) && check_admin_referer( 'geri_flush_fiscal_action' ) ) {
-        delete_option( GERI_FISCAL_KEY );
-        delete_option( GERI_FISCAL_META_KEY );
+    if ( isset( $_POST['seri_flush_fiscal'] ) && check_admin_referer( 'seri_flush_fiscal_action' ) ) {
+        delete_option( SERI_FISCAL_KEY );
+        delete_option( SERI_FISCAL_META_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ Fiscal pillar cache flushed.</p></div>';
     }
 
     // ── Build from cache ──────────────────────────────────────────
-    if ( isset( $_POST['geri_build_cache'] ) && check_admin_referer( 'geri_build_cache_action' ) ) {
-        $data = geri_build_composite( false, 'manual' );
+    if ( isset( $_POST['seri_build_cache'] ) && check_admin_referer( 'seri_build_cache_action' ) ) {
+        $data = seri_build_composite( false, 'manual' );
         echo '<div class="notice notice-success"><p>✅ Composite built from pillar cache: ' . esc_html( $data['total_countries'] ) . ' countries scored (' . esc_html( $data['excluded_countries'] ) . ' excluded).</p></div>';
     }
 
     // ── Fetch All (Async) ──────────────────────────────────────────
-    if ( isset( $_POST['geri_fetch_all_async'] ) && check_admin_referer( 'geri_fetch_all_async_action' ) ) {
-        wp_schedule_single_event( time(), GERI_REFRESH_HOOK );
+    if ( isset( $_POST['seri_fetch_all_async'] ) && check_admin_referer( 'seri_fetch_all_async_action' ) ) {
+        wp_schedule_single_event( time(), SERI_REFRESH_HOOK );
         echo '<div class="notice notice-info"><p>🔄 All pillars queued for background refresh. Please wait a few minutes and refresh the page.</p></div>';
     }
 
     // ── Emergency API ──────────────────────────────────────────────
-    if ( isset( $_POST['geri_emergency_api_build'] ) && check_admin_referer( 'geri_emergency_api_build_action' ) ) {
-        update_option( 'geri_emergency_direct_api_flag', true, false );
-        wp_schedule_single_event( time(), GERI_REFRESH_HOOK );
+    if ( isset( $_POST['seri_emergency_api_build'] ) && check_admin_referer( 'seri_emergency_api_build_action' ) ) {
+        update_option( 'seri_emergency_direct_api_flag', true, false );
+        wp_schedule_single_event( time(), SERI_REFRESH_HOOK );
         echo '<div class="notice notice-info"><p>🚨 Emergency API refresh queued as background task. Please wait a few minutes and refresh the page.</p></div>';
     }
 
     // ── Flush All ──────────────────────────────────────────────────
-    if ( isset( $_POST['geri_flush_all_confirmed'] ) && check_admin_referer( 'geri_flush_all_action' ) ) {
-        delete_option( GERI_GOVERNANCE_KEY );
-        delete_option( GERI_MACRO_KEY );
-        delete_option( GERI_EXTERNAL_KEY );
-        delete_option( GERI_FISCAL_KEY );
-        delete_option( GERI_GOVERNANCE_META_KEY );
-        delete_option( GERI_MACRO_META_KEY );
-        delete_option( GERI_EXTERNAL_META_KEY );
-        delete_option( GERI_FISCAL_META_KEY );
-        delete_option( GERI_OPTION_KEY );
+    if ( isset( $_POST['seri_flush_all_confirmed'] ) && check_admin_referer( 'seri_flush_all_action' ) ) {
+        delete_option( SERI_GOVERNANCE_KEY );
+        delete_option( SERI_MACRO_KEY );
+        delete_option( SERI_EXTERNAL_KEY );
+        delete_option( SERI_FISCAL_KEY );
+        delete_option( SERI_GOVERNANCE_META_KEY );
+        delete_option( SERI_MACRO_META_KEY );
+        delete_option( SERI_EXTERNAL_META_KEY );
+        delete_option( SERI_FISCAL_META_KEY );
+        delete_option( SERI_OPTION_KEY );
         echo '<div class="notice notice-warning"><p>🗑️ All SERI pillar caches and composite have been flushed.</p></div>';
     }
 
     // ── Force daily cron ──────────────────────────────────────────
-    if ( isset( $_POST['geri_force_daily_cron'] ) && check_admin_referer( 'geri_force_daily_cron_action' ) ) {
-        wp_schedule_single_event( time(), GERI_DAILY_CRON_HOOK );
+    if ( isset( $_POST['seri_force_daily_cron'] ) && check_admin_referer( 'seri_force_daily_cron_action' ) ) {
+        wp_schedule_single_event( time(), SERI_DAILY_CRON_HOOK );
         echo '<div class="notice notice-info"><p>🧪 Daily cron triggered (will refresh pillars and rebuild). Result will appear shortly.</p></div>';
     }
 
     // ─── SENSITIVITY TESTING ──────────────────────────────────────
-    if ( isset( $_POST['geri_build_scenario'] ) && check_admin_referer( 'geri_build_scenario_action' ) ) {
-        $scenario_name = sanitize_key( $_POST['geri_scenario_name'] );
-        $raw_json = wp_unslash( $_POST['geri_custom_weights'] );
+    if ( isset( $_POST['seri_build_scenario'] ) && check_admin_referer( 'seri_build_scenario_action' ) ) {
+        $scenario_name = sanitize_key( $_POST['seri_scenario_name'] );
+        $raw_json = wp_unslash( $_POST['seri_custom_weights'] );
         $json = json_decode( $raw_json, true );
 
         if ( $json === null ) {
@@ -1566,34 +1563,33 @@ function geri_render_admin_page() {
             if ( abs( $sum - 100 ) > 0.1 ) {
                 echo '<div class="notice notice-error"><p>❌ Composite weights must sum to 100. Current sum: ' . esc_html( $sum ) . '</p></div>';
             } else {
-                // Pass the weights and mark as scenario via context (optional, but the guard uses $is_scenario internally)
-                $result = geri_build_composite( false, 'scenario', $json['pillars'], $json['composite'] );
-                geri_store_scenario( $result, $scenario_name );
+                $result = seri_build_composite( false, 'scenario', $json['pillars'], $json['composite'] );
+                seri_store_scenario( $result, $scenario_name );
                 echo '<div class="notice notice-success"><p>✅ Scenario <strong>' . esc_html( $scenario_name ) . '</strong> built: ' . esc_html( $result['total_countries'] ) . ' countries scored.</p></div>';
             }
         }
     }
 
-    if ( isset( $_POST['geri_delete_scenario'] ) && check_admin_referer( 'geri_delete_scenario_action' ) ) {
-        $scenario_id = sanitize_key( $_POST['geri_delete_scenario'] );
-        geri_delete_scenario( $scenario_id );
+    if ( isset( $_POST['seri_delete_scenario'] ) && check_admin_referer( 'seri_delete_scenario_action' ) ) {
+        $scenario_id = sanitize_key( $_POST['seri_delete_scenario'] );
+        seri_delete_scenario( $scenario_id );
         echo '<div class="notice notice-warning"><p>🗑️ Scenario <strong>' . esc_html( $scenario_id ) . '</strong> deleted.</p></div>';
     }
 
-    $existing = get_option( GERI_OPTION_KEY, null );
-    $next_cron = wp_next_scheduled( GERI_CRON_HOOK );
+    $existing = get_option( SERI_OPTION_KEY, null );
+    $next_cron = wp_next_scheduled( SERI_CRON_HOOK );
     $last_cron = get_option( 'blomstra_cron_status', array() );
-    $geri_status = $last_cron['geri'] ?? null;
+    $seri_status = $last_cron['seri'] ?? null;
 
-    $gov_meta = get_option( GERI_GOVERNANCE_META_KEY, array() );
-    $macro_meta = get_option( GERI_MACRO_META_KEY, array() );
-    $ext_meta = get_option( GERI_EXTERNAL_META_KEY, array() );
-    $fisc_meta = get_option( GERI_FISCAL_META_KEY, array() );
+    $gov_meta = get_option( SERI_GOVERNANCE_META_KEY, array() );
+    $macro_meta = get_option( SERI_MACRO_META_KEY, array() );
+    $ext_meta = get_option( SERI_EXTERNAL_META_KEY, array() );
+    $fisc_meta = get_option( SERI_FISCAL_META_KEY, array() );
 
-    $gov_store = get_option( GERI_GOVERNANCE_KEY, array() );
-    $macro_store = get_option( GERI_MACRO_KEY, array() );
-    $ext_store = get_option( GERI_EXTERNAL_KEY, array() );
-    $fisc_store = get_option( GERI_FISCAL_KEY, array() );
+    $gov_store = get_option( SERI_GOVERNANCE_KEY, array() );
+    $macro_store = get_option( SERI_MACRO_KEY, array() );
+    $ext_store = get_option( SERI_EXTERNAL_KEY, array() );
+    $fisc_store = get_option( SERI_FISCAL_KEY, array() );
 
     $gov_data = $gov_store['data'] ?? array();
     $macro_data = $macro_store['data'] ?? array();
@@ -1706,27 +1702,27 @@ function geri_render_admin_page() {
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Composite Index</strong><span style="font-size:14px;">' . $composite_fresh . '</span></div>';
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Build Lock</strong><span style="font-size:14px;">🔓 Free</span></div>';
     $last_run = null;
-    if ( $geri_status && isset( $geri_status['last_run'] ) ) {
-        $last_run = $geri_status['last_run'];
+    if ( $seri_status && isset( $seri_status['last_run'] ) ) {
+        $last_run = $seri_status['last_run'];
     }
-    if ( isset( $last_cron['geri_daily'] ) && isset( $last_cron['geri_daily']['last_run'] ) ) {
-        if ( ! $last_run || strtotime( $last_cron['geri_daily']['last_run'] ) > strtotime( $last_run ) ) {
-            $last_run = $last_cron['geri_daily']['last_run'];
+    if ( isset( $last_cron['seri_daily'] ) && isset( $last_cron['seri_daily']['last_run'] ) ) {
+        if ( ! $last_run || strtotime( $last_cron['seri_daily']['last_run'] ) > strtotime( $last_run ) ) {
+            $last_run = $last_cron['seri_daily']['last_run'];
         }
     }
     $last_fire_display = $last_run ? $last_run . ' ✅' : 'Never ❌';
     echo '<div><strong style="display:block; font-size:13px; color:#666;">Last Real wp-cron Fire</strong><span style="font-size:14px;">' . $last_fire_display . '</span></div>';
     echo '<div style="margin-left:auto;">';
     echo '<form method="post">';
-    wp_nonce_field( 'geri_force_daily_cron_action' );
-    echo '<input type="submit" name="geri_force_daily_cron" class="button button-secondary" value="🧪 Force Daily Cron Now" style="font-size:12px;">';
+    wp_nonce_field( 'seri_force_daily_cron_action' );
+    echo '<input type="submit" name="seri_force_daily_cron" class="button button-secondary" value="🧪 Force Daily Cron Now" style="font-size:12px;">';
     echo '</form>';
     echo '</div>';
     echo '</div></div>';
 
-    if ( get_transient( 'geri_auto_build_failed' ) ) {
+    if ( get_transient( 'seri_auto_build_failed' ) ) {
         echo '<div class="notice notice-error"><p>⚠️ The automated weekly build failed to fetch complete data. Please run a manual refresh.</p></div>';
-        delete_transient( 'geri_auto_build_failed' );
+        delete_transient( 'seri_auto_build_failed' );
     }
 
     echo '<div style="margin-top:20px;">';
@@ -1736,11 +1732,11 @@ function geri_render_admin_page() {
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-clock"></span> Cron &amp; Automation</h2></div>';
     echo '<div class="inside">';
     echo '<p>Automated weekly refresh: <strong>' . ( $next_cron ? 'ACTIVE — next run ' . esc_html( date_i18n( 'Y-m-d H:i', $next_cron ) ) . ' UTC' : 'NOT SCHEDULED' ) . '</strong></p>';
-    if ( $geri_status ) {
-        echo '<p>Last weekly cron run: <strong>' . esc_html( $geri_status['status'] ) . '</strong> at ' . esc_html( $geri_status['last_run'] ) . ' — ' . esc_html( $geri_status['message'] ) . '</p>';
+    if ( $seri_status ) {
+        echo '<p>Last weekly cron run: <strong>' . esc_html( $seri_status['status'] ) . '</strong> at ' . esc_html( $seri_status['last_run'] ) . ' — ' . esc_html( $seri_status['message'] ) . '</p>';
     }
-    if ( isset( $last_cron['geri_daily'] ) ) {
-        echo '<p>Last daily cron run: <strong>' . esc_html( $last_cron['geri_daily']['status'] ) . '</strong> at ' . esc_html( $last_cron['geri_daily']['last_run'] ) . ' — ' . esc_html( $last_cron['geri_daily']['message'] ) . '</p>';
+    if ( isset( $last_cron['seri_daily'] ) ) {
+        echo '<p>Last daily cron run: <strong>' . esc_html( $last_cron['seri_daily']['status'] ) . '</strong> at ' . esc_html( $last_cron['seri_daily']['last_run'] ) . ' — ' . esc_html( $last_cron['seri_daily']['message'] ) . '</p>';
     }
     echo '</div></div>';
 
@@ -1752,22 +1748,22 @@ function geri_render_admin_page() {
     echo '<strong>Fetch from API Directly</strong> — bypasses Reference Data, calls API directly (sync, fallback).</p>';
     echo '<table class="widefat striped"><thead><tr><th>Pillar</th><th>Status</th><th>Fetch from Central</th><th>Fetch API Direct</th><th>Flush</th></tr></thead><tbody>';
     foreach ( array( 'governance' => 'Governance', 'macro' => 'Macro Stability', 'external' => 'External Vulnerability', 'fiscal' => 'Fiscal Stress' ) as $key => $label ) {
-        $store = get_option( constant( 'GERI_' . strtoupper( $key ) . '_KEY' ), array() );
+        $store = get_option( constant( 'SERI_' . strtoupper( $key ) . '_KEY' ), array() );
         $data = $store['data'] ?? array();
         $count = is_array( $data ) ? count( $data ) : 0;
         $status = $count > 0 ? '<span style="color:#2e7d32;">Cached ✓ (' . $count . ')</span>' : '<span style="color:#d63638;">Not Cached</span>';
         echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td>' . $status . '</td><td>';
         echo '<form method="post" style="display:inline-block; margin-right:5px;">';
-        wp_nonce_field( 'geri_fetch_' . $key . '_action' );
-        echo '<input type="submit" name="geri_fetch_' . $key . '" class="button button-small" style="min-width:140px;" value="📥 Fetch (Async)">';
+        wp_nonce_field( 'seri_fetch_' . $key . '_action' );
+        echo '<input type="submit" name="seri_fetch_' . $key . '" class="button button-small" style="min-width:140px;" value="📥 Fetch (Async)">';
         echo '</form></td><td>';
         echo '<form method="post" style="display:inline-block; margin-right:5px;">';
-        wp_nonce_field( 'geri_fetch_api_' . $key . '_action' );
-        echo '<input type="submit" name="geri_fetch_api_' . $key . '" class="button button-small button-secondary" style="min-width:140px;" value="🔌 API Direct (Sync)">';
+        wp_nonce_field( 'seri_fetch_api_' . $key . '_action' );
+        echo '<input type="submit" name="seri_fetch_api_' . $key . '" class="button button-small button-secondary" style="min-width:140px;" value="🔌 API Direct (Sync)">';
         echo '</form></td><td>';
         echo '<form method="post" style="display:inline-block;">';
-        wp_nonce_field( 'geri_flush_' . $key . '_action' );
-        echo '<input type="submit" name="geri_flush_' . $key . '" class="button button-small button-link-delete" style="min-width:140px;" value="🗑️ Flush">';
+        wp_nonce_field( 'seri_flush_' . $key . '_action' );
+        echo '<input type="submit" name="seri_flush_' . $key . '" class="button button-small button-link-delete" style="min-width:140px;" value="🗑️ Flush">';
         echo '</form></td></tr>';
     }
     echo '</tbody></table>';
@@ -1785,23 +1781,23 @@ function geri_render_admin_page() {
 
     echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:15px 0;">';
     echo '<form method="post" style="display:inline-block;">';
-    wp_nonce_field( 'geri_build_cache_action' );
-    echo '<input type="submit" name="geri_build_cache" class="button button-primary" style="min-width:180px; font-weight:bold;" value="🔨 Build Index from Cache">';
+    wp_nonce_field( 'seri_build_cache_action' );
+    echo '<input type="submit" name="seri_build_cache" class="button button-primary" style="min-width:180px; font-weight:bold;" value="🔨 Build Index from Cache">';
     echo '</form>';
 
     echo '<form method="post" style="display:inline-block;">';
-    wp_nonce_field( 'geri_fetch_all_async_action' );
-    echo '<input type="submit" name="geri_fetch_all_async" class="button button-secondary" style="min-width:180px; font-weight:bold;" value="📥 Refresh All Pillars (Async)">';
+    wp_nonce_field( 'seri_fetch_all_async_action' );
+    echo '<input type="submit" name="seri_fetch_all_async" class="button button-secondary" style="min-width:180px; font-weight:bold;" value="📥 Refresh All Pillars (Async)">';
     echo '</form>';
 
     echo '<form method="post" style="display:inline-block;" onsubmit="return confirm(\'WARNING: This will fetch data directly from the API for ALL pillars, bypassing the Reference Data layer. This is a fallback. Continue?\');">';
-    wp_nonce_field( 'geri_emergency_api_build_action' );
-    echo '<input type="submit" name="geri_emergency_api_build" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638; font-weight:bold;" value="🚨 Emergency API → Build (Async)">';
+    wp_nonce_field( 'seri_emergency_api_build_action' );
+    echo '<input type="submit" name="seri_emergency_api_build" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638; font-weight:bold;" value="🚨 Emergency API → Build (Async)">';
     echo '</form>';
 
     echo '<form method="post" style="display:inline-block;" onsubmit="return confirm(\'WARNING: This will delete ALL pillar caches and the composite. Continue?\');">';
-    wp_nonce_field( 'geri_flush_all_action' );
-    echo '<input type="submit" name="geri_flush_all_confirmed" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638;" value="🗑️ Flush ALL Caches">';
+    wp_nonce_field( 'seri_flush_all_action' );
+    echo '<input type="submit" name="seri_flush_all_confirmed" class="button button-secondary" style="min-width:180px; background:#d63638; color:#fff; border-color:#d63638;" value="🗑️ Flush ALL Caches">';
     echo '</form>';
     echo '</div>';
 
@@ -1811,167 +1807,155 @@ function geri_render_admin_page() {
     echo '<strong>Flush ALL Caches</strong> — deletes all pillar and composite data (destructive).</p>';
     echo '</div></div>';
 
-// ─── SENSITIVITY TESTING SECTION ─────────────────────────────
-$scenarios = geri_list_scenarios();
-$baseline = get_option( GERI_OPTION_KEY );
+    // ─── SENSITIVITY TESTING ──────────────────────────────────────
+    $scenarios = seri_list_scenarios();
+    $baseline = get_option( SERI_OPTION_KEY );
 
-echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
-echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-generic"></span> 🔬 Sensitivity Testing (Research)</h2></div>';
-echo '<div class="inside">';
+    echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
+    echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-generic"></span> 🔬 Sensitivity Testing (Research)</h2></div>';
+    echo '<div class="inside">';
 
-// Preset weights
-$preset_weights = array(
-    'baseline'        => array( 'governance' => 25, 'macro' => 25, 'external' => 25, 'fiscal' => 25 ),
-    'gov-heavy'       => array( 'governance' => 60, 'macro' => 20, 'external' => 10, 'fiscal' => 10 ),
-    'gov-light'       => array( 'governance' => 10, 'macro' => 30, 'external' => 30, 'fiscal' => 30 ),
-    'macro-heavy'     => array( 'governance' => 10, 'macro' => 60, 'external' => 20, 'fiscal' => 10 ),
-    'macro-light'     => array( 'governance' => 30, 'macro' => 10, 'external' => 30, 'fiscal' => 30 ),
-    'external-heavy'  => array( 'governance' => 10, 'macro' => 20, 'external' => 60, 'fiscal' => 10 ),
-    'external-light'  => array( 'governance' => 30, 'macro' => 30, 'external' => 10, 'fiscal' => 30 ),
-    'fiscal-heavy'    => array( 'governance' => 10, 'macro' => 20, 'external' => 10, 'fiscal' => 60 ),
-    'fiscal-light'    => array( 'governance' => 30, 'macro' => 30, 'external' => 30, 'fiscal' => 10 ),
-);
-
-// Build a JavaScript object with all presets
-$preset_js = array();
-foreach ( $preset_weights as $key => $weights ) {
-    $preset_js[ $key ] = array(
-        'pillars'   => geri_get_pillar_weights(),
-        'composite' => $weights,
+    // Preset weights
+    $preset_weights = array(
+        'baseline'        => array( 'governance' => 25, 'macro' => 25, 'external' => 25, 'fiscal' => 25 ),
+        'gov-heavy'       => array( 'governance' => 60, 'macro' => 20, 'external' => 10, 'fiscal' => 10 ),
+        'gov-light'       => array( 'governance' => 10, 'macro' => 30, 'external' => 30, 'fiscal' => 30 ),
+        'macro-heavy'     => array( 'governance' => 10, 'macro' => 60, 'external' => 20, 'fiscal' => 10 ),
+        'macro-light'     => array( 'governance' => 30, 'macro' => 10, 'external' => 30, 'fiscal' => 30 ),
+        'external-heavy'  => array( 'governance' => 10, 'macro' => 20, 'external' => 60, 'fiscal' => 10 ),
+        'external-light'  => array( 'governance' => 30, 'macro' => 30, 'external' => 10, 'fiscal' => 30 ),
+        'fiscal-heavy'    => array( 'governance' => 10, 'macro' => 20, 'external' => 10, 'fiscal' => 60 ),
+        'fiscal-light'    => array( 'governance' => 30, 'macro' => 30, 'external' => 30, 'fiscal' => 10 ),
     );
-}
-$preset_json = wp_json_encode( $preset_js, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT );
 
-echo '<p><strong>Presets:</strong> Click a button to load a predefined weighting scheme.</p>';
-echo '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:15px;">';
+    $preset_js = array();
+    foreach ( $preset_weights as $key => $weights ) {
+        $preset_js[ $key ] = array(
+            'pillars'   => seri_get_pillar_weights(),
+            'composite' => $weights,
+        );
+    }
+    $preset_json = wp_json_encode( $preset_js, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT );
 
-foreach ( $preset_weights as $key => $weights ) {
-    $label = str_replace( '-', ' ', $key );
-    $label = ucwords( $label );
-    echo '<button type="button" class="button preset-btn" data-preset="' . esc_attr( $key ) . '">' . esc_html( $label ) . '</button> ';
-}
-echo '</div>';
+    echo '<p><strong>Presets:</strong> Click a button to load a predefined weighting scheme.</p>';
+    echo '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:15px;">';
 
-// JavaScript to handle preset loading
-?>
-<script>
-// Presets stored as a JavaScript object (no escaping issues)
-var geriPresets = <?php echo $preset_json; ?>;
-
-document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('.preset-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var presetName = this.dataset.preset;
-            var preset = geriPresets[presetName];
-            if (preset) {
-                var jsonString = JSON.stringify(preset, null, 4);
-                document.getElementById('geri_custom_weights').value = jsonString;
-                document.getElementById('geri_scenario_name').value = presetName;
-            }
+    foreach ( $preset_weights as $key => $weights ) {
+        $label = str_replace( '-', ' ', $key );
+        $label = ucwords( $label );
+        echo '<button type="button" class="button preset-btn" data-preset="' . esc_attr( $key ) . '">' . esc_html( $label ) . '</button> ';
+    }
+    echo '</div>';
+    ?>
+    <script>
+    var seriPresets = <?php echo $preset_json; ?>;
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('.preset-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var presetName = this.dataset.preset;
+                var preset = seriPresets[presetName];
+                if (preset) {
+                    document.getElementById('seri_custom_weights').value = JSON.stringify(preset, null, 4);
+                    document.getElementById('seri_scenario_name').value = presetName;
+                }
+            });
         });
     });
-});
-</script>
-<?php
+    </script>
+    <?php
 
-// ─── FORM STARTS HERE ───
-echo '<form method="post" style="margin-top:10px;">';
-wp_nonce_field( 'geri_build_scenario_action' );
+    echo '<form method="post" style="margin-top:10px;">';
+    wp_nonce_field( 'seri_build_scenario_action' );
+    echo '<p><strong>Custom Weights JSON</strong></p>';
+    echo '<p style="color:#666; font-size:12px;">Edit the JSON below to define custom pillar weights. <code>pillars</code> controls within-pillar indicator weights (rarely changed). <code>composite</code> controls the 4 pillar weights (must sum to 100).</p>';
+    $default_json = wp_json_encode( array( 'pillars' => seri_get_pillar_weights(), 'composite' => seri_get_composite_weights() ), JSON_PRETTY_PRINT );
+    echo '<textarea id="seri_custom_weights" name="seri_custom_weights" style="width:100%;height:180px;font-family:monospace;font-size:12px;padding:8px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;">' . esc_textarea( $default_json ) . '</textarea>';
 
-// --- MOVED INSIDE THE FORM ---
-echo '<p><strong>Custom Weights JSON</strong></p>';
-echo '<p style="color:#666; font-size:12px;">Edit the JSON below to define custom pillar weights. <code>pillars</code> controls within-pillar indicator weights (rarely changed). <code>composite</code> controls the 4 pillar weights (must sum to 100).</p>';
-$default_json = wp_json_encode( array( 'pillars' => geri_get_pillar_weights(), 'composite' => geri_get_composite_weights() ), JSON_PRETTY_PRINT );
-echo '<textarea id="geri_custom_weights" name="geri_custom_weights" style="width:100%;height:180px;font-family:monospace;font-size:12px;padding:8px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;">' . esc_textarea( $default_json ) . '</textarea>';
+    echo '<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px;">';
+    echo '<label><strong>Scenario ID:</strong></label>';
+    echo '<input type="text" id="seri_scenario_name" name="seri_scenario_name" placeholder="e.g., gov-heavy-60" style="width:200px;" required pattern="[a-z0-9\-]+">';
+    echo '<input type="submit" name="seri_build_scenario" class="button button-primary" value="🔬 Build Scenario">';
+    echo '</div>';
+    echo '</form>';
 
-// Build inputs (Scenario ID + Build button)
-echo '<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px;">';
-echo '<label><strong>Scenario ID:</strong></label>';
-echo '<input type="text" id="geri_scenario_name" name="geri_scenario_name" placeholder="e.g., gov-heavy-60" style="width:200px;" required pattern="[a-z0-9\-]+">';
-echo '<input type="submit" name="geri_build_scenario" class="button button-primary" value="🔬 Build Scenario">';
-echo '</div>';
+    // Scenario comparison table
+    if ( ! empty( $scenarios ) && $baseline ) {
+        echo '<h4 style="margin-top:20px;">Scenario Comparison</h4>';
+        echo '<table class="widefat striped"><thead><tr><th>Scenario</th><th>Countries</th><th>Spearman ρ vs Baseline</th><th>Top Mover</th><th>Action</th></tr></thead><tbody>';
 
-echo '</form>';
-// ─── FORM ENDS HERE ───
-
-// Scenario comparison table
-if ( ! empty( $scenarios ) && $baseline ) {
-    echo '<h4 style="margin-top:20px;">Scenario Comparison</h4>';
-    echo '<table class="widefat striped"><thead><tr><th>Scenario</th><th>Countries</th><th>Spearman ρ vs Baseline</th><th>Top Mover</th><th>Action</th></tr></thead><tbody>';
-
-    $baseline_ranks = array();
-    foreach ( $baseline['countries'] as $iso3 => $c ) {
-        if ( isset( $c['rank_display']['best_estimate'] ) ) {
-            $baseline_ranks[ $iso3 ] = $c['rank_display']['best_estimate'];
-        }
-    }
-
-    foreach ( $scenarios as $id => $scenario ) {
-        $scenario_ranks = array();
-        foreach ( $scenario['countries'] as $iso3 => $c ) {
+        $baseline_ranks = array();
+        foreach ( $baseline['countries'] as $iso3 => $c ) {
             if ( isset( $c['rank_display']['best_estimate'] ) ) {
-                $scenario_ranks[ $iso3 ] = $c['rank_display']['best_estimate'];
+                $baseline_ranks[ $iso3 ] = $c['rank_display']['best_estimate'];
             }
         }
 
-        $common = array_intersect_key( $baseline_ranks, $scenario_ranks );
-        $x = array();
-        $y = array();
-        foreach ( $common as $iso3 => $br ) {
-            $x[] = $br;
-            $y[] = $scenario_ranks[ $iso3 ];
-        }
-
-        $rho = 'N/A';
-        if ( count( $x ) > 2 ) {
-            $rho = round( geri_spearman_correlation( $x, $y ), 3 );
-        }
-
-        $max_delta = 0;
-        $top_mover = '-';
-        foreach ( $common as $iso3 => $br ) {
-            $delta = abs( $br - $scenario_ranks[ $iso3 ] );
-            if ( $delta > $max_delta ) {
-                $max_delta = $delta;
-                $top_mover = $iso3 . ' (±' . $delta . ')';
+        foreach ( $scenarios as $id => $scenario ) {
+            $scenario_ranks = array();
+            foreach ( $scenario['countries'] as $iso3 => $c ) {
+                if ( isset( $c['rank_display']['best_estimate'] ) ) {
+                    $scenario_ranks[ $iso3 ] = $c['rank_display']['best_estimate'];
+                }
             }
-        }
 
-        echo '<tr>';
-        echo '<td><strong>' . esc_html( $id ) . '</strong></td>';
-        echo '<td>' . esc_html( $scenario['total_countries'] ) . '</td>';
-        echo '<td>' . esc_html( $rho ) . '</td>';
-        echo '<td>' . esc_html( $top_mover ) . '</td>';
-        echo '<td>';
-        echo '<form method="post" style="display:inline;">';
-        wp_nonce_field( 'geri_delete_scenario_action' );
-        echo '<input type="hidden" name="geri_delete_scenario" value="' . esc_attr( $id ) . '">';
-        echo '<input type="submit" class="button button-small button-link-delete" value="Delete" onclick="return confirm(\'Delete scenario ' . esc_js( $id ) . '?\');">';
-        echo '</form>';
-        echo '</td>';
-        echo '</tr>';
+            $common = array_intersect_key( $baseline_ranks, $scenario_ranks );
+            $x = array();
+            $y = array();
+            foreach ( $common as $iso3 => $br ) {
+                $x[] = $br;
+                $y[] = $scenario_ranks[ $iso3 ];
+            }
+
+            $rho = 'N/A';
+            if ( count( $x ) > 2 ) {
+                $rho = round( seri_spearman_correlation( $x, $y ), 3 );
+            }
+
+            $max_delta = 0;
+            $top_mover = '-';
+            foreach ( $common as $iso3 => $br ) {
+                $delta = abs( $br - $scenario_ranks[ $iso3 ] );
+                if ( $delta > $max_delta ) {
+                    $max_delta = $delta;
+                    $top_mover = $iso3 . ' (±' . $delta . ')';
+                }
+            }
+
+            echo '<tr>';
+            echo '<td><strong>' . esc_html( $id ) . '</strong></td>';
+            echo '<td>' . esc_html( $scenario['total_countries'] ) . '</td>';
+            echo '<td>' . esc_html( $rho ) . '</td>';
+            echo '<td>' . esc_html( $top_mover ) . '</td>';
+            echo '<td>';
+            echo '<form method="post" style="display:inline;">';
+            wp_nonce_field( 'seri_delete_scenario_action' );
+            echo '<input type="hidden" name="seri_delete_scenario" value="' . esc_attr( $id ) . '">';
+            echo '<input type="submit" class="button button-small button-link-delete" value="Delete" onclick="return confirm(\'Delete scenario ' . esc_js( $id ) . '?\');">';
+            echo '</form>';
+            echo '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    } else {
+        echo '<p style="margin-top:10px; color:#666;">No scenarios built yet. Use the presets and build a scenario to see comparison data.</p>';
     }
-    echo '</tbody></table>';
-} else {
-    echo '<p style="margin-top:10px; color:#666;">No scenarios built yet. Use the presets and build a scenario to see comparison data.</p>';
-}
 
-echo '</div></div>';
+    echo '</div></div>';
 
     // Preview with Rank
     if ( $existing && ! empty( $existing['countries'] ) ) {
         $countries = $existing['countries'];
         uasort( $countries, function( $a, $b ) {
-            return ( $a['geri_structural'] ?? 0 ) <=> ( $b['geri_structural'] ?? 0 );
+            return ( $a['seri_structural'] ?? 0 ) <=> ( $b['seri_structural'] ?? 0 );
         } );
         $lowest = array_slice( $countries, 0, 10, true );
         $highest = array_slice( $countries, -10, 10, true );
 
         echo '<div style="margin-top:20px;">';
 
-        // Lowest Risk
+        // Highest Resilience / Lowest Risk
         echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0;">';
-        echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📊 10 Lowest‑Risk Countries</summary>';
+        echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📊 10 Most Resilient Countries</summary>';
         echo '<div style="padding:15px; background:#fff;">';
         echo '<table class="widefat striped"><thead><tr><th>Rank</th><th>Country</th><th>Structural Score</th><th>Forward Pressure</th><th>Direction</th></tr></thead><tbody>';
         foreach ( $lowest as $name => $row ) {
@@ -1986,14 +1970,14 @@ echo '</div></div>';
             } else {
                 $rank_text = '—';
             }
-            echo '<tr><td>' . esc_html( $rank_text ) . '</td><td>' . esc_html( $name ) . '</td><td>' . esc_html( $row['geri_structural'] ?? '—' ) . '</td><td>' . esc_html( $row['geri_forward_pressure'] ?? '—' ) . '</td><td>' . esc_html( $row['forward_direction'] ?? '—' ) . '</td></tr>';
+            echo '<tr><td>' . esc_html( $rank_text ) . '</td><td>' . esc_html( $name ) . '</td><td>' . esc_html( $row['seri_structural'] ?? '—' ) . '</td><td>' . esc_html( $row['seri_forward_pressure'] ?? '—' ) . '</td><td>' . esc_html( $row['forward_direction'] ?? '—' ) . '</td></tr>';
         }
         echo '</tbody></table>';
         echo '</div></details>';
 
-        // Highest Risk
+        // Lowest Resilience - Highest Risk
         echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0; margin-top:10px;">';
-        echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📈 10 Highest‑Risk Countries</summary>';
+        echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📈 10 Least Resilient Countries</summary>';
         echo '<div style="padding:15px; background:#fff;">';
         echo '<table class="widefat striped"><thead><tr><th>Rank</th><th>Country</th><th>Structural Score</th><th>Forward Pressure</th><th>Direction</th></tr></thead><tbody>';
         foreach ( $highest as $name => $row ) {
@@ -2008,7 +1992,7 @@ echo '</div></div>';
             } else {
                 $rank_text = '—';
             }
-            echo '<tr><td>' . esc_html( $rank_text ) . '</td><td>' . esc_html( $name ) . '</td><td>' . esc_html( $row['geri_structural'] ?? '—' ) . '</td><td>' . esc_html( $row['geri_forward_pressure'] ?? '—' ) . '</td><td>' . esc_html( $row['forward_direction'] ?? '—' ) . '</td></tr>';
+            echo '<tr><td>' . esc_html( $rank_text ) . '</td><td>' . esc_html( $name ) . '</td><td>' . esc_html( $row['seri_structural'] ?? '—' ) . '</td><td>' . esc_html( $row['seri_forward_pressure'] ?? '—' ) . '</td><td>' . esc_html( $row['forward_direction'] ?? '—' ) . '</td></tr>';
         }
         echo '</tbody></table>';
         echo '</div></details>';
