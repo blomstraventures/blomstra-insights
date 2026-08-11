@@ -31,7 +31,7 @@ jobs:
 
       - name: Download Parsedown Engine
         run: |
-          curl -sL https://raw.githubusercontent.com/erusev/parsedown/1.7.4/Parsedown.php -o Parsedown.php
+          curl -sL [https://raw.githubusercontent.com/erusev/parsedown/1.7.4/Parsedown.php](https://raw.githubusercontent.com/erusev/parsedown/1.7.4/Parsedown.php) -o Parsedown.php
 
       # -------------------------------------------------------------
       # 1. PARSE CODE-LEVEL FUNCTIONS FROM ./src (PHP & JS)
@@ -131,26 +131,32 @@ jobs:
 
           file_put_contents("$outDir/api.json", json_encode($docs, JSON_PRETTY_PRINT));
 
-          // SIDEBAR HTML & SEARCH
+          // SIDEBAR HTML & SEARCH (BLOMSTRA BRAND COLORS)
           $html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
-          $html .= '<title>Blomstra Code API Reference</title><style>';
+          $html .= '<title>Blomstra Code API Reference</title>';
+          $html .= '<script src="[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js)"></script>';
+          $html .= '<style>';
           $html .= '* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; min-height: 100vh; }';
           $html .= '.sidebar { width: 320px; background: #1e293b; border-right: 1px solid #334155; position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 1.5rem 1rem; flex-shrink: 0; }';
           $html .= '.search-box { width: 100%; padding: 0.6rem 0.8rem; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; margin-bottom: 1.5rem; }';
-          $html .= '.nav-section { margin-bottom: 1.5rem; } .nav-title { font-size: 0.75rem; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 0.5rem; }';
-          $html .= '.nav-item { display: block; padding: 0.4rem 0.6rem; color: #94a3b8; text-decoration: none; border-radius: 4px; font-size: 0.9rem; margin-bottom: 2px; } .nav-item:hover { background: #334155; color: #60a5fa; }';
+          $html .= '.nav-section { margin-bottom: 1.5rem; } .nav-title { font-size: 0.75rem; text-transform: uppercase; color: #10b981; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 0.5rem; }';
+          $html .= '.nav-item { display: block; padding: 0.4rem 0.6rem; color: #94a3b8; text-decoration: none; border-radius: 4px; font-size: 0.9rem; margin-bottom: 2px; } .nav-item:hover { background: #334155; color: #34d399; }';
           $html .= '.main { flex: 1; padding: 3rem 4rem; max-width: 1000px; }';
-          $html .= 'h1 { color: #60a5fa; font-size: 2.2rem; margin-bottom: 0.5rem; } .sub { color: #94a3b8; margin-bottom: 2.5rem; border-bottom: 1px solid #334155; padding-bottom: 1rem; }';
+          $html .= 'h1 { color: #10b981; font-size: 2.2rem; margin-bottom: 0.5rem; } .sub { color: #94a3b8; margin-bottom: 2.5rem; border-bottom: 1px solid #334155; padding-bottom: 1rem; }';
           $html .= '.file-card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; } .file-card h2 { color: #34d399; font-size: 1.4rem; margin-bottom: 1rem; }';
-          $html .= '.fn-card { background: #0f172a; border-left: 3px solid #60a5fa; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; } .fn-name { font-family: monospace; color: #f59e0b; font-size: 1.05rem; }';
+          $html .= '.fn-card { background: #0f172a; border-left: 3px solid #10b981; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; } .fn-name { font-family: monospace; color: #f59e0b; font-size: 1.05rem; }';
           $html .= '.fn-doc { color: #cbd5e1; font-size: 0.9rem; margin-top: 0.5rem; white-space: pre-wrap; font-family: inherit; }';
           $html .= '.badge { display: inline-block; padding: 2px 6px; font-size: 0.7rem; border-radius: 3px; font-weight: 600; text-transform: uppercase; margin-left: 6px; }';
-          $html .= '.badge-php { background: #4f46e5; color: #fff; } .badge-js { background: #d97706; color: #fff; }';
-          $html .= '.top-nav { margin-bottom: 1.5rem; display: block; color: #60a5fa; text-decoration: none; font-weight: 600; }';
+          $html .= '.badge-php { background: #059669; color: #fff; } .badge-js { background: #d97706; color: #fff; }';
+          $html .= '.top-nav { margin-bottom: 1.5rem; display: block; color: #10b981; text-decoration: none; font-weight: 600; }';
+          $html .= '#back-to-top { position: fixed; bottom: 2rem; right: 2rem; background: #10b981; color: #0f172a; border: none; border-radius: 50%; width: 44px; height: 44px; font-size: 1.4rem; font-weight: bold; cursor: pointer; display: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }';
+          $html .= '#back-to-top:hover { background: #34d399; }';
           $html .= '</style></head><body>';
 
+          $html .= '<button id="back-to-top" onclick="scrollToTop()">↑</button>';
+
           $html .= '<div class="sidebar">';
-          $html .= '<a href="index.html" class="top-nav">← Back to Hub</a>';
+          $html .= '<a href="index.html" class="top-nav">← Back to Portal Hub</a>';
           $html .= '<input type="text" class="search-box" id="search" placeholder="Filter functions..." onkeyup="filterDocs()">';
           
           foreach (['indices' => 'Indices Backend', 'shared' => 'Shared Utilities', 'frontend' => 'Frontend Engine'] as $key => $label) {
@@ -203,6 +209,20 @@ jobs:
                   card.style.display = txt.includes(q) ? "block" : "none";
               });
           }
+          window.onscroll = function() {
+              var btn = document.getElementById("back-to-top");
+              if (btn) btn.style.display = (document.documentElement.scrollTop > 300 || document.body.scrollTop > 300) ? "block" : "none";
+          };
+          function scrollToTop() { window.scrollTo({top: 0, behavior: "smooth"}); }
+          document.addEventListener("DOMContentLoaded", function() {
+              document.querySelectorAll("pre code.language-mermaid").forEach(function(block) {
+                  var div = document.createElement("div");
+                  div.className = "mermaid";
+                  div.textContent = block.textContent;
+                  block.parentNode.replaceWith(div);
+              });
+              mermaid.initialize({ startOnLoad: true, theme: "dark" });
+          });
           </script></body></html>';
 
           file_put_contents("$outDir/api-reference.html", $html);
@@ -210,7 +230,7 @@ jobs:
           php parse_code.php
 
       # -------------------------------------------------------------
-      # 2. CONVERT HUMAN MARKDOWN DOCS IN ./docs TO STYLED HTML
+      # 2. CONVERT ALL MARKDOWN DOCS RECURSIVELY (FIXES BROKEN LINKS)
       # -------------------------------------------------------------
       - name: Convert Markdown Documents to HTML
         run: |
@@ -225,14 +245,15 @@ jobs:
           $manifest = [];
 
           if (is_dir($docsDir)) {
-              $files = glob("$docsDir/*.md");
-              sort($files);
+              $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($docsDir));
 
-              foreach ($files as $file) {
-                  $basename = basename($file, '.md');
-                  $rawMd    = file_get_contents($file);
+              foreach ($iterator as $file) {
+                  if ($file->isDir() || strtolower($file->getExtension()) !== 'md') continue;
 
-                  // Extract primary H1 heading for the document title
+                  $pathName = $file->getPathname();
+                  $basename = basename($pathName, '.md');
+                  $rawMd    = file_get_contents($pathName);
+
                   $title = ucfirst(str_replace(['-', '_'], ' ', $basename));
                   if (preg_match('/^#\s+(.+)$/m', $rawMd, $matches)) {
                       $title = trim($matches[1]);
@@ -241,11 +262,13 @@ jobs:
                   $convertedBody = $parsedown->text($rawMd);
 
                   $pageHtml = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
-                  $pageHtml .= '<title>' . htmlspecialchars($title) . ' — Blomstra Insights</title><style>';
-                  $pageHtml .= 'body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.7; max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }';
+                  $pageHtml .= '<title>' . htmlspecialchars($title) . ' — Blomstra Insights</title>';
+                  $pageHtml .= '<script src="[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js)"></script>';
+                  $pageHtml .= '<style>';
+                  $pageHtml .= 'body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.7; max-width: 920px; margin: 0 auto; padding: 2rem 1.5rem; }';
                   $pageHtml .= 'header { padding-bottom: 1.5rem; margin-bottom: 2rem; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }';
-                  $pageHtml .= 'header a { color: #60a5fa; text-decoration: none; font-weight: 600; font-size: 0.95rem; }';
-                  $pageHtml .= 'h1, h2, h3, h4 { color: #60a5fa; margin-top: 1.8rem; margin-bottom: 0.8rem; }';
+                  $pageHtml .= 'header a { color: #10b981; text-decoration: none; font-weight: 600; font-size: 0.95rem; } header a:hover { color: #34d399; }';
+                  $pageHtml .= 'h1, h2, h3, h4 { color: #10b981; margin-top: 1.8rem; margin-bottom: 0.8rem; }';
                   $pageHtml .= 'h1 { font-size: 2.2rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }';
                   $pageHtml .= 'p, li { color: #cbd5e1; margin-bottom: 1rem; }';
                   $pageHtml .= 'code { background: #1e293b; padding: 0.2rem 0.4rem; border-radius: 4px; color: #f59e0b; font-family: monospace; font-size: 0.9em; }';
@@ -254,11 +277,29 @@ jobs:
                   $pageHtml .= 'table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; background: #1e293b; border-radius: 8px; overflow: hidden; }';
                   $pageHtml .= 'th, td { padding: 0.8rem 1rem; text-align: left; border-bottom: 1px solid #334155; }';
                   $pageHtml .= 'th { background: #0f172a; color: #34d399; }';
-                  $pageHtml .= 'blockquote { border-left: 4px solid #60a5fa; padding-left: 1rem; margin: 1.5rem 0; color: #94a3b8; italic; }';
+                  $pageHtml .= 'blockquote { border-left: 4px solid #10b981; padding-left: 1rem; margin: 1.5rem 0; color: #94a3b8; font-style: italic; }';
+                  $pageHtml .= '#back-to-top { position: fixed; bottom: 2rem; right: 2rem; background: #10b981; color: #0f172a; border: none; border-radius: 50%; width: 44px; height: 44px; font-size: 1.4rem; font-weight: bold; cursor: pointer; display: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }';
+                  $pageHtml .= '#back-to-top:hover { background: #34d399; }';
                   $pageHtml .= '</style></head><body>';
+                  $pageHtml .= '<button id="back-to-top" onclick="scrollToTop()">↑</button>';
                   $pageHtml .= '<header><a href="index.html">← Back to Documentation Portal</a><a href="api-reference.html">⚡ Code API Docs</a></header>';
                   $pageHtml .= '<main>' . $convertedBody . '</main>';
-                  $pageHtml .= '</body></html>';
+                  $pageHtml .= '<script>
+                  window.onscroll = function() {
+                      var btn = document.getElementById("back-to-top");
+                      if (btn) btn.style.display = (document.documentElement.scrollTop > 300 || document.body.scrollTop > 300) ? "block" : "none";
+                  };
+                  function scrollToTop() { window.scrollTo({top: 0, behavior: "smooth"}); }
+                  document.addEventListener("DOMContentLoaded", function() {
+                      document.querySelectorAll("pre code.language-mermaid").forEach(function(block) {
+                          var div = document.createElement("div");
+                          div.className = "mermaid";
+                          div.textContent = block.textContent;
+                          block.parentNode.replaceWith(div);
+                      });
+                      mermaid.initialize({ startOnLoad: true, theme: "dark" });
+                  });
+                  </script></body></html>';
 
                   file_put_contents("$outDir/$basename.html", $pageHtml);
 
@@ -270,12 +311,13 @@ jobs:
               }
           }
 
+          usort($manifest, function($a, $b) { return strcmp($a['slug'], $b['slug']); });
           file_put_contents("$outDir/docs_manifest.json", json_encode($manifest, JSON_PRETTY_PRINT));
           EOF
           php convert_markdown.php
 
       # -------------------------------------------------------------
-      # 3. DYNAMIC LANDING PORTAL INDEX
+      # 3. GENERATE CENTRAL PORTAL HUB
       # -------------------------------------------------------------
       - name: Generate Central Documentation Hub
         run: |
@@ -288,34 +330,32 @@ jobs:
           }
 
           $html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">';
-          $html .= '<title>Blomstra Insights — Documentation Hub</title><style>';
+          $html .= '<title>Blomstra Insights — Strategic Developer Portal</title><style>';
           $html .= '* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; line-height: 1.6; }';
           $html .= '.hero { text-align: center; padding: 4rem 1.5rem; background: #1e293b; border-bottom: 1px solid #334155; }';
-          $html .= '.hero h1 { font-size: 2.5rem; color: #60a5fa; margin-bottom: 0.5rem; }';
+          $html .= '.hero h1 { font-size: 2.5rem; color: #10b981; margin-bottom: 0.5rem; }';
           $html .= '.hero p { color: #94a3b8; font-size: 1.1rem; }';
           $html .= '.container { max-width: 1000px; margin: 3rem auto; padding: 0 1.5rem; }';
           $html .= '.section-title { color: #34d399; font-size: 1.3rem; margin-bottom: 1.2rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #334155; padding-bottom: 0.4rem; }';
           $html .= '.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.2rem; margin-bottom: 3rem; }';
           $html .= '.card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1.4rem; text-decoration: none; color: inherit; transition: transform 0.2s, border-color 0.2s; display: block; }';
-          $html .= '.card:hover { transform: translateY(-3px); border-color: #60a5fa; }';
-          $html .= '.card h3 { color: #60a5fa; margin-bottom: 0.4rem; font-size: 1.15rem; }';
+          $html .= '.card:hover { transform: translateY(-3px); border-color: #10b981; }';
+          $html .= '.card h3 { color: #10b981; margin-bottom: 0.4rem; font-size: 1.15rem; }';
           $html .= '.card p { color: #94a3b8; font-size: 0.9rem; }';
-          $html .= '.badge { display: inline-block; margin-top: 0.8rem; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: rgba(96,165,250,0.15); color: #60a5fa; }';
+          $html .= '.badge { display: inline-block; margin-top: 0.8rem; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: rgba(16,185,129,0.15); color: #34d399; }';
           $html .= '</style></head><body>';
 
-          $html .= '<div class="hero"><h1>Blomstra Insights Hub</h1><p>Combined architecture guides & auto-generated code reference.</p></div>';
+          $html .= '<div class="hero"><h1>Blomstra Insights Portal</h1><p>Strategic Intelligence Documentation Hub & Code Engine API</p></div>';
           $html .= '<div class="container">';
 
-          // SECTION 1: CODE & DATA API
           $html .= '<div class="section-title">⚡ Developer Code API</div>';
           $html .= '<div class="grid">';
           $html .= '<a class="card" href="api-reference.html"><h3>Interactive Code API Reference</h3><p>Parsed PHP/JS functions, JSDoc, parameters, and hooks with real-time search.</p><span class="badge">Auto-Generated</span></a>';
           $html .= '<a class="card" href="api.json" download><h3>Machine API JSON Schema</h3><p>Download full structured JSON schema of all parsed classes and functions.</p><span class="badge">Raw Metadata</span></a>';
           $html .= '</div>';
 
-          // SECTION 2: HUMAN ARCHITECTURE GUIDES (FROM ./docs)
           if (!empty($manifest)) {
-              $html .= '<div class="section-title">📘 System Architecture & Guides</div>';
+              $html .= '<div class="section-title">📘 Architecture & Methodology Guides</div>';
               $html .= '<div class="grid">';
               foreach ($manifest as $doc) {
                   $html .= '<a class="card" href="' . $doc['file'] . '"><h3>' . htmlspecialchars($doc['title']) . '</h3><p>Documentation guide from docs/' . $doc['slug'] . '.md</p><span class="badge">Architecture Doc</span></a>';
