@@ -5,109 +5,79 @@ This repository uses a dual‑layer documentation approach:
 - **Human‑written guides** in `docs/` → System architecture, methodologies, and operational guides.
 - **Auto‑extracted API reference** from `src/` → PHP and JavaScript function signatures, parameters, and comments.
 
-The entire documentation site is rebuilt and deployed to GitHub Pages via `scripts/generate-claude-docs.php`, run by `.github/workflows/claude-doc.yml` on every push to `main`.
+The entire documentation site is automatically rebuilt and deployed to GitHub Pages via a custom GitHub Actions workflow whenever changes are pushed to the `main` branch.  
 **Live documentation:** [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
 
-> **v3.0 note:** Earlier versions of this pipeline had the actual site-generation
-> logic (sidebar, search, portal, markdown rendering) duplicated inline inside
-> the workflow YAML, separate from — and out of sync with — this script. That's
-> fixed as of v3.0: `scripts/generate-gemini-docs.php` is now the single place
-> this logic lives, and the workflow just calls it. If you're reading an older
-> copy of this doc or an older `gemini-doc.yml`, the two will disagree with
-> each other; this version is the accurate one.
+---
+
+## 🚀 How It Works
+
+| Layer | Source Directory | Generated Output | Description |
+|-------|------------------|------------------|-------------|
+| **Interactive Code API** | `./src/` (PHP & JS) | `api-reference.html` | Function signatures, JSDoc/PHPDoc comments, parameters, constants, and hooks. Includes a live search interface. |
+| **System Architecture** | `./docs/` (`.md` files) | `[filename].html` | High‑level methodology, data flows, BMS‑1.0.0 specifications, and operational guides converted to styled dark‑mode HTML. |
+| **Central Portal Hub** | Generated at build | `index.html` | The main landing page linking to all documentation resources in one unified hub. |
 
 ---
 
-## ⚠️ What never gets published
+## 📁 Folder & File Structure
 
-Not everything in `docs/` is meant to be public. `scripts/generate-claude-docs.php`
-excludes:
+### `.github/workflows/`
 
-- Any file whose **exact basename** is listed in `EXCLUDED_DOC_FILES` at the top
-  of the script (currently: `deviations.md` — internal roadmap, open bugs, and
-  paid-tier product notes have no business on a public site).
-- Any file under a directory named in `EXCLUDED_DOC_DIRS` (currently: `internal`)
-  — drop future internal-only docs in `docs/internal/` and they're excluded
-  automatically, no script edit needed.
+Contains the GitHub Actions workflow that orchestrates the documentation build and deployment.
 
-The workflow also runs an independent check after generation — if excluded
-content is found in the output anyway, the deploy step is aborted rather than
-publishing it. If you add a new internal doc, **use one of the two mechanisms
-above**, don't rely on remembering to exclude it manually later.
+| File | Purpose |
+|------|---------|
+| [`generate-docs.yml`](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/generate-docs.yml) | **Primary workflow.** Triggers on pushes to `main`. Sets up PHP 8.2, runs the documentation generator, and deploys the output to the `gh-pages` branch. |
+
+### `scripts/`
+
+Contains the PHP script that powers the entire documentation generation process.
+
+| File | Purpose |
+|------|---------|
+| [`generate-docs.php`](https://github.com/blomstraventures/blomstra-insights/blob/main/scripts/generate-docs.php) | **Complete documentation generator.** Scans `src/` for PHP and JavaScript files, extracts PHPDoc/JSDoc comments, generates a searchable API reference, converts all Markdown files from `docs/` to styled HTML, builds a portal `index.html`, and produces machine‑readable metadata (`api.json`, `docs_manifest.json`). |
+
+### `src/frontend/`
+
+Contains the shared CSS file:
+
+| File | Purpose |
+|------|---------|
+| [`index-frontend-styles.css`](https://github.com/blomstraventures/blomstra-insights/blob/main/src/frontend/index-frontend-styles.css) | Used by **both** the live index frontend and the documentation site, ensuring a consistent visual identity across all Blomstra products. |
 
 ---
 
-## 🚀 Getting Started – Setting Up the Documentation Pipeline
+## 🎨 Visual Features & Styling
 
-If you're setting this up for the first time, follow these steps.
+- **Brand Alignment:** The documentation site uses the same `index-frontend-styles.css` as the live indices, ensuring a consistent look and feel across the entire product.
+- **Dark‑Mode Optimised:** All pages use a dark theme matching the Blomstra brand.
+- **Mermaid.js Diagrams:** Any Markdown code block using ` ```mermaid ` is automatically rendered as an interactive SVG diagram.
+- **Back‑to‑Top Scrolling:** A smooth‑scroll button is automatically added to all documentation pages for easy navigation.
+- **Live Search:** The API reference includes a searchable function index.
 
-### Step 1: Add the Generator Script
+---
 
-1.  In the root of your repository, create a folder named `scripts/`.
-2.  Add `generate-claude-docs.php` inside it (copy from this repo).
+## ⚙️ GitHub Pages Configuration
 
-**What this script actually does** (all of it — this is the only place the
-logic lives):
+To enable automatic deployment, you must set the **build source** to **GitHub Actions**:
 
-- Recursively scans `src/` for `.php` and `.js` files, extracting PHPDoc/JSDoc
-  comment blocks, function signatures, constants, pillar definitions, and
-  WordPress hooks.
-- Writes `api.json` (machine-readable) and `api-reference.md` (plain markdown).
-- Generates **`api-reference.html`** — a searchable, sidebar-navigated
-  interactive reference page.
-- Recursively scans `docs/` for `.md` files (skipping excluded ones — see
-  above), converts each to a styled HTML page, including real markdown table
-  support and Mermaid diagram rendering.
-- Generates `index.html` — a portal page linking every generated doc.
-- **Applies the real brand system** — the same obsidian/champagne palette,
-  Cormorant Garamond/Plus Jakarta Sans/IBM Plex Mono type stack used in
-  `src/frontend/index-frontend-styles.css` — embedded directly in the
-  generated pages so the doc site and the live product read as one system.
+1. Go to your repository **Settings → Pages**.
+2. Under **"Build and deployment"**, find the **"Source"** dropdown.
+3. Select **"GitHub Actions"**.
+4. Save the settings.
 
-### Step 2: Add the Workflow
+> **Note:** The [`generate-docs.yml`](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/generate-docs.yml) workflow is the source of truth for the build process. It defines the environment, dependencies, and steps required to generate and deploy the documentation site. Once the source is set to GitHub Actions, every push to `main` will automatically trigger the workflow.
 
-1.  Add `.github/workflows/claude-doc.yml` (copy from this repo).
-2.  It checks out the repo, installs PHP, runs
-    `php scripts/generate-claude-docs.php ./src ./docs ./docs-site`, runs the
-    excluded-content safety check, then deploys `./docs-site` to Pages.
+---
 
-| Section | Purpose |
-|---------|---------|
-| **Trigger (`on`)** | Runs on push to `main`. Can also be triggered manually via the Actions UI. |
-| **Setup PHP** | Installs PHP 8.2 via `shivammathur/setup-php`. |
-| **Build Documentation Site** | The one line that runs the actual generator — everything else is orchestration. |
-| **Fail loudly if excluded content leaked** | Independent grep-based check; aborts the deploy (doesn't just warn) if excluded content somehow reached the output directory. |
-| **Deploy to Pages** | Uses `actions/deploy-pages@v4`. |
+## 🚀 Triggering a Manual Build
 
-### Step 3: Configure GitHub Pages to Use Actions as the Source
+You can manually trigger the workflow at any time:
 
-1.  Repository → **Settings** → **Pages**.
-2.  Under **"Build and deployment" → "Source"**, select **GitHub Actions**.
-
-> If this isn't set to Actions, the workflow will still run successfully but
-> Pages won't serve its output — the site will look stale or 404.
-
-### Step 4: Test Before Trusting It
-
-Because this touches what gets published, verify a change before assuming
-it's safe:
-
-1.  Run `php scripts/generate-gemini-docs.php ./src ./docs ./docs-site`
-    **locally** first. This now genuinely reproduces what deploys — v2.0
-    couldn't, since the real logic only lived in the YAML.
-2.  Check `docs-site/docs_manifest.json` — confirm nothing excluded is in
-    there.
-3.  `grep -rl "Paid Tier" docs-site/` (or whatever string is specific to your
-    current excluded content) — should return nothing.
-4.  Only then push, or trigger the workflow manually from the Actions tab to
-    test without pushing.
-
-### Step 5: View the Generated Documentation
-
-- **Live site:** [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
-- **Build artifacts (debugging):** Actions tab → the specific run → Artifacts
-  section → download the Pages artifact to inspect files locally without
-  waiting for deployment.
+1. Go to the repository **Actions** tab.
+2. Select the **"Generate Blomstra Insights API Docs"** workflow from the left sidebar.
+3. Click **"Run workflow"** → select the branch → click **"Run workflow"**.
 
 ---
 
@@ -115,31 +85,40 @@ it's safe:
 
 | Type | Action |
 |------|--------|
-| **New public architecture guide** | Add a `.md` file to `docs/`. Picked up automatically, added to the portal grid. |
-| **New internal-only doc** | Put it in `docs/internal/`, or add its filename to `EXCLUDED_DOC_FILES` in the script. Either way, confirm it via Step 4 above before pushing. |
-| **New code function** | Standard PHPDoc/JSDoc comments above the function in `src/` — parsed automatically. |
-| **Style changes** | Edit `src/frontend/index-frontend-styles.css`. The doc generator's embedded style block currently mirrors these tokens by hand — if you change the source stylesheet, update `biwStyleBlock()` in the script to match, since it's not a live import. |
+| **New Architecture Guide** | Add a new Markdown file to `./docs/` (e.g., `docs/12-new-feature.md`). It will be automatically converted to HTML and added to the portal grid. |
+| **New Code Function** | Add standard PHPDoc or JSDoc comments above functions in `src/`. The parser will extract them automatically into `api-reference.html`. |
+| **Style Changes** | Modify `src/frontend/index-frontend-styles.css` to update the appearance of both the documentation and the live frontend. |
 
 ---
 
-## 🎨 Visual Features & Styling
+## 📄 Output Location
 
-- **Real brand alignment** — obsidian/champagne palette, matching type stack,
-  actually embedded in generated pages (previously claimed, not implemented —
-  fixed in v3.0).
-- **Genuine markdown table rendering** — previously, real `| --- |` tables in
-  the source docs rendered as broken plain-text paragraphs; fixed in v3.0.
-- **Mermaid.js diagrams** — any ` ```mermaid ` code block renders as an SVG.
-- **Back‑to‑top button** and **live function search** on the API reference page.
+All generated HTML files and assets are built and deployed to the **`gh-pages`** branch of this repository. From there, GitHub Pages serves the live site.
+
+**Live URL:** [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
+
+**Build Artifacts:** The generated HTML files are also available for download from the **"Artifacts"** section of each workflow run in the Actions tab. This is useful for debugging or manual inspection.
 
 ---
 
-## ✅ What changed in v3.0
+## 🛠 Troubleshooting
 
-| Area | Before | Now |
-|------|--------|-----|
-| **Where the logic lives** | Split — simple parser in `scripts/`, real HTML/portal generator duplicated inline in the YAML, out of sync with each other | One file: `scripts/generate-gemini-docs.php` |
-| **Testing locally** | Running the script didn't reproduce the deployed site | It does |
-| **Sensitive content** | No exclusion mechanism — every `.md` under `docs/` was published, including internal roadmap/bug-tracking docs | Excluded by filename or folder, plus an independent CI check that aborts the deploy if excluded content is detected anyway |
-| **Branding** | Claimed to match `index-frontend-styles.css`; actually hardcoded an unrelated slate/emerald theme | Actually matches |
-| **Markdown tables** | Rendered as broken plain text | Rendered as real `<table>` HTML |
+| Issue | Likely Cause | Solution |
+|-------|--------------|----------|
+| Site not updating after push | GitHub Pages source not set to Actions | Go to Settings → Pages and set Source to **GitHub Actions**. |
+| API reference missing new functions | PHPDoc/JSDoc comments not properly formatted | Ensure comments are correctly placed and use standard tags (`@param`, `@return`, `@throws`, etc.). |
+| CSS changes not reflecting | Browser cache or incorrect file path | Clear your browser cache and verify that the CSS file path in the generated HTML is correct. |
+| Workflow fails | PHP script errors or missing permissions | Check the workflow logs in the Actions tab for detailed error messages. |
+
+---
+
+## 📚 Related Documentation
+
+- [Blomstra Methodology Standard (BMS‑1.0.0)](https://blomstraventures.github.io/blomstra-insights/bms-1.0.0.html)
+- [SIVI Methodology](https://blomstraventures.github.io/blomstra-insights/sivi-methodology.html)
+- [SERI Methodology](https://blomstraventures.github.io/blomstra-insights/seri-methodology.html)
+- [API Reference](https://blomstraventures.github.io/blomstra-insights/api-reference.html)
+
+---
+
+> **Note:** This documentation system is designed to be **zero‑maintenance** for code documentation. Any new PHP or JS function added to `src/` is automatically parsed and included in the API reference without manual intervention. The system scales with your codebase.
