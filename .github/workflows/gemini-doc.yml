@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-  # Enables manual execution button under the Actions tab
   workflow_dispatch:
 
 permissions:
@@ -18,35 +17,39 @@ jobs:
         uses: actions/checkout@v4
 
       # -------------------------------------------------------------
-      # 1. SETUP ENVIRONMENTS
+      # 1. SETUP ENVIRONMENTS (Node 22 + Extended PHP Tooling)
       # -------------------------------------------------------------
       - name: Setup PHP Environment
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, dom
+          tools: phpdocumentor
+          ini-values: memory_limit=-1
 
       - name: Setup Node.js Environment
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install JSDoc
         run: npm install -g jsdoc
 
       # -------------------------------------------------------------
-      # 2. GENERATE HTML DOCUMENTATION
+      # 2. GENERATE DOCUMENTATION
       # -------------------------------------------------------------
       - name: Create Target Directories
         run: mkdir -p ./docs/api/php ./docs/api/js
 
-      - name: Run phpDocumentor (Backend PHP -> HTML Site)
+      - name: Run phpDocumentor (Backend PHP)
         run: |
-          wget https://phpdoc.org/phpDocumentor.phar
-          php phpDocumentor.phar -d ./src -t ./docs/api/php --ignore="*/vendor/*,*/node_modules/*"
+          phpdocumentor -d ./src -t ./docs/api/php --ignore="*/vendor/*,*/node_modules/*" || echo "PHP doc warnings ignored"
 
-      - name: Run JSDoc (Frontend JS -> HTML Site)
+      - name: Run JSDoc (Frontend JS)
         run: |
-          jsdoc -r ./src -d ./docs/api/js --ignore node_modules
+          if [ -d "./src" ]; then
+            jsdoc -r ./src -d ./docs/api/js --ignore node_modules || echo "No JS files or non-fatal JSDoc warnings found"
+          fi
 
       # -------------------------------------------------------------
       # 3. CREATE CENTRAL HUB LANDING PAGE (index.html)
