@@ -5,7 +5,7 @@ This repository uses a dual‑layer documentation approach:
 - **Human‑written guides** in `docs/` → System architecture, methodologies, and operational guides.
 - **Auto‑extracted API reference** from `src/` → PHP and JavaScript function signatures, parameters, and comments.
 
-The entire documentation site is rebuilt and deployed to GitHub Pages via `scripts/generate-gemini-docs.php`, run by `.github/workflows/gemini-doc.yml` on every push to `main`.
+The entire documentation site is rebuilt and deployed to GitHub Pages via `scripts/generate-claude-docs.php`, run by `.github/workflows/claude-doc.yml` on every push to `main`.
 **Live documentation:** [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
 
 > **v3.0 note:** Earlier versions of this pipeline had the actual site-generation
