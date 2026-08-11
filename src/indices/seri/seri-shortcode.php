@@ -14,13 +14,13 @@ if ( ! function_exists( 'seri_render_index_shortcode' ) ) {
             array(
                 'key'     => 'governance_percentile',
                 'raw_key' => null,
-                'label'   => 'Governance',
+                'label'   => 'Governance Risk',
                 'color'   => '#60a5fa',
             ),
             array(
                 'key'     => 'macro_percentile',
                 'raw_key' => null,
-                'label'   => 'Macro Stability',
+                'label'   => 'Macro Vulnerability',
                 'color'   => '#34d399',
             ),
             array(
@@ -45,7 +45,7 @@ if ( ! function_exists( 'seri_render_index_shortcode' ) ) {
             . 'Countries with data for all four pillars receive a definitive rank (Full Index). '
             . 'Countries missing one pillar receive a projected rank range using global median injection (Partial Index). '
             . 'Countries with fewer than three pillars are excluded. '
-            . 'Higher Structural Scores indicate lower resilience (more vulnerability). '
+            . 'Lower structural scores indicate higher resilience (more resilient = lower rank number). '
             . '<a href="' . esc_url( 'https://blomstrainsights.com/methodology/seri' ) . '" target="_blank" rel="noopener">Full methodology →</a>';
 
         $missing_pillar_notes = array(
@@ -57,24 +57,27 @@ if ( ! function_exists( 'seri_render_index_shortcode' ) ) {
 
         ob_start();
         ?>
+
         <div class="biw"
-             data-biw-slug="seri"
-             data-biw-endpoint="/wp-json/blomstra/v1/geo-economic-risk-index"
-             data-biw-names-endpoint="/wp-json/blomstra/v1/country-names"
-             data-biw-title="Sovereign Economic Resilience Index"
-             data-biw-subtitle="A composite measure of governance, macro stability, external vulnerability, and fiscal stress — higher scores indicate lower resilience"
-             data-biw-eyebrow="Strategic Intelligence"
-             data-biw-score-key="geri_structural"
-             data-biw-score-label="Structural Score"
-             data-biw-coverage-key="coverage"
-             data-biw-missing-key="pillars_missing"
-             data-biw-missing-notes='<?php echo esc_attr( wp_json_encode( $missing_pillar_notes ) ); ?>'
-             data-biw-band-thresholds="25,50,75"
-             data-biw-band-labels="Low,Medium,High,Extreme"
-             data-biw-band-select-label="All Risk Levels"
-             data-biw-pillars='<?php echo esc_attr( wp_json_encode( $pillars ) ); ?>'
-             data-biw-methodology="<?php echo esc_attr( $methodology ); ?>">
+            data-biw-slug="seri"
+            data-biw-endpoint="/wp-json/blomstra/v1/sovereign-economic-resilience-index"
+            data-biw-names-endpoint="/wp-json/blomstra/v1/country-names"
+            data-biw-title="Sovereign Economic Resilience Index"
+            data-biw-subtitle="A composite measure of governance, macro stability, external vulnerability, and fiscal stress — lower score = higher resilience"
+            data-biw-eyebrow="Strategic Intelligence"
+            data-biw-score-key="seri_structural"
+            data-biw-score-label="Structural Score"
+            data-biw-coverage-key="coverage"
+            data-biw-missing-key="pillars_missing"
+            data-biw-missing-notes='<?php echo esc_attr( wp_json_encode( $missing_pillar_notes ) ); ?>'
+            data-biw-band-thresholds="25,50,75"
+            data-biw-band-labels="Low,Medium,High,Extreme"
+            data-biw-band-select-label="All Risk Levels"
+            data-biw-pillars='<?php echo esc_attr( wp_json_encode( $pillars ) ); ?>'
+            data-biw-methodology="<?php echo esc_attr( $methodology ); ?>"
+            data-biw-sort-direction="asc">
         </div>
+
         <?php
         return ob_get_clean();
     }
