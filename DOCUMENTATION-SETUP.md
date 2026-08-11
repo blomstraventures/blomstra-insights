@@ -5,117 +5,109 @@ This repository uses a dual‑layer documentation approach:
 - **Human‑written guides** in `docs/` → System architecture, methodologies, and operational guides.
 - **Auto‑extracted API reference** from `src/` → PHP and JavaScript function signatures, parameters, and comments.
 
-The entire documentation site is automatically rebuilt and deployed to GitHub Pages via a custom GitHub Actions workflow whenever changes are pushed to the `main` branch.  
+The entire documentation site is rebuilt and deployed to GitHub Pages via `scripts/generate-gemini-docs.php`, run by `.github/workflows/gemini-doc.yml` on every push to `main`.
 **Live documentation:** [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
+
+> **v3.0 note:** Earlier versions of this pipeline had the actual site-generation
+> logic (sidebar, search, portal, markdown rendering) duplicated inline inside
+> the workflow YAML, separate from — and out of sync with — this script. That's
+> fixed as of v3.0: `scripts/generate-gemini-docs.php` is now the single place
+> this logic lives, and the workflow just calls it. If you're reading an older
+> copy of this doc or an older `gemini-doc.yml`, the two will disagree with
+> each other; this version is the accurate one.
+
+---
+
+## ⚠️ What never gets published
+
+Not everything in `docs/` is meant to be public. `scripts/generate-gemini-docs.php`
+excludes:
+
+- Any file whose **exact basename** is listed in `EXCLUDED_DOC_FILES` at the top
+  of the script (currently: `deviations.md` — internal roadmap, open bugs, and
+  paid-tier product notes have no business on a public site).
+- Any file under a directory named in `EXCLUDED_DOC_DIRS` (currently: `internal`)
+  — drop future internal-only docs in `docs/internal/` and they're excluded
+  automatically, no script edit needed.
+
+The workflow also runs an independent check after generation — if excluded
+content is found in the output anyway, the deploy step is aborted rather than
+publishing it. If you add a new internal doc, **use one of the two mechanisms
+above**, don't rely on remembering to exclude it manually later.
 
 ---
 
 ## 🚀 Getting Started – Setting Up the Documentation Pipeline
 
-If you're setting this up for the first time, follow these steps to ensure everything works correctly.
+If you're setting this up for the first time, follow these steps.
 
-### Step 1: Create the `scripts/` Folder and Add the PHP Generator
+### Step 1: Add the Generator Script
 
-1.  In the root of your repository, create a new folder named `scripts/`.
-2.  Inside `scripts/`, create a new PHP file called `generate-gemini-docs.php`.
-3.  Copy the contents from [this link](https://github.com/blomstraventures/blomstra-insights/blob/main/scripts/generate-gemini-docs.php) into your new file.
+1.  In the root of your repository, create a folder named `scripts/`.
+2.  Add `generate-gemini-docs.php` inside it (copy from this repo).
 
-**What this PHP script does:**
+**What this script actually does** (all of it — this is the only place the
+logic lives):
 
-- Recursively scans the `src/` directory for `.php` and `.js` files.
-- Extracts PHPDoc and JSDoc comment blocks (`/** ... */`) to collect:
-  - Function/method names
-  - Parameters and their types
-  - Return types
-  - Descriptions
-  - Version tags (`@since`, `@deprecated`)
-- Organises the extracted data into a structured format.
-- Generates a single, searchable **`api-reference.html`** page with a clean dark‑theme interface.
-- Applies the shared CSS (`src/frontend/index-frontend-styles.css`) to ensure brand consistency.
+- Recursively scans `src/` for `.php` and `.js` files, extracting PHPDoc/JSDoc
+  comment blocks, function signatures, constants, pillar definitions, and
+  WordPress hooks.
+- Writes `api.json` (machine-readable) and `api-reference.md` (plain markdown).
+- Generates **`api-reference.html`** — a searchable, sidebar-navigated
+  interactive reference page.
+- Recursively scans `docs/` for `.md` files (skipping excluded ones — see
+  above), converts each to a styled HTML page, including real markdown table
+  support and Mermaid diagram rendering.
+- Generates `index.html` — a portal page linking every generated doc.
+- **Applies the real brand system** — the same obsidian/champagne palette,
+  Cormorant Garamond/Plus Jakarta Sans/IBM Plex Mono type stack used in
+  `src/frontend/index-frontend-styles.css` — embedded directly in the
+  generated pages so the doc site and the live product read as one system.
 
----
+### Step 2: Add the Workflow
 
-### Step 2: Create the `.github/workflows/` Folder and Add the YAML Workflow
-
-1.  In the root of your repository, create a new folder named `.github/workflows/`.
-2.  Inside `.github/workflows/`, create a new YAML file called `gemini-doc.yml`.
-3.  Copy the contents from [this link](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/gemini-doc.yml) into your new file.
-
-**What this YAML workflow does:**
+1.  Add `.github/workflows/gemini-doc.yml` (copy from this repo).
+2.  It checks out the repo, installs PHP, runs
+    `php scripts/generate-gemini-docs.php ./src ./docs ./docs-site`, runs the
+    excluded-content safety check, then deploys `./docs-site` to Pages.
 
 | Section | Purpose |
 |---------|---------|
-| **Trigger (`on`)** | Runs automatically when code is pushed to the `main` branch. Can also be triggered manually via the GitHub Actions UI. |
-| **Environment (`runs-on`)** | Spins up a fresh `ubuntu-latest` virtual machine to run the build. |
-| **Checkout** | Pulls the latest code from your repository. |
-| **Setup PHP** | Installs the required PHP version (e.g., 8.2) using the `shivammathur/setup-php` action. |
-| **Run Generator** | Executes `php scripts/generate-gemini-docs.php` to create the HTML documentation. |
-| **Deploy to Pages** | Uses the `peaceiris/actions-gh-pages` action to commit the generated files to the `gh-pages` branch, which GitHub Pages then serves. |
-
-> **Note:** The workflow output (HTML files) is deployed to the **`gh-pages`** branch of your repository. Do not edit this branch manually — the workflow overwrites it on every successful run.
-
----
+| **Trigger (`on`)** | Runs on push to `main`. Can also be triggered manually via the Actions UI. |
+| **Setup PHP** | Installs PHP 8.2 via `shivammathur/setup-php`. |
+| **Build Documentation Site** | The one line that runs the actual generator — everything else is orchestration. |
+| **Fail loudly if excluded content leaked** | Independent grep-based check; aborts the deploy (doesn't just warn) if excluded content somehow reached the output directory. |
+| **Deploy to Pages** | Uses `actions/deploy-pages@v4`. |
 
 ### Step 3: Configure GitHub Pages to Use Actions as the Source
 
-By default, GitHub Pages may be set to deploy from a branch (e.g., `main` or `gh-pages`). To use the automated workflow, you must change the source to **GitHub Actions**.
+1.  Repository → **Settings** → **Pages**.
+2.  Under **"Build and deployment" → "Source"**, select **GitHub Actions**.
 
-1.  Go to your repository on GitHub.
-2.  Click on **Settings** (the tab at the top).
-3.  In the left sidebar, click **Pages** (under "Code and automation").
-4.  Under **"Build and deployment"**, find the **"Source"** dropdown.
-5.  Change the selection from **"Deploy from a branch"** to **"GitHub Actions"**.
-6.  The page will refresh, and you'll see a confirmation that your site is now built and deployed by the Actions workflow.
+> If this isn't set to Actions, the workflow will still run successfully but
+> Pages won't serve its output — the site will look stale or 404.
 
-> **Important:** If you do not change this to **GitHub Actions**, your workflow will still run, but GitHub Pages will not serve the generated files. The site will remain outdated or show a 404. Setting the source to Actions ensures GitHub Pages looks at the output of your workflow instead of a static branch.
+### Step 4: Test Before Trusting It
 
----
+Because this touches what gets published, verify a change before assuming
+it's safe:
 
-### Step 4: Run the Workflow Manually (Optional)
-
-The workflow runs automatically on every push to `main`. However, you can also trigger it manually if you want to test changes without pushing code.
-
-1.  Go to your repository on GitHub.
-2.  Click on the **Actions** tab.
-3.  In the left sidebar, find and select the **"gemini-doc"** workflow.
-4.  Click the **"Run workflow"** button (a dropdown will appear).
-5.  Select the branch (usually `main`) and click **"Run workflow"** again.
-6.  Wait a few moments. You will see a new workflow run appear in the list. Click on it to watch the build progress in real time.
-
----
+1.  Run `php scripts/generate-gemini-docs.php ./src ./docs ./docs-site`
+    **locally** first. This now genuinely reproduces what deploys — v2.0
+    couldn't, since the real logic only lived in the YAML.
+2.  Check `docs-site/docs_manifest.json` — confirm nothing excluded is in
+    there.
+3.  `grep -rl "Paid Tier" docs-site/` (or whatever string is specific to your
+    current excluded content) — should return nothing.
+4.  Only then push, or trigger the workflow manually from the Actions tab to
+    test without pushing.
 
 ### Step 5: View the Generated Documentation
 
-Once the workflow completes successfully:
-
-- **Live Site:** The documentation is automatically available at:
-  [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
-
-- **Build Artifacts (for debugging):** You can also download the generated files from the workflow run.
-  1. Go to the **Actions** tab.
-  2. Click on the specific workflow run.
-  3. Scroll down to the **"Artifacts"** section.
-  4. Download the `gh-pages` artifact to inspect the HTML files locally.
-
----
-
-## 🔧 How the System Works (Detailed)
-
-| Layer | Source Directory | Generated Output | Description |
-|-------|------------------|------------------|-------------|
-| **Interactive Code API** | `./src/` (PHP & JS) | `api-reference.html` | Function signatures, JSDoc/PHPDoc comments, parameters, constants, and hooks. Includes a live search interface. |
-| **System Architecture** | `./docs/` (`.md` files) | `[filename].html` | High‑level methodology, data flows, BMS‑1.0.0 specifications, and operational guides converted to styled dark‑mode HTML. |
-| **Central Portal Hub** | Generated at build | `index.html` | The main landing page linking to all documentation resources in one unified hub. |
-
----
-
-## 🎨 Visual Features & Styling
-
-- **Brand Alignment:** The documentation site uses the same [`index-frontend-styles.css`](https://github.com/blomstraventures/blomstra-insights/blob/main/src/frontend/index-frontend-styles.css) as the live indices, ensuring a consistent look and feel across the entire product.
-- **Dark‑Mode Optimised:** All pages use a dark theme matching the Blomstra brand.
-- **Mermaid.js Diagrams:** Any Markdown code block using ` ```mermaid ` is automatically rendered as an interactive SVG diagram.
-- **Back‑to‑Top Scrolling:** A smooth‑scroll button is automatically added to all documentation pages for easy navigation.
-- **Live Search:** The API reference includes a searchable function index.
+- **Live site:** [https://blomstraventures.github.io/blomstra-insights/](https://blomstraventures.github.io/blomstra-insights/)
+- **Build artifacts (debugging):** Actions tab → the specific run → Artifacts
+  section → download the Pages artifact to inspect files locally without
+  waiting for deployment.
 
 ---
 
@@ -123,34 +115,31 @@ Once the workflow completes successfully:
 
 | Type | Action |
 |------|--------|
-| **New Architecture Guide** | Add a new Markdown file to `./docs/` (e.g., `docs/12-new-feature.md`). It will be automatically converted to HTML and added to the portal grid. |
-| **New Code Function** | Add standard PHPDoc or JSDoc comments above functions in `src/`. The parser will extract them automatically into `api-reference.html`. |
-| **New Build Script** | Add a new `.php` file to the `scripts/` folder and update the workflow YAML to include the new step. |
-| **Style Changes** | Modify `src/frontend/index-frontend-styles.css` to update the appearance of both the documentation and the live frontend. |
+| **New public architecture guide** | Add a `.md` file to `docs/`. Picked up automatically, added to the portal grid. |
+| **New internal-only doc** | Put it in `docs/internal/`, or add its filename to `EXCLUDED_DOC_FILES` in the script. Either way, confirm it via Step 4 above before pushing. |
+| **New code function** | Standard PHPDoc/JSDoc comments above the function in `src/` — parsed automatically. |
+| **Style changes** | Edit `src/frontend/index-frontend-styles.css`. The doc generator's embedded style block currently mirrors these tokens by hand — if you change the source stylesheet, update `biwStyleBlock()` in the script to match, since it's not a live import. |
 
 ---
 
-## 🧪 Testing Locally
+## 🎨 Visual Features & Styling
 
-To test the documentation build locally before pushing:
-
-1.  Clone the repository.
-2.  Ensure PHP is installed locally (version 8.0 or higher recommended).
-3.  Run the generator script directly:
-    ```bash
-    php scripts/generate-gemini-docs.php
-
+- **Real brand alignment** — obsidian/champagne palette, matching type stack,
+  actually embedded in generated pages (previously claimed, not implemented —
+  fixed in v3.0).
+- **Genuine markdown table rendering** — previously, real `| --- |` tables in
+  the source docs rendered as broken plain-text paragraphs; fixed in v3.0.
+- **Mermaid.js diagrams** — any ` ```mermaid ` code block renders as an SVG.
+- **Back‑to‑top button** and **live function search** on the API reference page.
 
 ---
 
-## ✅ What's New in This Version
+## ✅ What changed in v3.0
 
-| Section | What Was Added / Improved |
-|---------|---------------------------|
-| **Step 1: `scripts/` folder** | Explicit instructions to create the folder and file, plus a detailed breakdown of what the PHP script does. |
-| **Step 2: `.github/workflows/` folder** | Explicit instructions to create the folder and file, plus a table explaining every part of the YAML workflow. |
-| **Step 3: GitHub Pages configuration** | Step‑by‑step instructions to navigate to Settings → Pages and switch the source from "Branch" to "GitHub Actions". |
-| **Step 4: Running the workflow** | Clear instructions on how to trigger a manual build from the Actions tab. |
-| **Step 5: Viewing the output** | Where to find the live site and how to download build artifacts for debugging. |
-
-This document now serves as a **complete onboarding guide** for anyone setting up the documentation pipeline for the first time — from folder creation to deployment.
+| Area | Before | Now |
+|------|--------|-----|
+| **Where the logic lives** | Split — simple parser in `scripts/`, real HTML/portal generator duplicated inline in the YAML, out of sync with each other | One file: `scripts/generate-gemini-docs.php` |
+| **Testing locally** | Running the script didn't reproduce the deployed site | It does |
+| **Sensitive content** | No exclusion mechanism — every `.md` under `docs/` was published, including internal roadmap/bug-tracking docs | Excluded by filename or folder, plus an independent CI check that aborts the deploy if excluded content is detected anyway |
+| **Branding** | Claimed to match `index-frontend-styles.css`; actually hardcoded an unrelated slate/emerald theme | Actually matches |
+| **Markdown tables** | Rendered as broken plain text | Rendered as real `<table>` HTML |
