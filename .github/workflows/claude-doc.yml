@@ -1,0 +1,67 @@
+name: gemini-doc
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+
+      - name: Build Documentation Site
+        run: php scripts/generate-gemini-docs.php ./src ./docs ./docs-site
+
+      - name: Fail loudly if excluded content leaked
+        # Belt-and-suspenders check independent of the generator script
+        # itself — if this ever matches, stop the deploy rather than
+        # publish. Extend this list if EXCLUDED_DOC_FILES in the
+        # script grows.
+        run: |
+          if grep -rl "Paid Tier" ./docs-site 2>/dev/null; then
+            echo "::error::Excluded content found in generated output — aborting deploy."
+            exit 1
+          fi
+          if find ./docs-site -iname "*deviation*" | grep -q .; then
+            echo "::error::A deviations file made it into generated output — aborting deploy."
+            exit 1
+          fi
+
+      - name: Disable GitHub Pages Jekyll Engine
+        run: touch ./docs-site/.nojekyll
+
+      - name: Upload GitHub Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./docs-site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
