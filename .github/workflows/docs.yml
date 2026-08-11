@@ -1,0 +1,203 @@
+name: Generate Blomstra API Docs
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**/*.php'
+      - 'src/**/*.js'
+      - 'scripts/generate-docs.php'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      # -------------------------------------------------------------
+      # 1. CHECKOUT
+      # -------------------------------------------------------------
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------------
+      # 2. SETUP PHP (for the parser script)
+      # -------------------------------------------------------------
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+
+      # -------------------------------------------------------------
+      # 3. RUN CUSTOM PARSER
+      # -------------------------------------------------------------
+      - name: Parse PHP Source into Markdown + JSON
+        run: |
+          php scripts/generate-docs.php ./src ./docs-site
+          echo "--- Generated files ---"
+          ls -la ./docs-site/
+
+      # -------------------------------------------------------------
+      # 4. COPY PUBLIC METHODOLOGY (if exists)
+      # -------------------------------------------------------------
+      - name: Include Public Methodology
+        run: |
+          if [ -f "public-methodology.md" ]; then
+            cp public-methodology.md ./docs-site/
+            echo "Included public-methodology.md"
+          fi
+
+      # -------------------------------------------------------------
+      # 5. BUILD LANDING PAGE
+      # -------------------------------------------------------------
+      - name: Generate Landing Hub
+        run: |
+          mkdir -p ./docs-site/assets
+          cp -r assets/* ./docs-site/assets/ 2>/dev/null || true
+          cat << 'EOF' > ./docs-site/index.html
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Blomstra Insights — Developer Documentation</title>
+              <style>
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  body {
+                      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                      background: #0f172a;
+                      color: #f8fafc;
+                      line-height: 1.6;
+                  }
+                  .hero {
+                      text-align: center;
+                      padding: 4rem 2rem;
+                      background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+                      border-bottom: 1px solid #334155;
+                  }
+                  .hero h1 { font-size: 2.5rem; margin-bottom: 0.5rem; color: #f8fafc; }
+                  .hero p { color: #94a3b8; font-size: 1.1rem; max-width: 600px; margin: 0 auto; }
+                  .grid {
+                      display: grid;
+                      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                      gap: 1.5rem;
+                      max-width: 1000px;
+                      margin: 2rem auto;
+                      padding: 0 2rem;
+                  }
+                  .card {
+                      background: #1e293b;
+                      border: 1px solid #334155;
+                      border-radius: 12px;
+                      padding: 1.5rem;
+                      transition: transform 0.2s, border-color 0.2s;
+                      text-decoration: none;
+                      color: inherit;
+                      display: block;
+                  }
+                  .card:hover {
+                      transform: translateY(-4px);
+                      border-color: #3b82f6;
+                  }
+                  .card h3 { color: #3b82f6; margin-bottom: 0.5rem; font-size: 1.25rem; }
+                  .card p { color: #94a3b8; font-size: 0.95rem; }
+                  .card .badge {
+                      display: inline-block;
+                      padding: 0.2rem 0.6rem;
+                      border-radius: 4px;
+                      font-size: 0.75rem;
+                      font-weight: bold;
+                      margin-top: 0.75rem;
+                  }
+                  .badge-green { background: rgba(34,197,94,0.15); color: #22c55e; }
+                  .badge-amber { background: rgba(245,158,11,0.15); color: #f59e0b; }
+                  .badge-blue { background: rgba(59,130,246,0.15); color: #3b82f6; }
+                  .badge-purple { background: rgba(168,85,247,0.15); color: #a855f7; }
+                  footer {
+                      text-align: center;
+                      padding: 2rem;
+                      color: #64748b;
+                      border-top: 1px solid #334155;
+                      margin-top: 2rem;
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="hero">
+                  <h1>Blomstra Insights</h1>
+                  <p>Developer documentation, API reference, and methodology for the Sovereign Economic Resilience Index (SERI) and Sovereign Infrastructure Vulnerability Index (SIVI).</p>
+              </div>
+              <div class="grid">
+                  <a class="card" href="public-methodology.html">
+                      <h3>Public Methodology</h3>
+                      <p>Transparent, citable methodology explaining how SERI and SIVI are computed. Data sources, normalization rules, and research ethics.</p>
+                      <span class="badge badge-green">For Researchers</span>
+                  </a>
+                  <a class="card" href="api-reference.html">
+                      <h3>API Reference</h3>
+                      <p>Auto-generated from source code. Functions, constants, pillars, hooks, and parameters for all index backends.</p>
+                      <span class="badge badge-blue">For Developers</span>
+                  </a>
+                  <a class="card" href="api.json">
+                      <h3>Machine-Readable API</h3>
+                      <p>JSON export of all parsed code structure. Use this to build integrations, IDE plugins, or custom dashboards.</p>
+                      <span class="badge badge-purple">JSON</span>
+                  </a>
+                  <a class="card" href="https://github.com/blomstraventures/blomstra-insights">
+                      <h3>Source Code</h3>
+                      <p>View the latest source on GitHub. This documentation auto-updates on every push to main.</p>
+                      <span class="badge badge-amber">GitHub</span>
+                  </a>
+              </div>
+              <footer>
+                  <p>Generated automatically from <code>blomstra-insights</code> source code.</p>
+                  <p style="margin-top:0.5rem; font-size:0.85rem;">Methodology standard: BMS-1.0.0</p>
+              </footer>
+          </body>
+          </html>
+          EOF
+
+      # -------------------------------------------------------------
+      # 6. CONVERT MARKDOWN TO HTML (simple conversion for GitHub Pages)
+      # -------------------------------------------------------------
+      - name: Convert Markdown to HTML
+        run: |
+          # Install a simple markdown converter
+          npm install -g marked
+          for md in ./docs-site/*.md; do
+            [ -f "$md" ] || continue
+            base=$(basename "$md" .md)
+            echo "<!DOCTYPE html><html><head><meta charset='utf-8'><title>$base</title><style>" > "./docs-site/$base.html"
+            echo "body{font-family:system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;background:#0f172a;color:#f8fafc;line-height:1.6}" >> "./docs-site/$base.html"
+            echo "h1,h2,h3{color:#3b82f6} a{color:#14b8a6} code{background:#1e293b;padding:0.15rem 0.3rem;border-radius:4px} pre{background:#1e293b;padding:1rem;overflow-x:auto;border-radius:8px} table{border-collapse:collapse;width:100%;margin:1rem 0} th,td{border:1px solid #334155;padding:0.5rem;text-align:left} th{background:#1e293b} img{max-width:100%;border-radius:8px} details{background:#1e293b;padding:1rem;border-radius:8px;margin:1rem 0} summary{cursor:pointer;font-weight:bold;color:#f59e0b}</style></head><body>" >> "./docs-site/$base.html"
+            marked "$md" >> "./docs-site/$base.html"
+            echo "</body></html>" >> "./docs-site/$base.html"
+            echo "Converted: $md -> $base.html"
+          done
+
+      # -------------------------------------------------------------
+      # 7. UPLOAD TO GITHUB PAGES
+      # -------------------------------------------------------------
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./docs-site
+
+  deploy:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
