@@ -26,6 +26,8 @@ The entire documentation site is automatically rebuilt and deployed to GitHub Pa
 
 Contains the GitHub Actions workflow that orchestrates the documentation build and deployment.
 
+> **If the folder doesn't exist:** Create it with `mkdir -p .github/workflows`.
+
 | File | Purpose |
 |------|---------|
 | [`generate-docs.yml`](https://github.com/blomstraventures/blomstra-insights/blob/main/.github/workflows/generate-docs.yml) | **Primary workflow.** Triggers on pushes to `main`. Sets up PHP 8.2, runs the documentation generator, and deploys the output to the `gh-pages` branch. |
@@ -34,6 +36,8 @@ Contains the GitHub Actions workflow that orchestrates the documentation build a
 
 Contains the PHP script that powers the entire documentation generation process.
 
+> **If the folder doesn't exist:** Create it with `mkdir scripts`.
+
 | File | Purpose |
 |------|---------|
 | [`generate-docs.php`](https://github.com/blomstraventures/blomstra-insights/blob/main/scripts/generate-docs.php) | **Complete documentation generator.** Scans `src/` for PHP and JavaScript files, extracts PHPDoc/JSDoc comments, generates a searchable API reference, converts all Markdown files from `docs/` to styled HTML, builds a portal `index.html`, and produces machine‑readable metadata (`api.json`, `docs_manifest.json`). |
@@ -41,6 +45,8 @@ Contains the PHP script that powers the entire documentation generation process.
 ### `src/frontend/`
 
 Contains the shared CSS file:
+
+> **If the folder doesn't exist:** Create it with `mkdir -p src/frontend`.
 
 | File | Purpose |
 |------|---------|
@@ -114,11 +120,19 @@ All generated HTML files and assets are built and deployed to the **`gh-pages`**
 
 ## 📚 Related Documentation
 
-- [Blomstra Methodology Standard (BMS‑1.0.0)](https://blomstraventures.github.io/blomstra-insights/bms-1.0.0.html)
+Once the documentation site is built, these pages will be available at:
+
+- [Blomstra Methodology Standard (BMS‑1.0.0)](https://blomstraventures.github.io/blomstra-insights/bms-1-0-0.html)
 - [SIVI Methodology](https://blomstraventures.github.io/blomstra-insights/sivi-methodology.html)
 - [SERI Methodology](https://blomstraventures.github.io/blomstra-insights/seri-methodology.html)
 - [API Reference](https://blomstraventures.github.io/blomstra-insights/api-reference.html)
 
+> **Note:** These links will work once the documentation site has been built and deployed at least once. If you see a 404, run the workflow manually from the Actions tab to generate the site.
+
 ---
 
 > **Note:** This documentation system is designed to be **zero‑maintenance** for code documentation. Any new PHP or JS function added to `src/` is automatically parsed and included in the API reference without manual intervention. The system scales with your codebase.
+
+### 📌 Legacy CII (Critical Infrastructure Index)
+
+The CII index has been superseded by **SIVI (Sovereign Infrastructure Vulnerability Index)**. All new development should use SIVI. The CII shortcode (`[cii_index]`) is preserved for backward compatibility but will be removed in a future release.
