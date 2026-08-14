@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // ============================================================================
 
 /** @var string SIVI version number (major.minor.patch). */
-define( 'SIVI_VERSION', '2.0.0' );
+define( 'SIVI_VERSION', '2.1.0' );
 
 /** @var string Main option key where the composite index is stored. */
 define( 'SIVI_OPTION_KEY', 'sivi_composite_index' );
@@ -155,18 +155,31 @@ function sivi_get_pillar_weights() {
             'indicators'   => array( 'energy_dependency' => 100 ),
             'min_required' => 1,
             'min_weight'   => 100,
+            // BMS-1.1.0: genuine extremes for highly energy-dependent
+            // small economies are real vulnerability signal, not
+            // reporting artifacts — no winsorization.
+            'winsorize'    => array( 'energy_dependency' => 0.0 ),
         ),
         'hhi'      => array(
             'name'         => 'Supplier Concentration',
             'indicators'   => array( 'supplier_concentration' => 100 ),
             'min_required' => 1,
             'min_weight'   => 100,
+            // BMS-1.1.0: HHI is bounded 0-10000 by construction; a value
+            // of 10000 (single supplier) is genuine and meaningful, not
+            // an artifact — no winsorization.
+            'winsorize'    => array( 'supplier_concentration' => 0.0 ),
         ),
         'maritime' => array(
             'name'         => 'Maritime Connectivity',
             'indicators'   => array( 'maritime_connectivity' => 100 ),
             'min_required' => 1,
             'min_weight'   => 100,
+            // BMS-1.1.0: LSCI-based connectivity data for very small or
+            // remote nations can be thin/erratic — a light 1% guards
+            // against a single unreliable data point dominating the
+            // percentile ranking.
+            'winsorize'    => array( 'maritime_connectivity' => 0.01 ),
         ),
     );
 }
@@ -372,27 +385,6 @@ function sivi_hhi_reporter_map_fallback() {
 // ============================================================================
 // 6.  TEST COUNTRY LIST (for debugging)
 // ============================================================================
-
-/**
- * Returns a small list of countries used for quick testing.
- *
- * @since  1.0.0
- * @return array [ISO3 => country_name].
- */
-function sivi_test_country_list() {
-    return array(
-        'SWE' => 'Sweden',
-        'USA' => 'United States',
-        'CHN' => 'China',
-        'DEU' => 'Germany',
-        'FRA' => 'France',
-        'GBR' => 'United Kingdom',
-        'JPN' => 'Japan',
-        'IND' => 'India',
-        'NOR' => 'Norway',
-        'KOR' => 'Korea, Rep.',
-    );
-}
 
 
 // ============================================================================
@@ -714,6 +706,8 @@ function sivi_refresh_energy_pillar_fallback( $countries = null ) {
     $merged = array_merge( $existing['data'] ?? array(), $results );
     $merged_sources = array_merge( $existing['sources'] ?? array(), $sources );
     update_option( SIVI_ENERGY_KEY, array( 'data' => $merged, 'sources' => $merged_sources ), false );
+    // BMS-1.1.0 fix (deviations.md Issue #2) — same fix as the central-fetch path.
+    update_option( SIVI_ENERGY_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
     return $results;
 }
 
@@ -744,6 +738,12 @@ function sivi_persist_energy_results( $iso3_list, $computed ) {
     $merged = array_merge( $existing['data'] ?? array(), $results );
     $merged_sources = array_merge( $existing['sources'] ?? array(), $sources );
     update_option( SIVI_ENERGY_KEY, array( 'data' => $merged, 'sources' => $merged_sources ), false );
+    // BMS-1.1.0 fix (deviations.md Issue #2): this was the only one of the
+    // three pillar persist functions that never updated its freshness
+    // meta key — that's why the admin "Energy: Never ❌" badge never
+    // cleared even after real successful fetches. Matches the pattern
+    // already present in the maritime persist path.
+    update_option( SIVI_ENERGY_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
     return $results;
 }
 
@@ -1255,6 +1255,10 @@ function sivi_refresh_hhi_pillar_fallback( $year = null, $iso3_list = null ) {
         $existing_data = $existing['data'] ?? array();
         $merged_data = array_merge( $existing_data, $results );
         update_option( SIVI_HHI_KEY, array( 'data' => $merged_data, 'sources' => $existing['sources'] ?? array() ), false );
+        // BMS-1.1.0 fix (deviations.md Issue #2): update on each checkpoint,
+        // matching the write cadence of this long-running batched fetch —
+        // the last checkpoint's timestamp is what ends up as "last_fetched".
+        update_option( SIVI_HHI_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
         $summary['last_checkpoint'] = current_time( 'mysql' );
         update_option( 'sivi_hhi_refresh_summary', $summary, false );
     };
@@ -1383,6 +1387,9 @@ function sivi_merge_hhi_into_pillar( $iso3_list ) {
     $merged = array_merge( $existing['data'] ?? array(), $results );
     $merged_sources = array_merge( $existing['sources'] ?? array(), $sources );
     update_option( SIVI_HHI_KEY, array( 'data' => $merged, 'sources' => $merged_sources ), false );
+    // BMS-1.1.0 fix (deviations.md Issue #2): HHI never updated its
+    // freshness meta key either — same root cause as energy.
+    update_option( SIVI_HHI_META_KEY, array( 'last_fetched' => current_time( 'mysql' ) ), false );
     return $results;
 }
 
@@ -1454,11 +1461,12 @@ function sivi_refresh_hhi_pillar( $year = null, $iso3_list = null, $source = 'au
  *
  * @since  1.0.0
  * @param  array $values_by_iso3 [ISO3 => numeric value].
+ * @param  float $winsor_pct     BMS-1.1.0: winsorization level (0.01 = 1st/99th percentile), 0 = none. Only applied on the primary (blomstra_compute_percentile_ranks_safe) path — the local fallback below does not winsorize, matching its existing behavior.
  * @return array [ISO3 => percentile (0-100)].
  */
-function sivi_compute_percentile_ranks( $values_by_iso3 ) {
+function sivi_compute_percentile_ranks( $values_by_iso3, $winsor_pct = 0.0 ) {
     if ( function_exists( 'blomstra_compute_percentile_ranks_safe' ) ) {
-        return blomstra_compute_percentile_ranks_safe( $values_by_iso3, 0.0 );
+        return blomstra_compute_percentile_ranks_safe( $values_by_iso3, $winsor_pct );
     }
     // Fallback implementation
     $n = count( $values_by_iso3 );
@@ -1568,9 +1576,15 @@ function sivi_build_composite( $force = false, $context = 'manual', $custom_weig
     }
 
     // Percentiles
-    $energy_pct = ! empty( $energy_raw_values ) ? sivi_compute_percentile_ranks( $energy_raw_values ) : array();
-    $hhi_pct    = ! empty( $hhi_raw_values ) ? sivi_compute_percentile_ranks( $hhi_raw_values ) : array();
-    $maritime_connectivity_pct  = ! empty( $maritime_raw_values ) ? sivi_compute_percentile_ranks( $maritime_raw_values ) : array();
+    // BMS-1.1.0: winsor level now read from config (§2.8), not hardcoded.
+    $weight_defs = $custom_weights ?? sivi_get_pillar_weights();
+    $energy_winsor   = $weight_defs['energy']['winsorize']['energy_dependency'] ?? 0.0;
+    $hhi_winsor      = $weight_defs['hhi']['winsorize']['supplier_concentration'] ?? 0.0;
+    $maritime_winsor = $weight_defs['maritime']['winsorize']['maritime_connectivity'] ?? 0.0;
+
+    $energy_pct = ! empty( $energy_raw_values ) ? sivi_compute_percentile_ranks( $energy_raw_values, $energy_winsor ) : array();
+    $hhi_pct    = ! empty( $hhi_raw_values ) ? sivi_compute_percentile_ranks( $hhi_raw_values, $hhi_winsor ) : array();
+    $maritime_connectivity_pct  = ! empty( $maritime_raw_values ) ? sivi_compute_percentile_ranks( $maritime_raw_values, $maritime_winsor ) : array();
     $maritime_vulnerability_pct = array();
     foreach ( $maritime_connectivity_pct as $iso3 => $pct ) {
         $maritime_vulnerability_pct[ $iso3 ] = round( 100 - $pct, 2 );
@@ -1635,39 +1649,59 @@ function sivi_build_composite( $force = false, $context = 'manual', $custom_weig
     }
 
     // ─── Rank assignment (DESCENDING: highest score = #1) ──────
+    // BMS-1.1.0: rank COMPARISON is computed directly here, index-owned —
+    // matching SERI's pattern exactly. Reference Data's shared
+    // blomstra_rank_in_full_index() is deliberately NOT used for this:
+    // its comparison direction is hardcoded (always descending), which
+    // happens to match SIVI's own vulnerability convention today, but
+    // relying on that silently is exactly what caused SERI's ranks to
+    // compute backwards when centralization was first attempted. Only
+    // the direction-AGNOSTIC formatting functions (blomstra_build_full_
+    // rank_display / blomstra_build_partial_rank_display — which just
+    // format an already-computed rank number, no direction logic inside)
+    // are shared. If a future index needs a different comparison, it
+    // gets its own inline block here too — never a silent shared default.
     $full_composites_sorted = array();
     foreach ( $results as $iso3 => $row ) {
         if ( $row['coverage_type'] === 'full' ) {
             $full_composites_sorted[] = $row['composite_score'];
         }
     }
-    rsort( $full_composites_sorted ); // DESCENDING: highest score first
-    $rank_in_full_index = function ( $score ) use ( $full_composites_sorted ) {
-        $greater = 0;
-        foreach ( $full_composites_sorted as $c ) {
-            if ( $c > $score ) { $greater++; } else { break; }
-        }
-        return $greater + 1;
-    };
+
+    $has_display_fns = function_exists( 'blomstra_build_full_rank_display' );
+    $has_partial_display_fns = function_exists( 'blomstra_project_partial_rank_composite' )
+        && function_exists( 'blomstra_build_partial_rank_display' );
 
     foreach ( $results as $iso3 => &$row ) {
         if ( $row['coverage_type'] === 'full' ) {
-            $r = $rank_in_full_index( $row['composite_score'] );
+            // Descending: higher composite_score = more vulnerable = rank 1.
+            $r = 1;
+            foreach ( $full_composites_sorted as $full_score ) {
+                if ( $row['composite_score'] < $full_score ) {
+                    $r++;
+                }
+            }
             $row['rank'] = $r;
-            $row['rank_display'] = array(
-                'is_definitive'    => true,
-                'best_estimate'    => $r,
-                'range_80_low'     => $r,
-                'range_80_high'    => $r,
-                'theoretical_low'  => $r,
-                'theoretical_high' => $r,
-                'string_format'    => '#' . $r,
-            );
+            $row['rank_display'] = $has_display_fns
+                ? blomstra_build_full_rank_display( $r )
+                : array(
+                    'is_definitive'    => true,
+                    'best_estimate'    => $r,
+                    'range_80_low'     => $r,
+                    'range_80_high'    => $r,
+                    'theoretical_low'  => $r,
+                    'theoretical_high' => $r,
+                    'string_format'    => '#' . $r,
+                );
         }
     }
     unset( $row );
 
-    // Partial ranks
+    // Partial ranks — pillar percentile values are injected directly at
+    // each point (0/10/50/90/100), since SIVI's pillar scores are already
+    // on a comparable 0-100 percentile scale (SIVI's own methodology
+    // choice, unchanged — see blomstra_project_partial_rank_composite()
+    // docblock for why this isn't unified with SERI's interpolation approach).
     $pillar_weight_by_name = $composite_weights;
     $pillar_value_key = array(
         'energy'   => 'energy_dependency_percentile',
@@ -1684,36 +1718,48 @@ function sivi_build_composite( $force = false, $context = 'manual', $custom_weig
             continue;
         }
 
-        $known_weighted_sum = 0.0;
+        $known_pillars = array();
         foreach ( $pillar_weight_by_name as $pname => $pweight ) {
             if ( $pname === $missing_pillar ) {
                 continue;
             }
-            $known_weighted_sum += ( $row[ $pillar_value_key[ $pname ] ] ?? 0 ) * $pweight;
+            $known_pillars[ $pname ] = $row[ $pillar_value_key[ $pname ] ] ?? 0;
         }
-        $missing_weight = $pillar_weight_by_name[ $missing_pillar ];
 
+        $injected_values_by_point = array();
+        foreach ( array( 0, 10, 50, 90, 100 ) as $point ) {
+            $injected_values_by_point[ $point ] = $point;
+        }
+
+        if ( ! $has_partial_display_fns ) {
+            continue; // no fallback here — better to omit rank_display than compute it with the old buggy inline math
+        }
+
+        $hypothetical_composites = blomstra_project_partial_rank_composite(
+            $known_pillars,
+            $missing_pillar,
+            $injected_values_by_point,
+            $pillar_weight_by_name
+        );
+        if ( empty( $hypothetical_composites ) ) {
+            continue;
+        }
+
+        // Same index-owned descending comparison as the full-coverage
+        // branch above — not the shared blomstra_rank_in_full_index().
         $ranks_by_injection = array();
-        foreach ( array( 0, 10, 50, 90, 100 ) as $injected ) {
-            $hypothetical_composite = $known_weighted_sum + ( $injected * $missing_weight );
-            $ranks_by_injection[ $injected ] = $rank_in_full_index( $hypothetical_composite );
+        foreach ( $hypothetical_composites as $point => $hyp_composite ) {
+            $rank = 1;
+            foreach ( $full_composites_sorted as $full_score ) {
+                if ( $hyp_composite < $full_score ) {
+                    $rank++;
+                }
+            }
+            $ranks_by_injection[ $point ] = $rank;
         }
-
-        $range_80 = array( $ranks_by_injection[90], $ranks_by_injection[10] );
-        sort( $range_80 );
-        $theoretical = array( $ranks_by_injection[100], $ranks_by_injection[0] );
-        sort( $theoretical );
 
         $row['rank'] = null;
-        $row['rank_display'] = array(
-            'is_definitive'    => false,
-            'best_estimate'    => $ranks_by_injection[50],
-            'range_80_low'     => $range_80[0],
-            'range_80_high'    => $range_80[1],
-            'theoretical_low'  => $theoretical[0],
-            'theoretical_high' => $theoretical[1],
-            'string_format'    => '#' . $range_80[0] . '–#' . $range_80[1] . '*',
-        );
+        $row['rank_display'] = blomstra_build_partial_rank_display( $ranks_by_injection );
     }
     unset( $row );
 
@@ -1737,7 +1783,16 @@ function sivi_build_composite( $force = false, $context = 'manual', $custom_weig
         // Measurement flags
         $measurement_flags = array(
             'is_landlocked' => sivi_is_landlocked( $iso3 ),
-            'energy_is_structural_zero' => ( $energy_data[ $iso3 ]['source'] ?? '' ) === 'Structural zero — landlocked',
+            // BMS-1.1.0 fix (deviations.md Issue #3): this used to check
+            // energy_data for a "Structural zero — landlocked" source
+            // string that (a) only ever gets set on maritime_data, not
+            // energy_data, and (b) didn't even match the real label
+            // exactly (missing a parenthetical suffix) — so it always
+            // evaluated false. Landlocked status affects maritime
+            // connectivity, not energy dependency, so the flag is
+            // renamed and computed directly from the landlocked check
+            // rather than fragile string matching.
+            'maritime_is_structural_zero' => sivi_is_landlocked( $iso3 ),
             'coverage_ratio' => $coverage / 3,
             'is_definitive' => ( $coverage == 3 ),
             'missing_pillars' => $missing_pillars_list,
@@ -1763,6 +1818,19 @@ function sivi_build_composite( $force = false, $context = 'manual', $custom_weig
             'pillars_used'    => $row['pillars_used'],
             'pillars_missing' => $row['pillars_missing'],
             'last_updated'    => $row['last_updated'],
+            // BMS-1.1.0 (deviations.md Issue #4, partial): nested pillars
+            // object matching SERI's {score, weight} shape, built from
+            // data SIVI already computes. NOTE: this does NOT add a
+            // data_freshness structure — SERI's is bespoke to its own
+            // per-indicator year/source field names, and building a
+            // matching one for SIVI needs a real design decision about
+            // what year/source metadata SIVI actually has available per
+            // pillar, not a guessed structure. Left as an open item.
+            'pillars' => array(
+                'energy'   => array( 'score' => $row['energy_dependency_percentile'], 'weight' => $composite_weights['energy'] ?? 33.3333 ),
+                'hhi'      => array( 'score' => $row['supplier_concentration_percentile'], 'weight' => $composite_weights['hhi'] ?? 33.3333 ),
+                'maritime' => array( 'score' => $row['maritime_vulnerability_percentile'], 'weight' => $composite_weights['maritime'] ?? 33.3334 ),
+            ),
         );
     }
 
@@ -1778,10 +1846,12 @@ function sivi_build_composite( $force = false, $context = 'manual', $custom_weig
         'footnote'        => 'Partial ranks are projections, not definitive placements. Following OECD/JRC guidelines, we report two uncertainty intervals for countries missing a pillar: the 80% Plausible Range (simulating the missing dimension between the 10th and 90th percentile of global data) and the Theoretical Bound (0th to 100th percentile). The Best Estimate uses the global median (50th percentile) for the missing dimension. Countries with structural zeros (e.g. landlocked states with no maritime connectivity) are scored in the Full Index, not the Partial Index.',
         'weights' => $composite_weights,
         '_meta' => array(
-            'built_at'   => current_time( 'mysql' ),
-            'source'     => $context,
-            'status'     => 'valid',
-            'standard_version' => 'BMS-1.0.0',
+            'built_at'            => current_time( 'mysql' ),
+            'source'              => $context,
+            'status'              => 'valid',
+            'standard_version'    => 'BMS-1.1.0',
+            'methodology_version' => SIVI_VERSION,
+            'software_version'    => SIVI_VERSION,
         ),
         'countries' => $country_output,
     );
@@ -1890,31 +1960,7 @@ function sivi_delete_scenario( $scenario_id ) {
  * @param  array $y  Second array of numeric values (same length as $x).
  * @return float Spearman's ρ, or 0 if too few data points.
  */
-function sivi_spearman_correlation( $x, $y ) {
-    $n = count( $x );
-    if ( $n < 2 ) {
-        return 0;
-    }
 
-    $rank = function( $arr ) {
-        $sorted = $arr;
-        sort( $sorted );
-        $ranks = array();
-        foreach ( $arr as $v ) {
-            $ranks[] = array_search( $v, $sorted ) + 1;
-        }
-        return $ranks;
-    };
-
-    $rx = $rank( $x );
-    $ry = $rank( $y );
-
-    $d2 = 0;
-    for ( $i = 0; $i < $n; $i++ ) {
-        $d2 += pow( $rx[ $i ] - $ry[ $i ], 2 );
-    }
-    return 1 - ( ( 6 * $d2 ) / ( $n * ( $n * $n - 1 ) ) );
-}
 
 
 // ============================================================================
@@ -2276,9 +2322,9 @@ function sivi_render_admin_page() {
     $hhi_data = $hhi_store['data'] ?? array();
     $maritime_data = $maritime_store['data'] ?? array();
 
-    $energy_count = count( $energy_data );
-    $hhi_count    = count( $hhi_data );
-    $maritime_count = count( $maritime_data );
+    $energy_count = count( array_filter( $energy_data, function( $row ) { return isset( $row['value'] ) && is_numeric( $row['value'] ); } ) );
+    $hhi_count    = count( array_filter( $hhi_data, function( $row ) { return isset( $row['value'] ) && is_numeric( $row['value'] ); } ) );
+    $maritime_count = count( array_filter( $maritime_data, function( $row ) { return isset( $row['value'] ) && is_numeric( $row['value'] ); } ) );
 
     $pillar_freshness = array();
     foreach ( array( 'energy' => $energy_meta, 'hhi' => $hhi_meta, 'maritime' => $maritime_meta ) as $key => $meta ) {
@@ -2424,7 +2470,7 @@ function sivi_render_admin_page() {
     foreach ( array( 'energy' => 'Energy', 'hhi' => 'HHI', 'maritime' => 'Maritime' ) as $key => $label ) {
         $store = get_option( constant( 'SIVI_' . strtoupper( $key ) . '_KEY' ), array() );
         $data = $store['data'] ?? array();
-        $count = is_array( $data ) ? count( $data ) : 0;
+        $count = is_array( $data ) ? count( array_filter( $data, function( $row ) { return isset( $row['value'] ) && is_numeric( $row['value'] ); } ) ) : 0;
         $status = $count > 0 ? '<span style="color:#2e7d32;">Cached ✓ (' . $count . ')</span>' : '<span style="color:#d63638;">Not Cached</span>';
         echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td>' . $status . '</td><td>';
         echo '<form method="post" style="display:inline-block; margin-right:5px;">';
@@ -2581,7 +2627,9 @@ function sivi_render_admin_page() {
 
             $rho = 'N/A';
             if ( count( $x ) > 2 ) {
-                $rho = round( sivi_spearman_correlation( $x, $y ), 3 );
+                $rho = function_exists( 'blomstra_spearman_correlation' )
+                    ? round( blomstra_spearman_correlation( $x, $y ), 3 )
+                    : 0;
             }
 
             $max_delta = 0;
