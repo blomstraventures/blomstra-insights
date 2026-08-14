@@ -460,9 +460,26 @@ if ( ! function_exists( 'blomstra_refresh_comtrade_hhi_data' ) ) {
         if ( $year === null ) {
             $year = (int) current_time( 'Y' ) - 1;
         }
-        if ( $force ) {
-            delete_option( 'blomstra_comtrade_hhi_data' );
-        }
+        // BMS-1.1.0 fix (HHI-checkpoint item): this used to delete_option()
+        // the ENTIRE central HHI cache upfront on $force, before any
+        // fetching started. The checkpoint closure below already does the
+        // right thing on its own — it merges freshly computed values into
+        // whatever's currently cached, so a country not yet re-processed
+        // this run keeps its last good value. The upfront wipe fought that:
+        // it's called with $force=true from blomstra_cron_handle_hhi(),
+        // which is exactly the WEEKLY CRON — the routine, scheduled path,
+        // not a rare manual action. Comtrade's quota is a known, actively
+        // handled constraint in this very function (quota_exhausted
+        // sentinel, skipped_quota/quota_exhausted_pass summary fields all
+        // exist because partial completion is the expected, common case).
+        // So the previous behavior was: every week, wipe the entire central
+        // HHI cache, then rebuild only as far as quota allows — meaning the
+        // cache could silently regress (fewer countries populated) after
+        // every single weekly run that didn't fully complete, rather than
+        // staying stable or improving. Removing the wipe fixes that; the
+        // checkpoint merge already handles "refresh" correctly on its own.
+        // $force is left in the signature for API compatibility with
+        // existing call sites but no longer has any effect.
 
         $reporter_map = blomstra_get_comtrade_reporter_map();
         if ( $iso3_list === null ) {
