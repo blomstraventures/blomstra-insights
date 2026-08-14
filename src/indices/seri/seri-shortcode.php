@@ -81,13 +81,5 @@ if ( ! function_exists( 'seri_render_index_shortcode' ) ) {
         <?php
         return ob_get_clean();
     }
-    add_shortcode( 'blomstra_seri_index', 'seri_render_index_shortcode' );
 }
-
-// ─── DEPRECATED: Keep old shortcode as alias ──────────────────────
-if ( ! function_exists( 'geri_render_index_shortcode' ) ) {
-    function geri_render_index_shortcode( $atts ) {
-        return seri_render_index_shortcode( $atts );
-    }
-    add_shortcode( 'blomstra_geri_index', 'geri_render_index_shortcode' );
-}
+add_shortcode( 'blomstra_seri_index', 'seri_render_index_shortcode' );
