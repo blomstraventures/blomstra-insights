@@ -30,7 +30,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 
-define( 'SERI_VERSION', '4.2.1' );
+define( 'SERI_VERSION', '4.3.0' );
 define( 'SERI_OPTION_KEY', 'seri_composite_index' );
 define( 'SERI_CRON_HOOK', 'seri_weekly_refresh' );
 define( 'SERI_DAILY_CRON_HOOK', 'seri_daily_cron' );
@@ -62,6 +62,14 @@ function seri_get_pillar_weights() {
             ),
             'min_required' => 3,
             'min_weight' => 100,
+            // BMS-1.1.0: WGI scores are bounded by construction and
+            // extreme values reflect real governance conditions, not
+            // reporting artifacts — no winsorization.
+            'winsorize' => array(
+                'rule_of_law' => 0.0,
+                'control_of_corruption' => 0.0,
+                'political_stability' => 0.0,
+            ),
         ),
         'macro' => array(
             'name' => 'Macro Stability',
@@ -74,6 +82,23 @@ function seri_get_pillar_weights() {
             ),
             'min_required' => 4,
             'min_weight' => 80,
+            // BMS-1.1.0: inflation kept at its existing 1% (hyperinflation
+            // countries are real, but 1% has always balanced this well).
+            // gni_growth gets a light 1% for small-economy base-effect
+            // spikes (e.g. one large one-off project posting as +40%
+            // growth). The two volatility measures are DERIVED from
+            // short/incomplete time series for some countries — that's
+            // an artifact of data availability, not real volatility, so
+            // they get 1% too. Unemployment reporting is inconsistent
+            // enough across countries (informal-sector measurement gaps)
+            // to warrant a light 1% as well.
+            'winsorize' => array(
+                'gni_growth' => 0.01,
+                'inflation' => 0.01,
+                'unemployment' => 0.01,
+                'gdp_volatility' => 0.01,
+                'inflation_volatility' => 0.01,
+            ),
         ),
         'external' => array(
             'name' => 'External Vulnerability',
@@ -85,6 +110,21 @@ function seri_get_pillar_weights() {
             ),
             'min_required' => 3,
             'min_weight' => 60,
+            // BMS-1.1.0: reserve_months genuinely varies hugely and
+            // meaningfully (crisis countries vs. resource-rich ones) —
+            // winsorizing would suppress exactly the signal this pillar
+            // exists to capture, so it's left alone. external_debt and
+            // current_account (both % of GDP) can show artifact-driven
+            // extremes for small offshore financial centers with
+            // disproportionate cross-border flows — light 1%.
+            // gni_gdp_divergence is a computed divergence measure prone
+            // to noise in small economies — 1%.
+            'winsorize' => array(
+                'reserve_months' => 0.0,
+                'external_debt' => 0.01,
+                'current_account' => 0.01,
+                'gni_gdp_divergence' => 0.01,
+            ),
         ),
         'fiscal' => array(
             'name' => 'Fiscal Stress',
@@ -95,6 +135,16 @@ function seri_get_pillar_weights() {
             ),
             'min_required' => 2,
             'min_weight' => 70,
+            // BMS-1.1.0: gov_debt and gov_balance extremes (Japan, Sudan,
+            // Venezuela) are real fiscal conditions, not artifacts —
+            // no winsorization, same reasoning as reserve_months above.
+            // debt_trajectory is a computed trend measure that can be
+            // noisy for countries with short debt-history data — 1%.
+            'winsorize' => array(
+                'gov_debt' => 0.0,
+                'gov_balance' => 0.0,
+                'debt_trajectory' => 0.01,
+            ),
         ),
     );
 }
@@ -634,31 +684,7 @@ function seri_delete_scenario( $scenario_id ) {
 
 // ─── SPEARMAN CORRELATION ─────────────────────────────────────────
 
-function seri_spearman_correlation( $x, $y ) {
-    $n = count( $x );
-    if ( $n < 2 ) {
-        return 0;
-    }
 
-    $rank = function( $arr ) {
-        $sorted = $arr;
-        sort( $sorted );
-        $ranks = array();
-        foreach ( $arr as $v ) {
-            $ranks[] = array_search( $v, $sorted ) + 1;
-        }
-        return $ranks;
-    };
-
-    $rx = $rank( $x );
-    $ry = $rank( $y );
-
-    $d2 = 0;
-    for ( $i = 0; $i < $n; $i++ ) {
-        $d2 += pow( $rx[ $i ] - $ry[ $i ], 2 );
-    }
-    return 1 - ( ( 6 * $d2 ) / ( $n * ( $n * $n - 1 ) ) );
-}
 
 // ─── COMPOSITE BUILDER ─────────────────────────────────────────────
 
@@ -742,10 +768,12 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
                 $values[ $iso3 ] = 100 - $row[ $ind ];
             }
         }
-        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, 0.0 ) : array();
+        // BMS-1.1.0: winsor level now read from config (§2.8), not hardcoded.
+        $winsor = $weight_defs['governance']['winsorize'][ $ind ] ?? 0.0;
+        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, $winsor ) : array();
     }
 
-    // Macro — inflation is winsorized at 1% to handle outliers
+    // Macro
     $macro_indicators = array_keys( $weight_defs['macro']['indicators'] );
     foreach ( $macro_indicators as $ind ) {
         $values = array();
@@ -758,11 +786,9 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
                 }
             }
         }
-        if ( $ind === 'inflation' ) {
-            $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, 0.01 ) : array();
-        } else {
-            $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, 0.0 ) : array();
-        }
+        // BMS-1.1.0: winsor level now read from config (§2.8), not hardcoded.
+        $winsor = $weight_defs['macro']['winsorize'][ $ind ] ?? 0.0;
+        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, $winsor ) : array();
     }
 
     // External
@@ -780,7 +806,9 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
                 }
             }
         }
-        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, 0.0 ) : array();
+        // BMS-1.1.0: winsor level now read from config (§2.8), not hardcoded.
+        $winsor = $weight_defs['external']['winsorize'][ $ind ] ?? 0.0;
+        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, $winsor ) : array();
     }
 
     // Fiscal
@@ -796,7 +824,9 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
                 }
             }
         }
-        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, 0.0 ) : array();
+        // BMS-1.1.0: winsor level now read from config (§2.8), not hardcoded.
+        $winsor = $weight_defs['fiscal']['winsorize'][ $ind ] ?? 0.0;
+        $percentiles[ $ind ] = ! empty( $values ) ? blomstra_compute_percentile_ranks_safe( $values, $winsor ) : array();
     }
 
     // 5. Compute pillar scores
@@ -882,7 +912,8 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
         $coverage = count( $valid_pillars );
 
         if ( $coverage < SERI_MIN_PILLARS_REQUIRED ) {
-            $excluded[ $iso3 ] = 'Insufficient pillar coverage: ' . $coverage . '/4 pillars available.';
+            $missing_names = implode( ', ', array_keys( array_filter( $pillars, function( $v ) { return $v === null; } ) ) );
+            $excluded[ $iso3 ] = 'Insufficient pillar coverage: ' . $coverage . '/4 pillars available (missing: ' . $missing_names . ').';
             continue;
         }
 
@@ -935,7 +966,7 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
         }
 
         if ( $composite === null ) {
-            $excluded[ $iso3 ] = 'Could not compute composite';
+            $excluded[ $iso3 ] = 'Could not compute composite.';
             continue;
         }
 
@@ -1072,7 +1103,7 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
     }
 
     // 7. Ranks (inverted for resilience: lower score = lower rank number)
-    if ( function_exists( 'blomstra_rank_in_full_index' ) && function_exists( 'blomstra_build_full_rank_display' ) && function_exists( 'blomstra_build_partial_rank_display' ) ) {
+    if ( function_exists( 'blomstra_build_full_rank_display' ) && function_exists( 'blomstra_build_partial_rank_display' ) ) {
         $full_countries = array();
         $partial_countries = array();
         foreach ( $country_output as $iso3 => $out ) {
@@ -1093,7 +1124,13 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
             $i++;
         }
 
-        // ── Partial rank projection (manual ranking against ascending full list) ──
+        // ── Partial rank projection ──────────────────────────────────
+        // NOTE: the global-distribution interpolation to estimate the
+        // missing pillar's injected value at each point is SERI's own
+        // methodology choice, unchanged and untouched here. Only the
+        // composite/rank math downstream of it now goes through the
+        // shared, weight-aware, N-pillar-generic functions in the
+        // Utility layer (BMS-1.1.0 §2.1) instead of an inline copy.
         $partial_rank_data = array();
         foreach ( $partial_countries as $iso3 => $score ) {
             $pillars = $pillar_scores[ $iso3 ];
@@ -1116,32 +1153,47 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
             }
             $n = count( $global_vals );
 
-            $ranks_by_injection = array();
+            $injected_values_by_point = array();
             foreach ( array( 0, 10, 50, 90, 100 ) as $p ) {
                 $rank_idx = ( $p / 100 ) * ( $n - 1 );
                 $low = floor( $rank_idx );
                 $high = ceil( $rank_idx );
                 if ( $low == $high ) {
-                    $injected_value = $global_vals[ $low ] ?? 0;
+                    $injected_values_by_point[ $p ] = $global_vals[ $low ] ?? 0;
                 } else {
                     $frac = $rank_idx - $low;
-                    $injected_value = $global_vals[ $low ] * ( 1 - $frac ) + $global_vals[ $high ] * $frac;
+                    $injected_values_by_point[ $p ] = $global_vals[ $low ] * ( 1 - $frac ) + $global_vals[ $high ] * $frac;
                 }
-                $injected_pillars = $pillars;
-                $injected_pillars[ $missing_pillar ] = $injected_value;
-                unset( $injected_pillars['_coverage'] );
-                $injected_composite = ( $injected_pillars['governance'] + $injected_pillars['macro'] + $injected_pillars['external'] + $injected_pillars['fiscal'] ) / 4;
+            }
 
-                // Manual rank against ascending full list (lowest score = rank 1)
+            $known_pillars = $pillars;
+            unset( $known_pillars['_coverage'] );
+
+            $hypothetical_composites = function_exists( 'blomstra_project_partial_rank_composite' )
+                ? blomstra_project_partial_rank_composite( $known_pillars, $missing_pillar, $injected_values_by_point, $composite_weights )
+                : array();
+            if ( empty( $hypothetical_composites ) ) {
+                continue;
+            }
+
+            $ranks_by_injection = array();
+            foreach ( $hypothetical_composites as $point => $hyp_composite ) {
+                // NOTE: deliberately NOT calling blomstra_rank_in_full_index()
+                // here. Reference Data's real implementation takes only
+                // ($score, $full_composites_sorted) — no direction parameter —
+                // and is hardcoded to descending ("higher score = better rank"),
+                // which matches SIVI's vulnerability convention but is the
+                // OPPOSITE of what SERI needs (lower score = more resilient =
+                // rank #1). Computing it directly here, ascending, is correct.
                 $rank = 1;
                 foreach ( $full_composites_sorted as $full_score ) {
-                    if ( $injected_composite > $full_score ) {
+                    if ( $hyp_composite > $full_score ) {
                         $rank++;
                     } else {
                         break;
                     }
                 }
-                $ranks_by_injection[ $p ] = $rank;
+                $ranks_by_injection[ $point ] = $rank;
             }
             $partial_rank_data[ $iso3 ] = blomstra_build_partial_rank_display( $ranks_by_injection );
         }
@@ -1149,6 +1201,11 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
         foreach ( $country_output as $iso3 => &$out ) {
             if ( isset( $full_rank_map[ $iso3 ] ) ) {
                 $rank = $full_rank_map[ $iso3 ];
+                // NOTE: Reference Data's real blomstra_build_full_rank_display()
+                // takes only $rank (1 arg) — a 2nd argument is silently
+                // ignored by PHP, not an error, but it means 'total' never
+                // gets set internally. Setting it externally restores the
+                // original API contract.
                 $out['rank_display'] = blomstra_build_full_rank_display( $rank );
                 $out['rank_display']['total'] = count( $full_countries );
             } elseif ( isset( $partial_rank_data[ $iso3 ] ) ) {
@@ -1254,6 +1311,15 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
         'total_countries'    => count( $country_output ),
         'excluded_countries' => count( $excluded ),
         'excluded_detail'    => $excluded,
+        // BMS-1.1.0: SIVI already declares standard_version; SERI didn't. Added for consistency.
+        '_meta' => array(
+            'built_at'            => current_time( 'mysql' ),
+            'status'              => 'valid',
+            'standard_version'    => 'BMS-1.1.0',
+            'methodology_version' => SERI_VERSION,
+            'software_version'    => SERI_VERSION,
+            'data_vintage'        => $weo_vintage,
+        ),
         'countries'          => $country_output,
     );
 
@@ -1306,13 +1372,17 @@ function seri_build_composite( $force = false, $context = 'manual', $custom_weig
 // ─── VALIDATION ON INIT ─────────────────────────────────────────────
 
 function seri_initialize() {
-    $validation = blomstra_validate_pillar_thresholds( seri_get_pillar_defs(), seri_get_pillar_weights() );
-    if ( ! $validation['valid'] ) {
-        foreach ( $validation['mismatches'] as $m ) {
-            error_log( 'SERI Definition Mismatch: ' . $m['issue'] );
-        }
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            wp_die( 'SERI pillar definitions are inconsistent. Check error log.' );
+    // BMS-1.1.0 fix: guard against shared utilities not being loaded yet
+    // (SERI would previously fatal-error here if so; SIVI already had this guard).
+    if ( function_exists( 'blomstra_validate_pillar_thresholds' ) ) {
+        $validation = blomstra_validate_pillar_thresholds( seri_get_pillar_defs(), seri_get_pillar_weights() );
+        if ( ! $validation['valid'] ) {
+            foreach ( $validation['mismatches'] as $m ) {
+                error_log( 'SERI Definition Mismatch: ' . $m['issue'] );
+            }
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                wp_die( 'SERI pillar definitions are inconsistent. Check error log.' );
+            }
         }
     }
 }
@@ -1908,7 +1978,9 @@ function seri_render_admin_page() {
 
             $rho = 'N/A';
             if ( count( $x ) > 2 ) {
-                $rho = round( seri_spearman_correlation( $x, $y ), 3 );
+                $rho = function_exists( 'blomstra_spearman_correlation' )
+                    ? round( blomstra_spearman_correlation( $x, $y ), 3 )
+                    : 0;
             }
 
             $max_delta = 0;
