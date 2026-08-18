@@ -1,23 +1,113 @@
-<?php
 /**
  * Blomstra Shared Index Utilities — Data Integrity & Processing Layer
  *
  * Provides safe numeric handling, timeseries sanitization, per-indicator source
- * tracking, validated fallback merging, and winsorized percentile computation.
+ * tracking, validated fallback merging, winsorized percentile computation,
+ * and static country classification data.
  *
  * @package Blomstra\Insights\Shared
  * @since   1.0.0
- * @version 1.0.0
- *
- * USAGE CONTRACT:
- *   1. Never use empty() on numeric values — use blomstra_safe_numeric()
- *   2. Never assume API returns chronological order — use blomstra_sanitize_timeseries()
- *   3. Never merge fallback data without tracking — use blomstra_merge_with_fallback()
- *   4. Never let pillar defs and engine thresholds drift — use blomstra_validate_pillar_thresholds()
+ * @version 1.1.3  – removed all scraper code; now purely static + override logic
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 0. STATIC COUNTRY CLASSIFICATIONS
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * List of all landlocked countries (44 countries).
+ *
+ * This list is used for maritime access calculations in the composite indices.
+ * It includes both developing and developed landlocked states, as the geographic
+ * fact of being landlocked applies regardless of income level.
+ *
+ * The list is manually maintained and was last verified against a reliable source
+ * on the date set in BLOMSTRA_LANDLOCKED_SOURCE_DATE below.
+ *
+ * @see https://www.un.org/ohrlls/content/landlocked-developing-countries
+ */
+
+if ( ! defined( 'BLOMSTRA_LANDLOCKED_ISO3' ) ) {
+    define( 'BLOMSTRA_LANDLOCKED_ISO3', array(
+        'AFG', 'AND', 'ARM', 'AUT', 'AZE', 'BLR', 'BTN', 'BOL', 'BWA', 'BFA',
+        'BDI', 'CAF', 'TCD', 'CZE', 'ETH', 'SWZ', 'HUN', 'KAZ', 'KGZ', 'LAO',
+        'LSO', 'LIE', 'LUX', 'MWI', 'MLI', 'MDA', 'MNG', 'NPL', 'NER', 'MKD',
+        'PRY', 'RWA', 'SMR', 'SRB', 'SVK', 'SSD', 'CHE', 'TJK', 'TKM', 'UGA',
+        'UZB', 'VAT', 'ZMB', 'ZWE',
+    ) );
+}
+
+/**
+ * Source date of the hardcoded landlocked list (YYYY-MM-DD).
+ * Update this manually when the list is verified against a reliable source.
+ */
+if ( ! defined( 'BLOMSTRA_LANDLOCKED_SOURCE_DATE' ) ) {
+    define( 'BLOMSTRA_LANDLOCKED_SOURCE_DATE', '2026-08-17' );
+}
+
+/**
+ * Check if a country is landlocked.
+ *
+ * Checks a stored override option first, then falls back to the hardcoded constant.
+ *
+ * @param string $iso3 3-letter ISO country code.
+ * @return bool True if landlocked, false otherwise.
+ */
+function blomstra_is_landlocked( $iso3 ) {
+    $iso3 = strtoupper( trim( $iso3 ) );
+    // Check override first (admin‑updated list)
+    $override = get_option( 'blomstra_landlocked_override', array() );
+    if ( ! empty( $override['iso3s'] ) && is_array( $override['iso3s'] ) ) {
+        return in_array( $iso3, $override['iso3s'], true );
+    }
+    return in_array( $iso3, BLOMSTRA_LANDLOCKED_ISO3, true );
+}
+
+/**
+ * Check if a data pillar or the landlocked list is stale.
+ *
+ * @param string $pillar   Pillar key (e.g., 'wb_indicators', 'eia', 'hhi', 'maritime', 'imf', 'countries', 'reporters', 'landlocked').
+ * @param int    $threshold Custom threshold in seconds (optional, uses per‑pillar defaults if omitted).
+ * @return bool True if stale, false if fresh or unknown.
+ */
+function blomstra_is_stale( $pillar, $threshold = null ) {
+    // Define default thresholds per pillar
+    $defaults = array(
+        'wb_indicators' => 7 * DAY_IN_SECONDS,
+        'eia'           => 7 * DAY_IN_SECONDS,
+        'hhi'           => 7 * DAY_IN_SECONDS,
+        'maritime'      => 7 * DAY_IN_SECONDS,
+        'imf'           => 7 * DAY_IN_SECONDS,
+        'countries'     => 30 * DAY_IN_SECONDS,
+        'reporters'     => 30 * DAY_IN_SECONDS,
+        'landlocked'    => 6 * MONTH_IN_SECONDS,
+    );
+
+    // Special handling for landlocked list
+    if ( $pillar === 'landlocked' ) {
+        $source_date = defined( 'BLOMSTRA_LANDLOCKED_SOURCE_DATE' ) ? strtotime( BLOMSTRA_LANDLOCKED_SOURCE_DATE ) : 0;
+        $threshold = $threshold ?: $defaults['landlocked'];
+        return ( time() - $source_date ) > $threshold;
+    }
+
+    // For data pillars, read from cron status
+    $cron_status = get_option( 'blomstra_cron_status', array() );
+    if ( ! isset( $cron_status[ $pillar ] ) ) {
+        // Never run – treat as stale if it's been more than a day since the plugin was active
+        return true;
+    }
+
+    $last_run = isset( $cron_status[ $pillar ]['last_run'] ) ? strtotime( $cron_status[ $pillar ]['last_run'] ) : 0;
+    if ( ! $last_run ) {
+        return true;
+    }
+
+    $threshold = $threshold ?: ( isset( $defaults[ $pillar ] ) ? $defaults[ $pillar ] : 7 * DAY_IN_SECONDS );
+    return ( time() - $last_run ) > $threshold;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -354,6 +444,39 @@ function blomstra_validate_pillar_thresholds( $defs, $engine ) {
 // ─────────────────────────────────────────────────────────────────
 
 /**
+ * Cap values outside a symmetric winsorization threshold.
+ *
+ * @param array $values      [ key => numeric_value ] — should already be numeric-filtered.
+ * @param float $winsor_pct  Winsorization level (0.01 = 1st/99th percentile). 0 = none.
+ * @return array             Same keys, values capped where winsor_pct > 0 and n >= 10.
+ */
+function blomstra_winsorize( $values, $winsor_pct = 0.0 ) {
+    $n = count( $values );
+    if ( $winsor_pct <= 0 || $n < 10 ) {
+        return $values;
+    }
+
+    $clean = $values;
+    asort( $clean, SORT_NUMERIC );
+    $sorted_vals = array_values( $clean );
+    $cutoff = max( 1, (int) round( $n * $winsor_pct ) );
+    $lower_bound = $sorted_vals[ $cutoff - 1 ];
+    $upper_bound = $sorted_vals[ $n - $cutoff ];
+
+    $result = array();
+    foreach ( $values as $key => $val ) {
+        if ( $val < $lower_bound ) {
+            $result[ $key ] = $lower_bound;
+        } elseif ( $val > $upper_bound ) {
+            $result[ $key ] = $upper_bound;
+        } else {
+            $result[ $key ] = $val;
+        }
+    }
+    return $result;
+}
+
+/**
  * Compute percentile ranks with optional winsorization.
  *
  * Uses the "high value = high percentile" convention.
@@ -375,22 +498,7 @@ function blomstra_compute_percentile_ranks_safe( $values, $winsor_pct = 0.0 ) {
         return array();
     }
 
-    // Winsorize if requested and sufficient data
-    if ( $winsor_pct > 0 && $n >= 10 ) {
-        asort( $clean, SORT_NUMERIC );
-        $sorted_vals = array_values( $clean );
-        $cutoff = max( 1, (int) round( $n * $winsor_pct ) );
-        $lower_bound = $sorted_vals[ $cutoff - 1 ];
-        $upper_bound = $sorted_vals[ $n - $cutoff ];
-
-        foreach ( $clean as $iso3 => $val ) {
-            if ( $val < $lower_bound ) {
-                $clean[ $iso3 ] = $lower_bound;
-            } elseif ( $val > $upper_bound ) {
-                $clean[ $iso3 ] = $upper_bound;
-            }
-        }
-    }
+    $clean = blomstra_winsorize( $clean, $winsor_pct );
 
     // Sort ascending for ranking
     asort( $clean, SORT_NUMERIC );
@@ -422,7 +530,7 @@ function blomstra_compute_percentile_ranks_safe( $values, $winsor_pct = 0.0 ) {
     // Convert to percentile (0-100)
     $percentiles = array();
     foreach ( $ranks as $iso3 => $rank ) {
-        $percentiles[ $iso3 ] = ( $rank / $n ) * 100;
+        $percentiles[ $iso3 ] = ( ( $rank - 0.5 ) / $n ) * 100;
     }
 
     return $percentiles;
@@ -591,4 +699,257 @@ function blomstra_pillar_quality_score( $sources, $iso3, $indicators, $current_y
         'quality_counts'=> $quality_counts,
         'indicators'    => $indicators,
     );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 8. STATISTICAL / RESEARCH-CREDIBILITY LAYER (BMS-1.1.0)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Spearman rank correlation with correct tied-value (fractional mid-rank)
+ * handling.
+ *
+ * @since 1.1.0
+ * @param array $x First series of values.
+ * @param array $y Second series of values, same length/order as $x.
+ * @return float Spearman's rho, or 0 if fewer than 2 paired observations.
+ */
+function blomstra_spearman_correlation( $x, $y ) {
+    $n = count( $x );
+    if ( $n < 2 || count( $y ) !== $n ) {
+        return 0;
+    }
+
+    $rank = function ( $arr ) {
+        $n = count( $arr );
+        $indexed = array();
+        foreach ( $arr as $i => $v ) {
+            $indexed[] = array( 'i' => $i, 'v' => $v );
+        }
+        usort( $indexed, function ( $a, $b ) {
+            return $a['v'] <=> $b['v'];
+        } );
+
+        $ranks = array_fill( 0, $n, 0.0 );
+        $pos = 0;
+        while ( $pos < $n ) {
+            $tie_end = $pos;
+            while ( $tie_end + 1 < $n && $indexed[ $tie_end + 1 ]['v'] == $indexed[ $pos ]['v'] ) {
+                $tie_end++;
+            }
+            $avg_rank = ( ( $pos + 1 ) + ( $tie_end + 1 ) ) / 2;
+            for ( $k = $pos; $k <= $tie_end; $k++ ) {
+                $ranks[ $indexed[ $k ]['i'] ] = $avg_rank;
+            }
+            $pos = $tie_end + 1;
+        }
+        return $ranks;
+    };
+
+    $rx = $rank( $x );
+    $ry = $rank( $y );
+
+    $d2 = 0;
+    for ( $i = 0; $i < $n; $i++ ) {
+        $d2 += pow( $rx[ $i ] - $ry[ $i ], 2 );
+    }
+    return 1 - ( ( 6 * $d2 ) / ( $n * ( $n * $n - 1 ) ) );
+}
+
+/**
+ * Cronbach's alpha for a set of indicators measured across the same
+ * countries. Standard measurement-theory reliability statistic.
+ *
+ * @since 1.1.0
+ * @param array $indicator_matrix Array of indicators; each element is an
+ *                                array of that indicator's values, one
+ *                                per country, in the SAME country order
+ *                                across all indicators.
+ * @return float|null Alpha rounded to 3 decimals, or null if the matrix
+ *                     is too small, not rectangular, or has zero total
+ *                     variance.
+ */
+function blomstra_cronbach_alpha( $indicator_matrix ) {
+    $k = count( $indicator_matrix );
+    if ( $k < 2 ) {
+        return null;
+    }
+    $first = reset( $indicator_matrix );
+    $n = count( $first );
+    if ( $n < 2 ) {
+        return null;
+    }
+
+    $sample_variance = function ( $values ) {
+        $n = count( $values );
+        $mean = array_sum( $values ) / $n;
+        $ss = 0;
+        foreach ( $values as $v ) {
+            $ss += pow( $v - $mean, 2 );
+        }
+        return $ss / ( $n - 1 );
+    };
+
+    $item_variances_sum = 0;
+    $total_scores = array_fill( 0, $n, 0 );
+    foreach ( $indicator_matrix as $item_values ) {
+        $item_values = array_values( $item_values );
+        if ( count( $item_values ) !== $n ) {
+            return null; // not rectangular — caller must align countries first
+        }
+        $item_variances_sum += $sample_variance( $item_values );
+        foreach ( $item_values as $i => $v ) {
+            $total_scores[ $i ] += $v;
+        }
+    }
+
+    $total_variance = $sample_variance( $total_scores );
+    if ( $total_variance <= 0 ) {
+        return null;
+    }
+
+    $alpha = ( $k / ( $k - 1 ) ) * ( 1 - ( $item_variances_sum / $total_variance ) );
+    return round( $alpha, 3 );
+}
+
+/**
+ * Weight-perturbation confidence interval for composite scores.
+ *
+ * IMPORTANT — methodological honesty note: this is a robustness/sensitivity
+ * interval built by resampling the PILLAR WEIGHTS within +/-10% (not a
+ * classical statistical bootstrap over indicator-level measurement error).
+ * Label it as "95% weight-sensitivity interval", not "95% confidence interval".
+ *
+ * @since 1.1.0
+ * @param array $pillar_values_by_country iso3 => array( pillar_name => percentile value ).
+ * @param array $pillar_weights           pillar_name => weight.
+ * @param int   $n_bootstrap              Number of resamples. Default 1000.
+ * @param float $ci_level                 e.g. 0.95 for a 95% interval.
+ * @return array|null iso3 => array( 'point', 'ci_low', 'ci_high' ), or null if too few countries.
+ */
+function blomstra_bootstrap_ci( $pillar_values_by_country, $pillar_weights, $n_bootstrap = 1000, $ci_level = 0.95 ) {
+    $countries = array_keys( $pillar_values_by_country );
+    $n = count( $countries );
+    if ( $n < 10 ) {
+        return null;
+    }
+    $total_weight = array_sum( $pillar_weights );
+    if ( $total_weight <= 0 ) {
+        return null;
+    }
+
+    $point_estimates = array();
+    foreach ( $pillar_values_by_country as $iso3 => $pillars ) {
+        $sum = 0;
+        foreach ( $pillar_weights as $pname => $w ) {
+            $sum += ( $pillars[ $pname ] ?? 0 ) * $w;
+        }
+        $point_estimates[ $iso3 ] = $sum / $total_weight;
+    }
+
+    $draws_by_country = array_fill_keys( $countries, array() );
+
+    for ( $b = 0; $b < $n_bootstrap; $b++ ) {
+        $perturbed = array();
+        $sum_w = 0;
+        foreach ( $pillar_weights as $pname => $w ) {
+            $factor = 1 + ( wp_rand( -1000, 1000 ) / 10000 ); // +/-10%
+            $pw = max( 0, $w * $factor );
+            $perturbed[ $pname ] = $pw;
+            $sum_w += $pw;
+        }
+        if ( $sum_w <= 0 ) {
+            continue;
+        }
+        foreach ( $pillar_values_by_country as $iso3 => $pillars ) {
+            $sum = 0;
+            foreach ( $perturbed as $pname => $pw ) {
+                $sum += ( $pillars[ $pname ] ?? 0 ) * $pw;
+            }
+            $draws_by_country[ $iso3 ][] = $sum / $sum_w;
+        }
+    }
+
+    $alpha = ( 1 - $ci_level ) / 2;
+    $result = array();
+    foreach ( $draws_by_country as $iso3 => $draws ) {
+        if ( empty( $draws ) ) {
+            $result[ $iso3 ] = array( 'point' => round( $point_estimates[ $iso3 ], 2 ), 'ci_low' => null, 'ci_high' => null );
+            continue;
+        }
+        sort( $draws );
+        $n_draws = count( $draws );
+        $low_idx  = max( 0, min( $n_draws - 1, (int) floor( $alpha * $n_draws ) ) );
+        $high_idx = max( 0, min( $n_draws - 1, (int) ceil( ( 1 - $alpha ) * $n_draws ) - 1 ) );
+        $result[ $iso3 ] = array(
+            'point'   => round( $point_estimates[ $iso3 ], 2 ),
+            'ci_low'  => round( $draws[ $low_idx ], 2 ),
+            'ci_high' => round( $draws[ $high_idx ], 2 ),
+        );
+    }
+    return $result;
+}
+
+/**
+ * Spearman correlation between this index's scores and an external
+ * comparator index's scores, over the countries both cover.
+ *
+ * @since 1.1.0
+ * @param array $index_scores     iso3 => this index's score.
+ * @param array $benchmark_scores iso3 => external comparator's score.
+ * @return array|null array('n' => overlap count, 'rho' => Spearman's rho), or null if fewer than 5 overlapping countries.
+ */
+function blomstra_benchmark_correlate( $index_scores, $benchmark_scores ) {
+    $common_keys = array_intersect_key( $index_scores, $benchmark_scores );
+    if ( count( $common_keys ) < 5 ) {
+        return null;
+    }
+    ksort( $common_keys );
+    $x = array();
+    $y = array();
+    foreach ( $common_keys as $iso3 => $v ) {
+        $x[] = $index_scores[ $iso3 ];
+        $y[] = $benchmark_scores[ $iso3 ];
+    }
+    return array(
+        'n'   => count( $x ),
+        'rho' => round( blomstra_spearman_correlation( $x, $y ), 3 ),
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 9. PARTIAL-RANK COMPOSITE PROJECTION (BMS-1.1.0)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Computes the hypothetical composite score at each OECD/JRC injection
+ * point for a partial-coverage country.
+ *
+ * @since 1.1.0
+ * @param array  $known_pillar_values      pillar_name => percentile value (0-100), for every pillar the country has EXCEPT $missing_pillar.
+ * @param string $missing_pillar           Name of the pillar being projected.
+ * @param array  $injected_values_by_point injection_point (0,10,50,90,100) => hypothetical value (0-100) for the missing pillar at that point.
+ * @param array  $pillar_weights           pillar_name => weight, for ALL pillars in the index (including $missing_pillar).
+ * @return array injection_point => hypothetical composite score, on the SAME 0-100 scale as the real composite_score. Empty array if weights are invalid.
+ */
+function blomstra_project_partial_rank_composite( $known_pillar_values, $missing_pillar, $injected_values_by_point, $pillar_weights ) {
+    $total_weight = array_sum( $pillar_weights );
+    if ( $total_weight <= 0 ) {
+        return array();
+    }
+
+    $known_weighted_sum = 0.0;
+    foreach ( $known_pillar_values as $pname => $pvalue ) {
+        if ( $pname === $missing_pillar || ! is_numeric( $pvalue ) ) {
+            continue;
+        }
+        $known_weighted_sum += $pvalue * ( $pillar_weights[ $pname ] ?? 0 );
+    }
+    $missing_weight = $pillar_weights[ $missing_pillar ] ?? 0;
+
+    $hypothetical_composites = array();
+    foreach ( $injected_values_by_point as $point => $injected_value ) {
+        $hypothetical_composites[ $point ] = ( $known_weighted_sum + ( $injected_value * $missing_weight ) ) / $total_weight;
+    }
+    return $hypothetical_composites;
 }
