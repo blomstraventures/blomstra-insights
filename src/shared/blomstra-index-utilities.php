@@ -7,7 +7,7 @@
  *
  * @package Blomstra\Insights\Shared
  * @since   1.0.0
- * @version 1.1.3  – removed all scraper code; now purely static + override logic
+ * @version 1.1.4  – added rank-display helpers and SIVI staleness entry
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -70,7 +70,7 @@ function blomstra_is_landlocked( $iso3 ) {
 /**
  * Check if a data pillar or the landlocked list is stale.
  *
- * @param string $pillar   Pillar key (e.g., 'wb_indicators', 'eia', 'hhi', 'maritime', 'imf', 'countries', 'reporters', 'landlocked').
+ * @param string $pillar   Pillar key (e.g., 'wb_indicators', 'eia', 'hhi', 'maritime', 'imf', 'countries', 'reporters', 'landlocked', 'sivi').
  * @param int    $threshold Custom threshold in seconds (optional, uses per‑pillar defaults if omitted).
  * @return bool True if stale, false if fresh or unknown.
  */
@@ -85,6 +85,7 @@ function blomstra_is_stale( $pillar, $threshold = null ) {
         'countries'     => 30 * DAY_IN_SECONDS,
         'reporters'     => 30 * DAY_IN_SECONDS,
         'landlocked'    => 6 * MONTH_IN_SECONDS,
+        'sivi'          => 7 * DAY_IN_SECONDS,
     );
 
     // Special handling for landlocked list
@@ -97,11 +98,15 @@ function blomstra_is_stale( $pillar, $threshold = null ) {
     // For data pillars, read from cron status
     $cron_status = get_option( 'blomstra_cron_status', array() );
     if ( ! isset( $cron_status[ $pillar ] ) ) {
-        // Never run – treat as stale if it's been more than a day since the plugin was active
+        // Never run – treat as stale
         return true;
     }
 
-    $last_run = isset( $cron_status[ $pillar ]['last_run'] ) ? strtotime( $cron_status[ $pillar ]['last_run'] ) : 0;
+    // ─── FIX: Use 'last_success' if available, else 'last_attempt' ───
+    $last_run = isset( $cron_status[ $pillar ]['last_success'] )
+        ? strtotime( $cron_status[ $pillar ]['last_success'] )
+        : ( isset( $cron_status[ $pillar ]['last_attempt'] ) ? strtotime( $cron_status[ $pillar ]['last_attempt'] ) : 0 );
+
     if ( ! $last_run ) {
         return true;
     }
@@ -952,4 +957,52 @@ function blomstra_project_partial_rank_composite( $known_pillar_values, $missing
         $hypothetical_composites[ $point ] = ( $known_weighted_sum + ( $injected_value * $missing_weight ) ) / $total_weight;
     }
     return $hypothetical_composites;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 10. RANK DISPLAY HELPERS (BMS-1.1.0)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Build the rank_display structure for a full‑coverage country.
+ *
+ * @param int $rank Definitive rank (1 = most vulnerable).
+ * @return array
+ */
+function blomstra_build_full_rank_display( $rank ) {
+    return array(
+        'is_definitive'    => true,
+        'best_estimate'    => (int) $rank,
+        'range_80_low'     => (int) $rank,
+        'range_80_high'    => (int) $rank,
+        'theoretical_low'  => (int) $rank,
+        'theoretical_high' => (int) $rank,
+        'string_format'    => '#' . (int) $rank,
+    );
+}
+
+/**
+ * Build the rank_display structure for a partial‑coverage country.
+ *
+ * @param array $ranks_by_injection [0,10,50,90,100] => rank at each injection point.
+ * @return array
+ */
+function blomstra_build_partial_rank_display( $ranks_by_injection ) {
+    $range_80_low  = $ranks_by_injection[10] ?? null;
+    $range_80_high = $ranks_by_injection[90] ?? null;
+    $theoretical_low  = $ranks_by_injection[0] ?? null;
+    $theoretical_high = $ranks_by_injection[100] ?? null;
+    $best_estimate = $ranks_by_injection[50] ?? null;
+
+    return array(
+        'is_definitive'    => false,
+        'best_estimate'    => $best_estimate,
+        'range_80_low'     => $range_80_low,
+        'range_80_high'    => $range_80_high,
+        'theoretical_low'  => $theoretical_low,
+        'theoretical_high' => $theoretical_high,
+        'string_format'    => ( $range_80_low && $range_80_high )
+            ? '#' . $range_80_low . '–' . $range_80_high . '*'
+            : '#?–?*',
+    );
 }
