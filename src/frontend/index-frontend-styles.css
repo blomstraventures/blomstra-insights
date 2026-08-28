@@ -1,6 +1,6 @@
 /* =====================================================================
-   Blomstra Index Frontend – Styles v3.2.0 (Final Polish)
-   Donut 170px, radar no watermark, risk tier badge, comparison bigger
+   Blomstra Index Frontend – Styles v3.2.1 (Final)
+   Sparkline, sensitivity interval, provenance panel
    ===================================================================== */
 
 .biw {
@@ -392,7 +392,6 @@
     margin-bottom: 12px;
 }
 
-/* ─── Donut – bigger (170px) and centered ─── */
 .biw-widget .biw-donut {
     display: flex;
     justify-content: center;
@@ -401,8 +400,8 @@
     position: relative;
 }
 .biw-widget .biw-donut svg {
-    width: 200px;
-    height: 200px;
+    width: 170px;
+    height: 170px;
     display: block;
 }
 
@@ -979,6 +978,55 @@
     display: block;
 }
 
+/* ─── Sensitivity interval ─── */
+.biw-drawer .drawer-sensitivity {
+    background: var(--biw-obsidian);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    border: 1px solid var(--biw-border);
+    font-size: 0.85rem;
+    color: var(--biw-slate);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+.biw-drawer .drawer-sensitivity .label {
+    font-weight: 500;
+    color: var(--biw-slate-dim);
+}
+.biw-drawer .drawer-sensitivity .range {
+    font-weight: 700;
+    color: var(--biw-champagne);
+}
+.biw-drawer .drawer-sensitivity .range-bar {
+    flex: 1;
+    height: 4px;
+    background: var(--biw-border);
+    border-radius: 2px;
+    position: relative;
+    min-width: 80px;
+}
+.biw-drawer .drawer-sensitivity .range-bar .fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: var(--biw-champagne);
+    border-radius: 2px;
+    opacity: 0.6;
+}
+.biw-drawer .drawer-sensitivity .range-bar .point {
+    position: absolute;
+    top: -4px;
+    width: 10px;
+    height: 12px;
+    background: var(--biw-champagne);
+    border-radius: 2px;
+    transform: translateX(-5px);
+}
+
 /* ─── Radar – no watermark, dotted circles more visible ─── */
 .biw-drawer .drawer-radar {
     background: var(--biw-obsidian);
@@ -1005,6 +1053,100 @@
     letter-spacing: 0.1em;
     color: var(--biw-slate-dim);
     margin-bottom: 4px;
+}
+
+/* ─── Historical sparkline ─── */
+.biw-drawer .drawer-history {
+    background: var(--biw-obsidian);
+    border-radius: 12px;
+    padding: 16px 16px 8px 16px;
+    margin: 16px 0;
+    border: 1px solid var(--biw-border);
+    position: relative;
+}
+.biw-drawer .drawer-history-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--biw-slate-dim);
+    margin-bottom: 4px;
+}
+.biw-drawer .drawer-history svg {
+    width: 100%;
+    height: 80px;
+    display: block;
+}
+.biw-drawer .drawer-history .history-tooltip {
+    position: absolute;
+    display: none;
+    background: var(--biw-tooltip-bg);
+    border: 1px solid var(--biw-border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--biw-text);
+    pointer-events: none;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.biw-drawer .drawer-history .history-tooltip.visible {
+    display: block;
+}
+.biw-drawer .drawer-history .no-history {
+    color: var(--biw-slate-dim);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 18px 0;
+}
+
+/* ─── Provenance panel ─── */
+.biw-drawer .drawer-provenance {
+    background: var(--biw-obsidian);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border: 1px solid var(--biw-border);
+}
+.biw-drawer .drawer-provenance-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--biw-slate-dim);
+    margin-bottom: 8px;
+}
+.biw-drawer .drawer-provenance .provenance-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: var(--biw-slate);
+    padding: 2px 0;
+}
+.biw-drawer .drawer-provenance .provenance-item .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.biw-drawer .drawer-provenance .provenance-item .dot.good {
+    background: var(--biw-low);
+}
+.biw-drawer .drawer-provenance .provenance-item .dot.aged {
+    background: var(--biw-medium);
+}
+.biw-drawer .drawer-provenance .provenance-item .dot.stale {
+    background: var(--biw-high);
+}
+.biw-drawer .drawer-provenance .provenance-item .dot.missing {
+    background: var(--biw-slate-dim);
+}
+.biw-drawer .drawer-provenance .provenance-item .pillar {
+    font-weight: 500;
+    min-width: 90px;
+}
+.biw-drawer .drawer-provenance .provenance-item .info {
+    color: var(--biw-slate-dim);
+    font-size: 0.75rem;
 }
 
 .biw-drawer .drawer-pillars .pillar-row {
@@ -1188,7 +1330,7 @@
     color: var(--biw-slate);
 }
 
-/* ─── Compare Modal – bigger, less cramped ─── */
+/* ─── Compare Modal ─── */
 .biw-compare-modal-overlay {
     position: fixed;
     inset: 0;
@@ -1486,6 +1628,8 @@
     .biw-compare-dock { max-width: 95%; }
     .biw-drawer .drawer-actions-bottom { flex-direction: column; }
     .biw-widget .biw-donut svg { width: 140px; height: 140px; }
+    .biw-drawer .drawer-radar { height: 220px; min-height: 220px; }
+    .biw-drawer .drawer-sensitivity .range-bar { min-width: 40px; }
 }
 
 /* ─── Print ─── */
