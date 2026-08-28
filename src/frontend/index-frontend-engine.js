@@ -1,6 +1,6 @@
 /* =====================================================================
-   Blomstra Index Frontend Engine — v3.2.0 (Final Polish)
-   Risk tier badge, donut 170px, radar no watermark, comparison bigger
+   Blomstra Index Frontend Engine — v3.2.1 (Final)
+   Sparkline, sensitivity interval, provenance panel
    ===================================================================== */
 (function () {
     'use strict';
@@ -160,6 +160,15 @@
                 '  <div class="drawer-radar">' +
                 '    <div class="drawer-radar-label">Pillar radar</div>' +
                 '    <div id="drawer-radar"></div>' +
+                '  </div>' +
+                '  <div class="drawer-sensitivity" id="drawer-sensitivity" style="display:none;"></div>' +
+                '  <div class="drawer-history">' +
+                '    <div class="drawer-history-label">Score trend</div>' +
+                '    <div id="drawer-history-chart"></div>' +
+                '  </div>' +
+                '  <div class="drawer-provenance" id="drawer-provenance" style="display:none;">' +
+                '    <div class="drawer-provenance-label">Data provenance</div>' +
+                '    <div id="drawer-provenance-items"></div>' +
                 '  </div>' +
                 '  <div class="drawer-pillars" id="drawer-pillars"></div>' +
                 '  <div class="drawer-why" id="drawer-why">Select a country to see insight.</div>' +
@@ -677,13 +686,13 @@
 
             var svg = d3.select(container).html('')
                 .append('svg')
-                .attr('width', 200)
-                .attr('height', 200)
+                .attr('width', 170)
+                .attr('height', 170)
                 .append('g')
-                .attr('transform', 'translate(100,100)');
+                .attr('transform', 'translate(85,85)');
 
             var pie = d3.pie().value(function (d) { return d; });
-            var arc = d3.arc().innerRadius(50).outerRadius(85);
+            var arc = d3.arc().innerRadius(42).outerRadius(72);
 
             var tooltip = createContainerTooltip(container, 'biw-donut-tooltip');
 
@@ -1033,16 +1042,16 @@
             var maxScore = 100;
             var angleSlice = (Math.PI * 2) / pillars.length;
 
-            // ─── Grid circles – more visible (opacity 0.7) ───
+            // ─── Grid circles – more visible ───
             for (var level = 1; level <= levels; level++) {
                 var r = (radius / levels) * level;
                 svg.append('circle')
                     .attr('r', r)
                     .attr('fill', 'none')
                     .attr('stroke', 'var(--biw-border)')
-                    .attr('stroke-width', 0.9)
+                    .attr('stroke-width', 1)
                     .attr('stroke-dasharray', '2,4')
-                    .attr('opacity', 0.9);
+                    .attr('opacity', 1);
             }
 
             // ─── Axes ───
@@ -1101,6 +1110,205 @@
             });
         }
 
+        // ─── Historical sparkline ───
+        function renderHistoryChart(c) {
+            var container = document.getElementById('drawer-history-chart');
+            if (!container) return;
+            container.innerHTML = '';
+            var history = state.history[c.iso3] || [];
+
+            if (history.length < 2) {
+                container.innerHTML = '<div class="no-history">Need more data for trend</div>';
+                return;
+            }
+
+            history.sort(function(a, b) { return a.period.localeCompare(b.period); });
+
+            var data = history.map(function(h) {
+                return {
+                    period: h.period,
+                    score: h.composite_score,
+                    rank: h.rank
+                };
+            });
+
+            var width = container.clientWidth || 300;
+            var height = 80;
+            var margin = { top: 8, right: 20, bottom: 20, left: 30 };
+            var innerWidth = width - margin.left - margin.right;
+            var innerHeight = height - margin.top - margin.bottom;
+
+            var svg = d3.select(container)
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height)
+                .append('g')
+                .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+            var xScale = d3.scalePoint()
+                .domain(data.map(function(d) { return d.period; }))
+                .range([0, innerWidth]);
+
+            var yMin = d3.min(data, function(d) { return d.score; }) * 0.9;
+            var yMax = d3.max(data, function(d) { return d.score; }) * 1.1;
+            if (yMin === yMax) {
+                yMin = yMin - 5;
+                yMax = yMax + 5;
+            }
+            var yScale = d3.scaleLinear()
+                .domain([yMin, yMax])
+                .range([innerHeight, 0]);
+
+            // Grid lines
+            svg.append('g')
+                .attr('class', 'grid')
+                .call(d3.axisLeft(yScale).ticks(3).tickSize(-innerWidth).tickFormat(''))
+                .style('stroke', 'var(--biw-border)')
+                .style('stroke-dasharray', '2,2')
+                .style('opacity', 0.5);
+
+            // Line
+            var line = d3.line()
+                .x(function(d) { return xScale(d.period); })
+                .y(function(d) { return yScale(d.score); })
+                .curve(d3.curveMonotoneX);
+
+            svg.append('path')
+                .datum(data)
+                .attr('class', 'history-line')
+                .attr('d', line)
+                .attr('fill', 'none')
+                .attr('stroke', 'var(--biw-champagne)')
+                .attr('stroke-width', 2);
+
+            // Area under line
+            var area = d3.area()
+                .x(function(d) { return xScale(d.period); })
+                .y0(innerHeight)
+                .y1(function(d) { return yScale(d.score); })
+                .curve(d3.curveMonotoneX);
+
+            svg.append('path')
+                .datum(data)
+                .attr('class', 'history-area')
+                .attr('d', area)
+                .attr('fill', 'var(--biw-champagne)')
+                .attr('fill-opacity', 0.1);
+
+            // Dots
+            svg.selectAll('.history-dot')
+                .data(data)
+                .enter()
+                .append('circle')
+                .attr('class', 'history-dot')
+                .attr('cx', function(d) { return xScale(d.period); })
+                .attr('cy', function(d) { return yScale(d.score); })
+                .attr('r', 3)
+                .attr('fill', 'var(--biw-champagne)');
+
+            // Tooltip
+            var tooltip = document.createElement('div');
+            tooltip.className = 'history-tooltip';
+            container.style.position = 'relative';
+            container.appendChild(tooltip);
+
+            svg.selectAll('.history-dot')
+                .on('mouseenter', function(event, d) {
+                    tooltip.innerHTML = '<strong>' + d.period + '</strong><br>Score: ' + d.score + '<br>Rank: #' + d.rank;
+                    tooltip.classList.add('visible');
+                    var rect = container.getBoundingClientRect();
+                    var left = event.clientX - rect.left + 10;
+                    var top = event.clientY - rect.top - 30;
+                    if (left + 120 > rect.width) left = rect.width - 120;
+                    if (top < 0) top = 10;
+                    tooltip.style.left = left + 'px';
+                    tooltip.style.top = top + 'px';
+                })
+                .on('mouseleave', function() {
+                    tooltip.classList.remove('visible');
+                });
+
+            // X axis labels
+            svg.append('g')
+                .attr('transform', 'translate(0,' + innerHeight + ')')
+                .call(d3.axisBottom(xScale).tickValues(xScale.domain()).tickFormat(function(d) {
+                    var parts = d.split('-');
+                    if (parts.length === 2) {
+                        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                        return months[parseInt(parts[1],10)-1] + ' ' + parts[0];
+                    }
+                    return d;
+                }).tickSize(0))
+                .style('font-size', '8px')
+                .style('fill', 'var(--biw-slate-dim)');
+        }
+
+        // ─── Sensitivity interval ───
+        function renderSensitivity(c) {
+            var container = document.getElementById('drawer-sensitivity');
+            if (!container) return;
+            var si = c.sensitivity_interval;
+            if (!si || si.point === undefined || si.ci_low === undefined || si.ci_high === undefined) {
+                container.style.display = 'none';
+                return;
+            }
+            container.style.display = 'flex';
+            var low = si.ci_low;
+            var high = si.ci_high;
+            var point = si.point;
+            var minVal = Math.min(low, point) - 2;
+            var maxVal = Math.max(high, point) + 2;
+            var range = maxVal - minVal;
+            var pctLow = ((low - minVal) / range) * 100;
+            var pctHigh = ((high - minVal) / range) * 100;
+            var pctPoint = ((point - minVal) / range) * 100;
+
+            container.innerHTML =
+                '<span class="label">Sensitivity range (95%):</span>' +
+                '<span class="range">' + fmtNum(low) + ' – ' + fmtNum(high) + '</span>' +
+                '<div class="range-bar">' +
+                '  <div class="fill" style="left:' + pctLow + '%;width:' + (pctHigh - pctLow) + '%;"></div>' +
+                '  <div class="point" style="left:' + pctPoint + '%;"></div>' +
+                '</div>';
+        }
+
+        // ─── Provenance panel ───
+        function renderProvenance(c) {
+            var container = document.getElementById('drawer-provenance');
+            if (!container) return;
+            var freshness = c.data_freshness;
+            if (!freshness || typeof freshness !== 'object') {
+                container.style.display = 'none';
+                return;
+            }
+            container.style.display = 'block';
+            var items = document.getElementById('drawer-provenance-items');
+            if (!items) return;
+            var html = '';
+            var pillarMap = {};
+            pillars.forEach(function(p) {
+                pillarMap[p.key] = p.label;
+            });
+            for (var key in freshness) {
+                var info = freshness[key];
+                if (!info) continue;
+                var dotClass = 'good';
+                var label = 'Good';
+                if (info.quality === 'stale') { dotClass = 'stale'; label = 'Stale'; }
+                else if (info.quality === 'aged') { dotClass = 'aged'; label = 'Aged'; }
+                else if (!info.available) { dotClass = 'missing'; label = 'Missing'; }
+                var pillarLabel = pillarMap[key] || key;
+                var source = info.source || 'unknown';
+                var year = info.year || '?';
+                html += '<div class="provenance-item">' +
+                    '<span class="dot ' + dotClass + '"></span>' +
+                    '<span class="pillar">' + esc(pillarLabel) + '</span>' +
+                    '<span class="info">' + esc(source) + ' (' + esc(year) + ') — ' + esc(label) + '</span>' +
+                    '</div>';
+            }
+            items.innerHTML = html || '<div class="provenance-item" style="color:var(--biw-slate-dim);">No provenance data available</div>';
+        }
+
         // ─── Drawer ───
         function openDrawer(c) {
             if (!c) return;
@@ -1109,7 +1317,6 @@
             document.getElementById('drawer-country').textContent = c.name;
             document.getElementById('drawer-score').textContent = c[scoreKey] || '—';
 
-            // ─── Rank with risk tier badge ───
             var rankEl = document.getElementById('drawer-rank');
             rankEl.innerHTML = rankHtml(c);
 
@@ -1143,7 +1350,6 @@
             });
             document.getElementById('drawer-pillars').innerHTML = pillarHtml;
 
-            // ─── Why this score? – using fmtNum for clean rounding ───
             var maxPillar = null, maxVal = -1;
             pillars.forEach(function (p) {
                 var v = c[p.key];
@@ -1158,8 +1364,11 @@
             document.getElementById('drawer-why').innerHTML = '💡 <strong>Why this score?</strong> ' + whyText + ' ' +
                 (c[coverageKey] === 'partial' ? '<br><em style="color:var(--biw-medium)">Partial coverage – rank is a projected range.</em>' : '');
 
-            // ─── Render radar ───
+            // Render radar, history, sensitivity, provenance
             renderRadar(c);
+            renderHistoryChart(c);
+            renderSensitivity(c);
+            renderProvenance(c);
 
             var wlBtn = document.getElementById('drawer-watchlist');
             var isStarred = watchlist.indexOf(c.iso3) !== -1;
@@ -1257,15 +1466,15 @@
                 var angleSlice = (Math.PI * 2) / pillars.length;
                 var colorPalette = ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)', '#c084fc'];
 
-                // ─── Grid circles – more visible ───
+                // Grid circles
                 for (var lvl = 1; lvl <= 5; lvl++) {
                     g.append('circle')
                         .attr('r', (radius / 5) * lvl)
                         .attr('fill', 'none')
                         .attr('stroke', 'var(--biw-border)')
-                        .attr('stroke-width', 0.9)
+                        .attr('stroke-width', 1)
                         .attr('stroke-dasharray', '2,4')
-                        .attr('opacity', 0.9);
+                        .attr('opacity', 1);
                 }
 
                 pillars.forEach(function (p, i) {
