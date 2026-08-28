@@ -3793,12 +3793,9 @@ add_action( 'rest_api_init', function () {
         'callback'            => function ( $request ) {
             $slug = sanitize_key( $request['slug'] );
             $iso3 = $request->get_param( 'iso3' );
-            if ( ! is_user_logged_in() ) {
-                return new WP_Error( 'rest_forbidden', 'You must be logged in to access history.', array( 'status' => 401 ) );
-            }
             return rest_ensure_response( blomstra_index_snapshot_get_history( $slug, $iso3 ? sanitize_text_field( $iso3 ) : null ) );
         },
-        'permission_callback' => 'is_user_logged_in',
+        'permission_callback' => '__return_true',
     ) );
 } );
 
