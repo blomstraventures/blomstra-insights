@@ -7,7 +7,7 @@
  *
  * @package Blomstra\Insights\Shared
  * @since   1.0.0
- * @version 1.1.4  – added rank-display helpers and SIVI staleness entry
+ * @version 1.1.5  – Alert system moved to separate file (blomstra-alerts.php)
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
