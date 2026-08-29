@@ -1,9 +1,10 @@
+<?php
 /**
  * Blomstra Alert Webhook System
  *
  * @package Blomstra\Insights\Alerts
  * @since   1.0.0
- * @version 2.0.0  – Added retention, summary emails, pagination, filters, manual flush
+ * @version 2.0.3  – Removed unnecessary scroll-on-filter
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -14,11 +15,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 // 1. CONSTANTS & DEFAULTS
 // ============================================================
 
-define( 'BLOMSTRA_ALERT_VERSION', '2.0.0' );
+define( 'BLOMSTRA_ALERT_VERSION', '2.0.3' );
 define( 'BLOMSTRA_ALERT_COOLDOWN_DEFAULT', 5 * MINUTE_IN_SECONDS );
 define( 'BLOMSTRA_ALERT_TABLE', 'blomstra_alerts' );
 define( 'BLOMSTRA_ALERT_PER_PAGE', 100 );
-define( 'BLOMSTRA_ALERT_RETENTION_DEFAULT', 45 ); // days
+define( 'BLOMSTRA_ALERT_RETENTION_DEFAULT', 45 );
 define( 'BLOMSTRA_ALERT_MAX_PER_INDEX_DEFAULT', 500 );
 
 // ============================================================
@@ -58,16 +59,11 @@ function blomstra_alerts_maybe_install_table() {
 }
 add_action( 'admin_init', 'blomstra_alerts_maybe_install_table' );
 
-/**
- * One-time fix: Add log_type column if missing.
- */
 function blomstra_alerts_add_log_type_column() {
     global $wpdb;
-    $table = $wpdb->prefix . 'blomstra_alerts';
-    
+    $table = $wpdb->prefix . BLOMSTRA_ALERT_TABLE;
     $columns = $wpdb->get_results( "DESCRIBE $table" );
     $column_names = array_column( $columns, 'Field' );
-    
     if ( ! in_array( 'log_type', $column_names ) ) {
         $wpdb->query( "ALTER TABLE $table ADD COLUMN log_type VARCHAR(20) DEFAULT 'alert'" );
         error_log( 'ALERT: Added log_type column to blomstra_alerts table.' );
@@ -125,7 +121,7 @@ function blomstra_alert_log( $level, $message, $index_slug = null, $context = ar
 }
 
 // ============================================================
-// 5. CHANGE DETECTION (unchanged)
+// 5. CHANGE DETECTION
 // ============================================================
 
 function blomstra_alert_normalize_country( $country_data, $index_slug ) {
@@ -259,7 +255,7 @@ function blomstra_alert_detect_changes( $new_data, $old_data, $index_slug ) {
 }
 
 // ============================================================
-// 6. STORAGE (unchanged)
+// 6. STORAGE
 // ============================================================
 
 function blomstra_alert_store_records( $index_slug, $changes ) {
@@ -287,7 +283,7 @@ function blomstra_alert_store_records( $index_slug, $changes ) {
 }
 
 // ============================================================
-// 7. NOTIFICATIONS (with summary/top 10)
+// 7. NOTIFICATIONS
 // ============================================================
 
 function blomstra_alert_send_email( $index_slug, $changes, $config ) {
@@ -301,7 +297,6 @@ function blomstra_alert_send_email( $index_slug, $changes, $config ) {
     $message .= "Time: " . current_time( 'mysql' ) . "\n";
     $message .= "Total changes: " . $total . "\n\n";
 
-    // Summarize
     $new_count = count( array_filter( $changes, function( $c ) { return $c['type'] === 'new'; } ) );
     $excluded_count = count( array_filter( $changes, function( $c ) { return $c['type'] === 'excluded'; } ) );
     $rank_movers = count( array_filter( $changes, function( $c ) { return $c['rank_delta'] !== null && $c['rank_delta'] !== 0; } ) );
@@ -311,7 +306,6 @@ function blomstra_alert_send_email( $index_slug, $changes, $config ) {
     } ) );
 
     if ( $total > 10 ) {
-        // Summary mode
         $message .= "📊 Summary:\n";
         $message .= "- Total: $total\n";
         $message .= "- New countries: $new_count\n";
@@ -353,7 +347,6 @@ function blomstra_alert_send_email( $index_slug, $changes, $config ) {
 
         $message .= "\n🔗 View all $total changes: " . admin_url( 'admin.php?page=blomstra-alerts' ) . "\n";
     } else {
-        // Full list (≤10)
         $message .= "Changes:\n";
         $message .= str_repeat( '-', 80 ) . "\n";
         foreach ( $changes as $change ) {
@@ -446,9 +439,7 @@ function blomstra_alert_send_slack( $index_slug, $changes, $config ) {
         }
     }
 
-    $slack_payload = array(
-        'text' => $text,
-    );
+    $slack_payload = array( 'text' => $text );
     wp_remote_post( $config['slack_url'], array(
         'headers'  => array( 'Content-Type' => 'application/json' ),
         'body'     => wp_json_encode( $slack_payload ),
@@ -457,7 +448,7 @@ function blomstra_alert_send_slack( $index_slug, $changes, $config ) {
 }
 
 // ============================================================
-// 8. ORCHESTRATOR (public entry point)
+// 8. ORCHESTRATOR
 // ============================================================
 
 function blomstra_fire_index_alerts( $index_slug, $new_data, $old_data, $new_meta, $old_meta ) {
@@ -558,7 +549,6 @@ function blomstra_alert_cleanup() {
     global $wpdb;
     $table = $wpdb->prefix . BLOMSTRA_ALERT_TABLE;
 
-    // 1. Delete alerts older than retention_days
     if ( $retention_days > 0 ) {
         $deleted_old = $wpdb->query( $wpdb->prepare(
             "DELETE FROM $table WHERE log_type = 'alert' AND triggered_at < NOW() - INTERVAL %d DAY",
@@ -567,7 +557,6 @@ function blomstra_alert_cleanup() {
         blomstra_alert_log( 'info', "Cleanup: deleted $deleted_old alerts older than $retention_days days.", 'system' );
     }
 
-    // 2. For each index, keep only the most recent max_per_index alerts
     if ( $max_per_index > 0 ) {
         $indices = $wpdb->get_col( "SELECT DISTINCT index_slug FROM $table WHERE log_type = 'alert'" );
         foreach ( $indices as $index ) {
@@ -614,7 +603,7 @@ add_action( 'admin_menu', function () {
 }, 15 );
 
 function blomstra_alerts_render_page() {
-    // Handle form submissions
+    // Handle POST actions
     if ( isset( $_POST['blomstra_alert_config'] ) && check_admin_referer( 'blomstra_alert_config_action' ) ) {
         $config = array(
             'enabled'          => isset( $_POST['alert_enabled'] ) ? 1 : 0,
@@ -630,13 +619,11 @@ function blomstra_alerts_render_page() {
         echo '<div class="notice notice-success is-dismissible"><p>✅ Alert configuration saved.</p></div>';
     }
 
-    // Handle manual cleanup
     if ( isset( $_POST['blomstra_alert_cleanup_now'] ) && check_admin_referer( 'blomstra_alert_cleanup_now_action' ) ) {
         blomstra_alert_cleanup();
         echo '<div class="notice notice-success is-dismissible"><p>🧹 Cleanup completed. Old alerts removed and indices trimmed.</p></div>';
     }
 
-    // Handle flush actions
     if ( isset( $_POST['blomstra_alert_flush'] ) && check_admin_referer( 'blomstra_alert_flush_action' ) ) {
         $target = sanitize_text_field( $_POST['flush_target'] );
         global $wpdb;
@@ -650,7 +637,6 @@ function blomstra_alerts_render_page() {
         }
     }
 
-    // Handle bulk delete of selected alerts
     if ( isset( $_POST['blomstra_alert_bulk_delete'] ) && check_admin_referer( 'blomstra_alert_bulk_delete_action' ) ) {
         if ( ! empty( $_POST['alert_ids'] ) && is_array( $_POST['alert_ids'] ) ) {
             $ids = array_map( 'intval', $_POST['alert_ids'] );
@@ -694,7 +680,7 @@ function blomstra_alerts_render_page() {
                             <th scope="row"><label for="alert_webhook_url">🔗 Webhook URL</label></th>
                             <td>
                                 <input type="url" id="alert_webhook_url" name="alert_webhook_url" value="<?php echo esc_attr( $config['webhook_url'] ); ?>" class="regular-text" placeholder="https://your-service.com/webhook">
-                                <p class="description">Custom webhook endpoint for integrations (Zapier, Make, custom services).</p>
+                                <p class="description">Custom webhook endpoint for integrations.</p>
                             </td>
                         </tr>
                         <tr>
@@ -773,7 +759,6 @@ function blomstra_alerts_render_page() {
                 global $wpdb;
                 $table = $wpdb->prefix . BLOMSTRA_ALERT_TABLE;
 
-                // Get filter values from GET
                 $filter_index = isset( $_GET['filter_index'] ) ? sanitize_text_field( $_GET['filter_index'] ) : '';
                 $filter_country = isset( $_GET['filter_country'] ) ? sanitize_text_field( $_GET['filter_country'] ) : '';
                 $filter_date_from = isset( $_GET['filter_date_from'] ) ? sanitize_text_field( $_GET['filter_date_from'] ) : '';
@@ -783,7 +768,6 @@ function blomstra_alerts_render_page() {
                 $per_page = BLOMSTRA_ALERT_PER_PAGE;
                 $offset = ( $paged - 1 ) * $per_page;
 
-                // Build WHERE clause
                 $where = "WHERE log_type = 'alert'";
                 $params = array();
                 if ( $filter_index && $filter_index !== 'all' ) {
@@ -816,26 +800,32 @@ function blomstra_alerts_render_page() {
                     }
                 }
 
-                // Total count for pagination
                 $count_sql = "SELECT COUNT(*) FROM $table $where";
                 if ( ! empty( $params ) ) {
                     $count_sql = $wpdb->prepare( $count_sql, $params );
                 }
                 $total = (int) $wpdb->get_var( $count_sql );
 
-                // Get alerts
                 $sql = "SELECT * FROM $table $where ORDER BY triggered_at DESC LIMIT %d OFFSET %d";
                 $params[] = $per_page;
                 $params[] = $offset;
                 $alerts = $wpdb->get_results( $wpdb->prepare( $sql, $params ) );
 
-                // Get distinct index slugs for filter dropdown
                 $indices = $wpdb->get_col( "SELECT DISTINCT index_slug FROM $table WHERE log_type = 'alert' ORDER BY index_slug" );
-
-                // Build filter form URL with existing query args
                 $base_url = admin_url( 'admin.php?page=blomstra-alerts' );
+
+                // Build filter URL
+                $filter_url = add_query_arg( array(
+                    'page'           => 'blomstra-alerts',
+                    'filter_index'   => $filter_index,
+                    'filter_country' => $filter_country,
+                    'filter_date_from' => $filter_date_from,
+                    'filter_date_to' => $filter_date_to,
+                    'filter_type'    => $filter_type,
+                    'paged'          => $paged,
+                ), admin_url( 'admin.php' ) );
                 ?>
-                <form method="get" style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:15px;">
+                <form method="get" style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:15px;" id="alert-filter-form">
                     <input type="hidden" name="page" value="blomstra-alerts">
                     <div>
                         <label>Index:</label>
@@ -871,15 +861,44 @@ function blomstra_alerts_render_page() {
                     </div>
                     <div>
                         <button type="submit" class="button button-secondary">Apply Filters</button>
-                        <a href="<?php echo esc_url( $base_url ); ?>" class="button button-link">Clear</a>
+                        <a href="<?php echo esc_url( admin_url( 'admin.php?page=blomstra-alerts' ) ); ?>" class="button button-link">Clear</a>
                     </div>
                 </form>
 
                 <?php if ( empty( $alerts ) ) : ?>
                     <p style="color:#666;">No alerts found for the selected filters.</p>
                 <?php else : ?>
-                    <form method="post" onsubmit="return confirm('Delete selected alerts? This cannot be undone.');">
+                    <form method="post" id="bulk-delete-form" onsubmit="return confirm('Delete selected alerts? This cannot be undone.');">
                         <?php wp_nonce_field( 'blomstra_alert_bulk_delete_action' ); ?>
+                        <div style="margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                            <div>
+                                <button type="submit" name="blomstra_alert_bulk_delete" value="1" class="button button-link-delete">🗑️ Delete Selected</button>
+                            </div>
+                            <div>
+                                <?php
+                                $total_pages = ceil( $total / $per_page );
+                                if ( $total_pages > 1 ) {
+                                    echo '<span style="margin-right:10px;">Showing ' . ( $offset + 1 ) . '-' . min( $offset + $per_page, $total ) . ' of ' . $total . '</span>';
+                                    echo paginate_links( array(
+                                        'base'      => add_query_arg( 'paged', '%#%', $base_url ),
+                                        'format'    => '',
+                                        'prev_text' => '&laquo;',
+                                        'next_text' => '&raquo;',
+                                        'total'     => $total_pages,
+                                        'current'   => $paged,
+                                        'add_args'  => array(
+                                            'filter_index' => $filter_index,
+                                            'filter_country' => $filter_country,
+                                            'filter_date_from' => $filter_date_from,
+                                            'filter_date_to' => $filter_date_to,
+                                            'filter_type' => $filter_type,
+                                        ),
+                                    ) );
+                                }
+                                ?>
+                            </div>
+                        </div>
+
                         <div style="overflow-x:auto;">
                             <table class="widefat striped">
                                 <thead>
@@ -897,10 +916,15 @@ function blomstra_alerts_render_page() {
                                 <tbody>
                                 <?php foreach ( $alerts as $alert ) : ?>
                                     <?php
+                                    // Safe rank display
                                     $rank_display = '';
                                     if ( $alert->previous_rank !== null && $alert->current_rank !== null ) {
-                                        $arrow = $alert->rank_delta < 0 ? '▲' : '▼';
-                                        $rank_display = '#' . $alert->previous_rank . ' → #' . $alert->current_rank . ' (' . $arrow . abs( $alert->rank_delta ) . ')';
+                                        if ( isset( $alert->rank_delta ) && is_numeric( $alert->rank_delta ) ) {
+                                            $arrow = $alert->rank_delta < 0 ? '▲' : '▼';
+                                            $rank_display = '#' . $alert->previous_rank . ' → #' . $alert->current_rank . ' (' . $arrow . abs( $alert->rank_delta ) . ')';
+                                        } else {
+                                            $rank_display = '#' . $alert->previous_rank . ' → #' . $alert->current_rank;
+                                        }
                                     } elseif ( $alert->previous_rank === null && $alert->current_rank !== null ) {
                                         $rank_display = 'NEW: #' . $alert->current_rank;
                                     } elseif ( $alert->previous_rank !== null && $alert->current_rank === null ) {
@@ -909,10 +933,15 @@ function blomstra_alerts_render_page() {
                                         $rank_display = '—';
                                     }
 
+                                    // Safe score display
                                     $score_display = '';
                                     if ( $alert->previous_score !== null && $alert->current_score !== null ) {
-                                        $sign = $alert->score_delta > 0 ? '+' : '';
-                                        $score_display = $alert->previous_score . ' → ' . $alert->current_score . ' (' . $sign . $alert->score_delta . ')';
+                                        if ( isset( $alert->score_delta ) && is_numeric( $alert->score_delta ) ) {
+                                            $sign = $alert->score_delta > 0 ? '+' : '';
+                                            $score_display = $alert->previous_score . ' → ' . $alert->current_score . ' (' . $sign . $alert->score_delta . ')';
+                                        } else {
+                                            $score_display = $alert->previous_score . ' → ' . $alert->current_score;
+                                        }
                                     } elseif ( $alert->previous_score === null && $alert->current_score !== null ) {
                                         $score_display = 'NEW: ' . $alert->current_score;
                                     } elseif ( $alert->previous_score !== null && $alert->current_score === null ) {
@@ -943,7 +972,7 @@ function blomstra_alerts_render_page() {
                                     }
                                     ?>
                                     <tr>
-                                        <td><input type="checkbox" name="alert_ids[]" value="<?php echo esc_attr( $alert->id ); ?>"></td>
+                                        <td><input type="checkbox" name="alert_ids[]" value="<?php echo esc_attr( $alert->id ); ?>" class="alert-checkbox"></td>
                                         <td><?php echo esc_html( $alert->triggered_at ); ?></td>
                                         <td><strong><?php echo esc_html( strtoupper( $alert->index_slug ) ); ?></strong></td>
                                         <td><?php echo esc_html( $alert->country_name ); ?></td>
@@ -956,13 +985,13 @@ function blomstra_alerts_render_page() {
                                 </tbody>
                             </table>
                         </div>
+
                         <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
                             <div>
                                 <button type="submit" name="blomstra_alert_bulk_delete" value="1" class="button button-link-delete">🗑️ Delete Selected</button>
                             </div>
                             <div>
                                 <?php
-                                $total_pages = ceil( $total / $per_page );
                                 if ( $total_pages > 1 ) {
                                     echo '<span style="margin-right:10px;">Showing ' . ( $offset + 1 ) . '-' . min( $offset + $per_page, $total ) . ' of ' . $total . '</span>';
                                     echo paginate_links( array(
@@ -1146,5 +1175,16 @@ function blomstra_alerts_render_page() {
             </div>
         </div>
     </div>
+
+    <!-- Inline JS for select-all -->
+    <script>
+    (function($) {
+        $(document).ready(function() {
+            $('#select-all-alerts').on('change', function() {
+                $('.alert-checkbox').prop('checked', this.checked);
+            });
+        });
+    })(jQuery);
+    </script>
     <?php
 }
