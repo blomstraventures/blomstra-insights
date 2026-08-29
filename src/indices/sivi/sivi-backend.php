@@ -1,18 +1,19 @@
 /**
- * Sovereign Infrastructure Vulnerability Index (SIVI) — v2.6.1
+ * Sovereign Infrastructure Vulnerability Index (SIVI) — v2.7.0
  *
  * @package     Blomstra\Insights\Indices\SIVI
  * @since       1.0.0
- * @version     2.6.1  (Fixed custom weights UI: dynamic sum + nonce issue)
+ * @version     2.7.0  – Added alert webhook integration (Phase 5)
  * @author      Blomstra Insights Team
  * @license     Proprietary
  *
  * ============================================================================
- * CHANGELOG (v2.6.1)
+ * CHANGELOG (v2.7.0)
  * ============================================================================
- * - Fixed reset button nonce error (The link you followed has expired).
- * - Added dynamic sum display with client-side validation for custom weights.
- * - Updated admin UI for custom weights to show live sum and error message.
+ * - Added alert webhook integration after successful builds
+ * - Alerts fire for rank, score, and pillar changes
+ * - Fixed snapshot order to capture old data before overwriting
+ * - Moved alert firing BEFORE coverage validation to ensure alerts fire on all builds
  * ============================================================================
  */
 
@@ -24,7 +25,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // 1.  CONSTANTS
 // ============================================================================
 
-define( 'SIVI_VERSION', '2.6.1' );
+define( 'SIVI_VERSION', '2.7.0' );
 define( 'SIVI_OPTION_KEY', 'sivi_composite_index' );
 define( 'SIVI_STAGING_KEY', SIVI_OPTION_KEY . '_staging' );
 define( 'SIVI_MIN_PILLARS_REQUIRED', 2 );
@@ -446,7 +447,7 @@ function sivi_check_upstream_health() {
 
 
 // ============================================================================
-// 10. COMPOSITE BUILDER (with sensitivity, freshness, benchmark)
+// 10. COMPOSITE BUILDER (with sensitivity, freshness, benchmark, alerts)
 // ============================================================================
 
 function sivi_build_composite( $context = 'manual', $custom_weights = null, $custom_composite_weights = null ) {
@@ -821,14 +822,35 @@ function sivi_build_composite( $context = 'manual', $custom_weights = null, $cus
         }
 
         // ─── Staging & validation ─────────────────────────────────
-        $previous = get_option( SIVI_OPTION_KEY, null );
+        // Capture the old composite BEFORE we overwrite it
+        $old_composite = get_option( SIVI_OPTION_KEY, null );
 
+        // ─── FIRE ALERTS BEFORE VALIDATION ──────────────────────────
+        // This ensures alerts fire on EVERY build, even if coverage check fails.
+        if ( function_exists( 'blomstra_fire_index_alerts' ) && $old_composite && ! empty( $old_composite['countries'] ) ) {
+            $new_meta = array(
+                'total_countries' => $output['total_countries'],
+                'excluded'        => $output['excluded'],
+                'version'         => $output['version'],
+                'last_updated'    => $output['last_updated'],
+            );
+            $old_meta = array(
+                'total_countries' => $old_composite['total_countries'] ?? 0,
+                'excluded'        => $old_composite['excluded'] ?? 0,
+                'version'         => $old_composite['version'] ?? '',
+                'last_updated'    => $old_composite['last_updated'] ?? '',
+            );
+            $alert_count = blomstra_fire_index_alerts( 'sivi', $output['countries'], $old_composite['countries'], $new_meta, $old_meta );
+            error_log( 'SIVI: Alerts fired with ' . $alert_count . ' changes detected (pre-validation).' );
+        }
+
+        // ─── Now proceed with staging & validation ──────────────
         if ( ! $is_scenario && $context !== 'scenario' ) {
             update_option( SIVI_STAGING_KEY, $output, false );
 
             $should_keep_old = false;
-            if ( $previous && ! empty( $previous['countries'] ) ) {
-                $prev_count = count( $previous['countries'] );
+            if ( $old_composite && ! empty( $old_composite['countries'] ) ) {
+                $prev_count = count( $old_composite['countries'] );
                 $new_count = count( $output['countries'] );
                 if ( $new_count < 0.8 * $prev_count && $new_count < 50 ) {
                     error_log( 'SIVI: Automated build failed – new count (' . $new_count . ') vs previous (' . $prev_count . '). Keeping old composite.' );
@@ -837,17 +859,19 @@ function sivi_build_composite( $context = 'manual', $custom_weights = null, $cus
                 }
             }
 
-            if ( $should_keep_old && $previous ) {
+            if ( $should_keep_old && $old_composite ) {
                 delete_option( SIVI_STAGING_KEY );
                 if ( function_exists( 'blomstra_update_cron_status' ) ) {
                     blomstra_update_cron_status( 'sivi', 'error', 'Build failed – coverage too low. Old composite preserved.' );
                 }
-                return $previous;
+                return $old_composite;
             }
 
+            // ─── Save new composite ──────────────────────────────────
             update_option( SIVI_OPTION_KEY, $output, false );
             delete_option( SIVI_STAGING_KEY );
 
+            // ─── Save snapshot history ──────────────────────────────
             if ( function_exists( 'blomstra_index_snapshot_save' ) ) {
                 $snap = array();
                 foreach ( $output['countries'] as $iso3 => $data ) {
