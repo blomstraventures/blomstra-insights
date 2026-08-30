@@ -1,11 +1,11 @@
 /* =====================================================================
-   Blomstra Index Frontend Engine — v3.2.1 (Final)
-   Sparkline, sensitivity interval, provenance panel
+   Blomstra Index Frontend Engine — v3.7.1 (Fixed)
+   - Year slider updates map colors using historical data
+   - Methodology uses correct CSS class & popup retained
    ===================================================================== */
 (function () {
     'use strict';
 
-    // ── ISO3 lookup ──
     var iso3Lookup = {
         "004":"AFG","008":"ALB","012":"DZA","024":"AGO","028":"ATG","032":"ARG","036":"AUS","040":"AUT","044":"BHS","048":"BHR","050":"BGD","051":"ARM","052":"BRB","056":"BEL","060":"BMU","064":"BTN","068":"BOL","070":"BIH","072":"BWA","074":"BVT","076":"BRA","084":"BLZ","086":"IOT","090":"SLB","092":"VGB","096":"BRN","100":"BGR","104":"MMR","108":"BDI","112":"BLR","116":"KHM","120":"CMR","124":"CAN","132":"CPV","136":"CYM","140":"CAF","144":"LKA","148":"TCD","152":"CHL","156":"CHN","158":"TWN","162":"CXR","166":"CCK","170":"COL","174":"COM","175":"MYT","178":"COG","180":"COD","184":"COK","188":"CRI","191":"HRV","192":"CUB","196":"CYP","203":"CZE","204":"BEN","208":"DNK","212":"DMA","214":"DOM","218":"ECU","222":"SLV","226":"GNQ","231":"ETH","232":"ERI","233":"EST","234":"FRO","238":"FLK","239":"SGS","242":"FJI","246":"FIN","248":"ALA","250":"FRA","254":"GUF","258":"PYF","260":"ATF","262":"DJI","266":"GAB","268":"GEO","270":"GMB","275":"PSE","276":"DEU","288":"GHA","292":"GIB","296":"KIR","300":"GRC","304":"GRL","308":"GRD","312":"GLP","316":"GUM","320":"GTM","324":"GIN","328":"GUY","332":"HTI","334":"HMD","340":"HND","344":"HKG","348":"HUN","352":"ISL","356":"IND","360":"IDN","364":"IRN","368":"IRQ","372":"IRL","376":"ISR","380":"ITA","384":"CIV","388":"JAM","392":"JPN","398":"KAZ","400":"JOR","404":"KEN","408":"PRK","410":"KOR","414":"KWT","417":"KGZ","418":"LAO","422":"LBN","426":"LSO","428":"LVA","430":"LBR","434":"LBY","438":"LIE","440":"LTU","442":"LUX","446":"MAC","450":"MDG","454":"MWI","458":"MYS","462":"MDV","466":"MLI","470":"MLT","474":"MTQ","478":"MRT","480":"MUS","484":"MEX","492":"MCO","496":"MNG","498":"MDA","499":"MNE","500":"MSR","504":"MAR","508":"MOZ","512":"OMN","516":"NAM","520":"NRU","524":"NPL","528":"NLD","531":"CUW","533":"ABW","534":"SXM","535":"BES","540":"NCL","548":"VUT","554":"NZL","558":"NIC","562":"NER","566":"NGA","570":"NIU","574":"NFK","578":"NOR","580":"MNP","581":"UMI","583":"FSM","584":"MHL","585":"PLW","586":"PAK","591":"PAN","598":"PNG","600":"PRY","604":"PER","608":"PHL","612":"PCN","616":"POL","620":"PRT","624":"GNB","626":"TLS","630":"PRI","634":"QAT","638":"REU","642":"ROU","643":"RUS","646":"RWA","652":"BLM","654":"SHN","659":"KNA","660":"AIA","662":"LCA","663":"MAF","666":"SPM","670":"VCT","674":"SMR","678":"STP","682":"SAU","686":"SEN","688":"SRB","690":"SYC","694":"SLE","702":"SGP","703":"SVK","704":"VNM","705":"SVN","706":"SOM","710":"ZAF","716":"ZWE","724":"ESP","728":"SSD","729":"SDN","732":"ESH","740":"SUR","744":"SJM","748":"SWZ","752":"SWE","756":"CHE","760":"SYR","762":"TJK","764":"THA","768":"TGO","772":"TKL","776":"TON","780":"TTO","784":"ARE","788":"TUN","792":"TUR","795":"TKM","796":"TCA","798":"TUV","800":"UGA","804":"UKR","807":"MKD","818":"EGY","826":"GBR","831":"GGY","832":"JEY","833":"IMN","834":"TZA","840":"USA","854":"BFA","858":"URY","860":"UZB","862":"VEN","876":"WLF","882":"WSM","887":"YEM","894":"ZMB"
     };
@@ -79,7 +79,6 @@
         var bandLabels = (root.getAttribute('data-biw-band-labels') || 'Low,Medium,High,Extreme').split(',');
         var bandClasses = ['biw-badge-low', 'biw-badge-medium', 'biw-badge-high', 'biw-badge-extreme'];
         var scoreLabel = root.getAttribute('data-biw-score-label') || 'Vulnerability Score';
-        var bandSelectLabel = root.getAttribute('data-biw-band-select-label') || 'All Levels';
         var methodology = root.getAttribute('data-biw-methodology') || '';
 
         var watchlistKey = 'biw_watchlist_' + slug;
@@ -101,7 +100,9 @@
             d3Error: null,
             compareList: [],
             isDark: true,
-            hasRegionData: false
+            hasRegionData: false,
+            selectedYear: 2026,
+            mapLayer: 'score'
         };
 
         root.innerHTML = buildShell();
@@ -138,8 +139,9 @@
                 shell += renderTableShell();
             }
 
+            // ─── Static methodology at the bottom ───
             if (methodology) {
-                shell += '<div class="biw-methodology">' + methodology + '</div>';
+                shell += '<div class="biw-methodology-bottom">' + methodology + '</div>';
             }
 
             // ─── Drawer ───
@@ -155,6 +157,7 @@
                 '      <span class="rank" id="drawer-rank">—</span>' +
                 '      <span id="drawer-risk-badge"></span>' +
                 '      <span class="rank-delta" id="drawer-delta"></span>' +
+                '      <div id="drawer-dqi-badge" style="margin-top:4px;"></div>' +
                 '    </div>' +
                 '  </div>' +
                 '  <div class="drawer-radar">' +
@@ -204,24 +207,6 @@
                 '  <button class="modal-close" id="biw-method-close">✕</button>' +
                 '  <h2>Methodology</h2>' +
                 '  <div class="content">' + methodology + '</div>' +
-                '</div>';
-
-            // ─── Command palette ───
-            shell += '<div class="biw-cmd-overlay" id="biw-cmd-overlay">' +
-                '  <div class="biw-cmd-modal">' +
-                '    <input type="text" id="biw-cmd-input" placeholder="Search for a country…" autofocus>' +
-                '    <div class="cmd-hint">Type a country name to jump to it</div>' +
-                '    <div id="biw-cmd-results"></div>' +
-                '  </div>' +
-                '</div>';
-
-            // ─── Share modal ───
-            shell += '<div class="biw-share-overlay" id="biw-share-overlay"></div>' +
-                '<div class="biw-share-modal" id="biw-share-modal">' +
-                '  <button class="modal-close" id="biw-share-close">✕</button>' +
-                '  <h2 style="font-size:1.2rem;font-weight:600;">Share this view</h2>' +
-                '  <div class="share-row"><input type="text" id="biw-share-link" readonly><button id="biw-share-copy">📋 Copy</button></div>' +
-                '  <div class="share-row"><button id="biw-share-x">𝕏</button><button id="biw-share-linkedin">in</button><button id="biw-share-email">✉️</button></div>' +
                 '</div>';
 
             return shell;
@@ -346,7 +331,7 @@
                 '  </div>' +
                 '</div>' +
 
-                // ─── Table toolbar ───
+                // ─── Table Toolbar ──────────────────────────────────────
                 '<div class="biw-table-toolbar">' +
                 '  <input type="text" class="biw-search" placeholder="Search countries…">' +
                 '  <div class="biw-table-controls">' +
@@ -483,6 +468,32 @@
             return bandClasses[b] || 'biw-badge-low';
         }
 
+        // ─── Get score for a specific year from history ───
+        function getScoreForYear(iso3, year) {
+            var hist = state.history[iso3] || [];
+            if (hist.length === 0) return null;
+            // Find the entry with closest period (format "YYYY-MM" or "YYYY")
+            var target = year.toString();
+            var best = null;
+            var bestDiff = Infinity;
+            hist.forEach(function (entry) {
+                var period = entry.period || '';
+                // Try to match year part
+                var entryYear = parseInt(period.substring(0, 4), 10);
+                if (!isNaN(entryYear)) {
+                    var diff = Math.abs(entryYear - year);
+                    if (diff < bestDiff) {
+                        bestDiff = diff;
+                        best = entry;
+                    }
+                }
+            });
+            if (best && best.composite_score !== undefined) {
+                return best.composite_score;
+            }
+            return null;
+        }
+
         function applyFilters() {
             var term = q('.biw-search') ? q('.biw-search').value.toLowerCase().trim() : '';
             var bandFilter = q('.biw-band-filter') ? q('.biw-band-filter').value : 'all';
@@ -516,6 +527,9 @@
                 if (sortKey === 'coverage') {
                     valA = a[coverageKey] === 'full' ? 0 : 1;
                     valB = b[coverageKey] === 'full' ? 0 : 1;
+                    if (valA === valB) {
+                        return (a.rank || 999) - (b.rank || 999);
+                    }
                     return valA - valB;
                 }
                 valA = a[sortKey] !== undefined && a[sortKey] !== null ? a[sortKey] : -1;
@@ -554,6 +568,7 @@
                 '<th style="width:60px;text-align:center;">Δ</th>' +
                 '<th>Country</th>' +
                 '<th style="width:110px;text-align:center;">' + esc(scoreLabel) + '</th>' +
+                '<th style="width:70px;text-align:center;">DQI</th>' +
                 pillars.map(function (p) {
                     return '<th style="width:120px;text-align:center;">' + esc(p.label) + '</th>';
                 }).join('') +
@@ -628,12 +643,16 @@
             body.innerHTML = state.filtered.map(function (c, i) {
                 var starred = watchlist.indexOf(c.iso3) !== -1;
                 var inCompare = state.compareList.some(function (item) { return item.iso3 === c.iso3; });
+                var dqi = c.composite_dqi !== null && c.composite_dqi !== undefined ? Math.round(c.composite_dqi) : null;
+                var dqiDisplay = dqi !== null ? dqi + '%' : '—';
+                var dqiColor = dqi !== null ? (dqi >= 70 ? '#4ade80' : (dqi >= 40 ? '#fac678' : '#eb674e')) : '#6B7280';
                 return '<tr data-idx="' + i + '">' +
                     '<td style="text-align:center;"><button class="biw-star-btn ' + (starred ? 'active' : '') + '" data-action="star" data-idx="' + i + '">★</button></td>' +
                     '<td class="biw-rank">' + rankHtml(c) + '</td>' +
                     '<td class="biw-num">' + deltaHtml(c) + '</td>' +
                     '<td class="biw-country">' + esc(c.name) + '</td>' +
                     '<td class="biw-num">' + badgeHtml(c[scoreKey], c[coverageKey]) + '</td>' +
+                    '<td style="text-align:center;color:' + dqiColor + ';font-weight:700;font-family:var(--biw-mono);font-size:0.85rem;" title="Data Quality Index">' + dqiDisplay + '</td>' +
                     pillars.map(function (p) { return '<td class="biw-num">' + pillarCellHtml(c, p) + '</td>'; }).join('') +
                     '<td style="text-align:center;"><input type="checkbox" class="biw-compare-check" data-action="compare-check" data-idx="' + i + '" ' + (inCompare ? 'checked' : '') + '></td>' +
                     '<td class="biw-action"><button class="biw-btn-detail" data-action="detail" data-idx="' + i + '">Details</button></td>' +
@@ -641,7 +660,7 @@
             }).join('');
         }
 
-        // ── Dashboard ──
+        // ─── Dashboard ──
         function updateSummary() {
             var total = state.all.length;
             var full = state.all.filter(function (d) { return d.coverage === 'full'; }).length;
@@ -673,7 +692,7 @@
             }
         }
 
-        // ── Donut ──
+        // ─── Donut ──
         function renderDonut() {
             var container = document.getElementById('biw-donut');
             if (!container || !state.d3Ready || typeof d3 === 'undefined') return;
@@ -889,13 +908,13 @@
             return ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)'][b] || 'var(--biw-slate-dim)';
         }
 
-        // ── Map ──
-        function renderMap(layer) {
+        // ─── Map ───
+        function renderMap(layer, year) {
             var container = document.getElementById('biw-map');
             if (!container || !state.d3Ready || typeof d3 === 'undefined' || typeof topojson === 'undefined') return;
             var rect = container.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) {
-                setTimeout(function () { renderMap(layer); }, 200);
+                setTimeout(function () { renderMap(layer, year); }, 200);
                 return;
             }
             var svg = d3.select(container).select('svg');
@@ -904,7 +923,11 @@
             svg.attr('viewBox', '0 0 ' + width + ' ' + height);
             var g = svg.select('g');
             if (g.empty()) g = svg.append('g');
-            var projection = d3.geoNaturalEarth1();
+
+            var projection = d3.geoNaturalEarth1()
+                .scale(150)
+                .translate([width / 2, height / 2]);
+
             var path = d3.geoPath().projection(projection);
             var zoom = d3.zoom().scaleExtent([1, 10]).on('zoom', function (e) {
                 g.attr('transform', e.transform);
@@ -918,11 +941,67 @@
             if (zoomOut) zoomOut.addEventListener('click', function () { svg.transition().duration(300).call(zoom.scaleBy, 0.7); });
             if (zoomReset) zoomReset.addEventListener('click', function () { svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity); });
 
+            // ─── Year slider ──────────────────────────────────────────
+            var sliderContainer = container.querySelector('.biw-year-slider-container');
+            if (!sliderContainer) {
+                sliderContainer = document.createElement('div');
+                sliderContainer.className = 'biw-year-slider-container';
+                sliderContainer.innerHTML = `
+                    <label>Year</label>
+                    <input type="range" id="biw-year-slider" min="2021" max="2026" step="1" value="${year || 2026}">
+                    <span class="year-label" id="biw-year-label">${year || 2026}</span>
+                    <button class="play-btn" id="biw-play-btn">▶</button>
+                `;
+                container.appendChild(sliderContainer);
+
+                var slider = sliderContainer.querySelector('#biw-year-slider');
+                var label = sliderContainer.querySelector('#biw-year-label');
+                var playBtn = sliderContainer.querySelector('#biw-play-btn');
+                var isPlaying = false;
+                var playInterval = null;
+
+                slider.addEventListener('input', function() {
+                    var y = parseInt(this.value, 10);
+                    label.textContent = y;
+                    state.selectedYear = y;
+                    // Update map colors with new year
+                    updateMapColors(state.mapLayer, y);
+                });
+
+                playBtn.addEventListener('click', function() {
+                    if (isPlaying) {
+                        clearInterval(playInterval);
+                        isPlaying = false;
+                        playBtn.textContent = '▶';
+                        return;
+                    }
+                    isPlaying = true;
+                    playBtn.textContent = '⏸';
+                    var currentYear = parseInt(slider.value, 10);
+                    var maxYear = parseInt(slider.max, 10);
+                    playInterval = setInterval(function() {
+                        if (currentYear >= maxYear) {
+                            clearInterval(playInterval);
+                            isPlaying = false;
+                            playBtn.textContent = '▶';
+                            return;
+                        }
+                        currentYear++;
+                        slider.value = currentYear;
+                        label.textContent = currentYear;
+                        state.selectedYear = currentYear;
+                        updateMapColors(state.mapLayer, currentYear);
+                    }, 800);
+                });
+            }
+
+            // ─── Load map data ────────────────────────────────────────
             fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
                 .then(function (res) { return res.json(); })
                 .then(function (world) {
                     var countries = topojson.feature(world, world.objects.countries);
                     projection.fitExtent([[20, 20], [width - 20, height - 20]], countries);
+
                     g.selectAll('path')
                         .data(countries.features)
                         .enter()
@@ -936,7 +1015,7 @@
                             var iso3 = getIso3(d.id || d.properties?.id);
                             if (!iso3) return 'var(--biw-no-data)';
                             var c = state.all.find(function (i) { return i.iso3 === iso3; });
-                            return getCountryColor(c, layer);
+                            return getCountryColor(c, layer, year);
                         })
                         .attr('stroke', function (d) {
                             var iso3 = getIso3(d.id || d.properties?.id);
@@ -953,10 +1032,11 @@
                             var c = state.all.find(function (i) { return i.iso3 === iso3; });
                             var tt = container.querySelector('.biw-map-tooltip');
                             if (c) {
+                                var score = getScoreForYear(iso3, state.selectedYear) ?? c[scoreKey];
                                 tt.innerHTML = '<div style="font-weight:800;">' + esc(c.name) + '</div>' +
                                     '<div>Rank: ' + rankHtml(c) + '</div>' +
-                                    '<div>' + esc(scoreLabel) + ': ' + fmtNum(c[scoreKey]) + '</div>' +
-                                    '<div style="font-size:11px;color:' + getColor(c[scoreKey]) + ';">' + bandLabels[band(c[scoreKey])] + '</div>';
+                                    '<div>' + esc(scoreLabel) + ': ' + fmtNum(score) + '</div>' +
+                                    '<div style="font-size:11px;color:' + getColor(score) + ';">' + bandLabels[band(score)] + '</div>';
                                 var rect2 = container.getBoundingClientRect();
                                 tt.style.left = (e.clientX - rect2.left + 12) + 'px';
                                 tt.style.top = (e.clientY - rect2.top + 12) + 'px';
@@ -998,7 +1078,7 @@
                 });
         }
 
-        function updateMapColors(layer) {
+        function updateMapColors(layer, year) {
             var container = document.getElementById('biw-map');
             if (!container || !state.d3Ready || typeof d3 === 'undefined') return;
             var svg = d3.select(container).select('svg');
@@ -1009,19 +1089,25 @@
                     var iso3 = getIso3(d.id || d.properties?.id);
                     if (!iso3) return 'var(--biw-no-data)';
                     var c = state.all.find(function (i) { return i.iso3 === iso3; });
-                    return getCountryColor(c, layer);
+                    return getCountryColor(c, layer, year);
                 });
+            state.mapLayer = layer; // store current layer
         }
 
-        function getCountryColor(c, layer) {
+        function getCountryColor(c, layer, year) {
             if (!c) return 'var(--biw-no-data)';
-            var val = layer === 'score' ? c[scoreKey] : c[layer];
+            var val;
+            if (layer === 'score') {
+                val = getScoreForYear(c.iso3, year) ?? c[scoreKey];
+            } else {
+                val = c[layer];
+            }
             if (val == null) return 'var(--biw-no-data)';
             var b = band(val);
             return ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)'][b] || 'var(--biw-no-data)';
         }
 
-        // ─── Radar – no watermark, dotted circles more visible ───
+        // ─── Radar ───
         function renderRadar(c) {
             var container = document.getElementById('drawer-radar');
             if (!container || !state.d3Ready || typeof d3 === 'undefined') return;
@@ -1042,7 +1128,6 @@
             var maxScore = 100;
             var angleSlice = (Math.PI * 2) / pillars.length;
 
-            // ─── Grid circles – more visible ───
             for (var level = 1; level <= levels; level++) {
                 var r = (radius / levels) * level;
                 svg.append('circle')
@@ -1054,7 +1139,6 @@
                     .attr('opacity', 1);
             }
 
-            // ─── Axes ───
             pillars.forEach(function (p, i) {
                 var angle = i * angleSlice - Math.PI / 2;
                 var x = radius * Math.cos(angle);
@@ -1079,7 +1163,6 @@
                     .text(p.label);
             });
 
-            // ─── Data polygon ───
             var points = [];
             pillars.forEach(function (p, i) {
                 var val = c[p.key] !== undefined && c[p.key] !== null ? c[p.key] : 0;
@@ -1110,7 +1193,7 @@
             });
         }
 
-        // ─── Historical sparkline ───
+        // ─── History sparkline ───
         function renderHistoryChart(c) {
             var container = document.getElementById('drawer-history-chart');
             if (!container) return;
@@ -1159,7 +1242,6 @@
                 .domain([yMin, yMax])
                 .range([innerHeight, 0]);
 
-            // Grid lines
             svg.append('g')
                 .attr('class', 'grid')
                 .call(d3.axisLeft(yScale).ticks(3).tickSize(-innerWidth).tickFormat(''))
@@ -1167,7 +1249,6 @@
                 .style('stroke-dasharray', '2,2')
                 .style('opacity', 0.5);
 
-            // Line
             var line = d3.line()
                 .x(function(d) { return xScale(d.period); })
                 .y(function(d) { return yScale(d.score); })
@@ -1181,7 +1262,6 @@
                 .attr('stroke', 'var(--biw-champagne)')
                 .attr('stroke-width', 2);
 
-            // Area under line
             var area = d3.area()
                 .x(function(d) { return xScale(d.period); })
                 .y0(innerHeight)
@@ -1195,7 +1275,6 @@
                 .attr('fill', 'var(--biw-champagne)')
                 .attr('fill-opacity', 0.1);
 
-            // Dots
             svg.selectAll('.history-dot')
                 .data(data)
                 .enter()
@@ -1206,7 +1285,6 @@
                 .attr('r', 3)
                 .attr('fill', 'var(--biw-champagne)');
 
-            // Tooltip
             var tooltip = document.createElement('div');
             tooltip.className = 'history-tooltip';
             container.style.position = 'relative';
@@ -1228,7 +1306,6 @@
                     tooltip.classList.remove('visible');
                 });
 
-            // X axis labels
             svg.append('g')
                 .attr('transform', 'translate(0,' + innerHeight + ')')
                 .call(d3.axisBottom(xScale).tickValues(xScale.domain()).tickFormat(function(d) {
@@ -1243,7 +1320,7 @@
                 .style('fill', 'var(--biw-slate-dim)');
         }
 
-        // ─── Sensitivity interval ───
+        // ─── Sensitivity ───
         function renderSensitivity(c) {
             var container = document.getElementById('drawer-sensitivity');
             if (!container) return;
@@ -1272,7 +1349,7 @@
                 '</div>';
         }
 
-        // ─── Provenance panel ───
+        // ─── Provenance ───
         function renderProvenance(c) {
             var container = document.getElementById('drawer-provenance');
             if (!container) return;
@@ -1332,6 +1409,17 @@
             else if (delta.type === 'flat') deltaEl.innerHTML = '<span class="biw-delta-flat">—</span>';
             else deltaEl.innerHTML = '<span class="biw-delta-new">NEW</span>';
 
+            var dqiContainer = document.getElementById('drawer-dqi-badge');
+            if (dqiContainer) {
+                var dqi = c.composite_dqi !== null && c.composite_dqi !== undefined ? Math.round(c.composite_dqi) : null;
+                if (dqi !== null) {
+                    var dqiClass = dqi >= 70 ? 'high' : (dqi >= 40 ? 'medium' : 'low');
+                    dqiContainer.innerHTML = '<span class="biw-dqi-badge ' + dqiClass + '">Data Quality Index (DQI): ' + dqi + '%</span>';
+                } else {
+                    dqiContainer.innerHTML = '<span class="biw-dqi-badge none">Data Quality Index (DQI): —</span>';
+                }
+            }
+
             var cov = document.getElementById('drawer-coverage');
             var covType = c[coverageKey] || 'partial';
             cov.textContent = covType === 'full' ? 'FULL INDEX' : 'PARTIAL INDEX';
@@ -1364,7 +1452,6 @@
             document.getElementById('drawer-why').innerHTML = '💡 <strong>Why this score?</strong> ' + whyText + ' ' +
                 (c[coverageKey] === 'partial' ? '<br><em style="color:var(--biw-medium)">Partial coverage – rank is a projected range.</em>' : '');
 
-            // Render radar, history, sensitivity, provenance
             renderRadar(c);
             renderHistoryChart(c);
             renderSensitivity(c);
@@ -1466,7 +1553,6 @@
                 var angleSlice = (Math.PI * 2) / pillars.length;
                 var colorPalette = ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)', '#c084fc'];
 
-                // Grid circles
                 for (var lvl = 1; lvl <= 5; lvl++) {
                     g.append('circle')
                         .attr('r', (radius / 5) * lvl)
@@ -1542,6 +1628,18 @@
             var rows = [
                 { label: 'Rank', key: 'rank', fn: function(c) { return rankHtml(c); } },
                 { label: scoreLabel, key: scoreKey, fn: function(c) { return fmtNum(c[scoreKey]); } },
+                {
+                    label: 'DQI',
+                    key: 'dqi',
+                    fn: function(c) {
+                        var dqi = c.composite_dqi !== null && c.composite_dqi !== undefined ? Math.round(c.composite_dqi) : null;
+                        if (dqi !== null) {
+                            var cls = dqi >= 70 ? 'high' : (dqi >= 40 ? 'medium' : 'low');
+                            return '<span class="dqi-compare ' + cls + '">' + dqi + '%</span>';
+                        }
+                        return '<span class="dqi-compare none">—</span>';
+                    }
+                },
                 { label: 'Coverage', key: coverageKey, fn: function(c) { return c[coverageKey] || '—'; } }
             ];
             pillars.forEach(function (p) {
@@ -1585,31 +1683,9 @@
             try { localStorage.setItem('biw_dark_mode_' + slug, state.isDark ? 'dark' : 'light'); } catch (e) {}
         }
 
-        // ─── Share modal ───
+        // ─── Share (drawer share button) ───
         function openShareModal() {
-            var link = document.getElementById('biw-share-link');
-            link.value = window.location.href;
-            document.getElementById('biw-share-overlay').classList.add('visible');
-            document.getElementById('biw-share-modal').classList.add('visible');
-        }
-        function closeShareModal() {
-            document.getElementById('biw-share-overlay').classList.remove('visible');
-            document.getElementById('biw-share-modal').classList.remove('visible');
-        }
-        function copyShareLink() {
-            var input = document.getElementById('biw-share-link');
-            navigator.clipboard.writeText(input.value).then(function() {
-                var btn = document.getElementById('biw-share-copy');
-                btn.textContent = '✓ Copied!';
-                setTimeout(function() { btn.textContent = '📋 Copy'; }, 1500);
-            });
-        }
-        function shareTo(platform) {
-            var url = encodeURIComponent(window.location.href);
-            var title = encodeURIComponent(root.getAttribute('data-biw-title') || 'SIVI Index');
-            if (platform === 'x') window.open('https://twitter.com/intent/tweet?url=' + url + '&text=' + title);
-            else if (platform === 'linkedin') window.open('https://www.linkedin.com/sharing/share-offsite/?url=' + url);
-            else if (platform === 'email') window.location.href = 'mailto:?subject=' + title + '&body=' + url;
+            alert('Share via the share buttons (𝕏, in, 🔗) in the toolbar.');
         }
 
         // ─── Methodology popup ───
@@ -1620,50 +1696,6 @@
         function closeMethodologyPopup() {
             document.getElementById('biw-method-overlay').classList.remove('visible');
             document.getElementById('biw-method-modal').classList.remove('visible');
-        }
-
-        // ─── Command palette ───
-        function openCommandPalette() {
-            document.getElementById('biw-cmd-overlay').classList.add('visible');
-            var input = document.getElementById('biw-cmd-input');
-            input.value = '';
-            input.focus();
-            updateCommandResults('');
-        }
-        function closeCommandPalette() {
-            document.getElementById('biw-cmd-overlay').classList.remove('visible');
-        }
-        function updateCommandResults(query) {
-            var results = document.getElementById('biw-cmd-results');
-            var q = query.toLowerCase().trim();
-            var matches = state.all.filter(function (d) { return d.name.toLowerCase().includes(q) || d.iso3.toLowerCase().includes(q); });
-            if (matches.length > 20) matches = matches.slice(0, 20);
-            if (!matches.length) {
-                results.innerHTML = '<div style="padding:12px;color:var(--biw-slate-dim);">No countries found</div>';
-                return;
-            }
-            results.innerHTML = matches.map(function (d, i) {
-                return '<div class="cmd-item" data-iso="' + d.iso3 + '"><span class="name">' + esc(d.name) + '</span><span class="score">' + rankHtml(d) + ' · ' + fmtNum(d[scoreKey]) + '</span></div>';
-            }).join('');
-            results.querySelectorAll('.cmd-item').forEach(function (el) {
-                el.addEventListener('click', function () {
-                    var iso = this.dataset.iso;
-                    selectCountry(iso);
-                    closeCommandPalette();
-                });
-            });
-            var items = results.querySelectorAll('.cmd-item');
-            var idx = 0;
-            var keyHandler = function (e) {
-                if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min(idx+1, items.length-1); highlightCmdItem(items, idx); }
-                else if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(idx-1, 0); highlightCmdItem(items, idx); }
-                else if (e.key === 'Enter') { if (items[idx]) { var iso = items[idx].dataset.iso; selectCountry(iso); closeCommandPalette(); } }
-            };
-            document.removeEventListener('keydown', keyHandler);
-            document.addEventListener('keydown', keyHandler);
-        }
-        function highlightCmdItem(items, idx) {
-            items.forEach(function (el, i) { el.classList.toggle('selected', i === idx); });
         }
 
         // ─── Events ───
@@ -1694,14 +1726,6 @@
             });
             document.getElementById('drawer-share').addEventListener('click', openShareModal);
 
-            // Share modal
-            document.getElementById('biw-share-close').addEventListener('click', closeShareModal);
-            document.getElementById('biw-share-overlay').addEventListener('click', closeShareModal);
-            document.getElementById('biw-share-copy').addEventListener('click', copyShareLink);
-            document.getElementById('biw-share-x').addEventListener('click', function () { shareTo('x'); });
-            document.getElementById('biw-share-linkedin').addEventListener('click', function () { shareTo('linkedin'); });
-            document.getElementById('biw-share-email').addEventListener('click', function () { shareTo('email'); });
-
             // Compare dock
             document.getElementById('biw-compare-dock-close').addEventListener('click', function () {
                 document.getElementById('biw-compare-dock').classList.remove('visible');
@@ -1722,23 +1746,6 @@
             document.getElementById('biw-btn-methodology').addEventListener('click', showMethodologyPopup);
             document.getElementById('biw-method-close').addEventListener('click', closeMethodologyPopup);
             document.getElementById('biw-method-overlay').addEventListener('click', closeMethodologyPopup);
-
-            // Command palette
-            document.addEventListener('keydown', function (e) {
-                if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-                    e.preventDefault();
-                    if (!document.getElementById('biw-cmd-overlay').classList.contains('visible')) {
-                        openCommandPalette();
-                    }
-                }
-                if (e.key === 'Escape') {
-                    closeCommandPalette();
-                }
-            });
-            document.getElementById('biw-cmd-input').addEventListener('input', function () { updateCommandResults(this.value); });
-            document.getElementById('biw-cmd-overlay').addEventListener('click', function (e) {
-                if (e.target === this) closeCommandPalette();
-            });
 
             // Search, filters, sort
             var search = q('.biw-search');
@@ -1816,7 +1823,8 @@
                 btn.addEventListener('click', function () {
                     layerBtns.forEach(function (b) { b.classList.remove('active'); });
                     this.classList.add('active');
-                    updateMapColors(this.getAttribute('data-layer'));
+                    state.mapLayer = this.getAttribute('data-layer');
+                    updateMapColors(state.mapLayer, state.selectedYear);
                 });
             });
 
@@ -1865,7 +1873,7 @@
 
         function renderDashboard() {
             if (view !== 'dashboard') return;
-            renderMap('score');
+            renderMap('score', 2026);
             renderDonut();
             renderExtremes();
             renderHistogram();
