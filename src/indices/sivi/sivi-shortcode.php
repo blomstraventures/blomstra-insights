@@ -11,6 +11,7 @@ add_shortcode( 'blomstra_sivi_index', function () {
         '<strong>Supplier Concentration</strong> (UN Comtrade import HHI), and ' .
         '<strong>Maritime Exposure</strong> (World Bank LSCI, inverted to a vulnerability orientation). ' .
         '<strong>Higher scores indicate higher vulnerability (rank #1 is the most vulnerable country).</strong> ' .
+        'Data Quality Index (DQI) shows the freshness of underlying data per pillar, disclosed as a confidence metric only — it does not affect the score.' .
         '<a href="https://blomstrainsights.com/methodology/sivi" target="_blank" rel="noopener">Full methodology →</a>';
     $pillars_json = wp_json_encode( $pillars );
     ob_start();
