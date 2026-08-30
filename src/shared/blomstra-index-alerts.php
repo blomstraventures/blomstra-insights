@@ -1,4 +1,3 @@
-<?php
 /**
  * Blomstra Alert Webhook System
  *
