@@ -1,10 +1,10 @@
 /**
- * Blomstra Reference Data — Shared Utility & Reference Layer (v2.7.28)
+ * Blomstra Reference Data — Shared Utility & Reference Layer (v2.7.29)
  *
- * FINAL RELEASE — One last fix: WB pointer_incomplete only true if pointer exists.
+ * Added EIA per-country year tracking for DQI (Phase 5b).
  *
  * @package Blomstra
- * @version 2.7.28
+ * @version 2.7.29
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // ─── USER-AGENT CONSTANT ────────────────────────────────────────────
 
 if ( ! defined( 'BLOMSTRA_USER_AGENT' ) ) {
-    define( 'BLOMSTRA_USER_AGENT', 'BlomstraReferenceData/2.7.28' );
+    define( 'BLOMSTRA_USER_AGENT', 'BlomstraReferenceData/2.7.29' );
 }
 
 // ─── WB INDICATOR LIST ─────────────────────────────────────────────
@@ -1199,7 +1199,10 @@ if ( ! function_exists( 'blomstra_eia_pick_latest_per_country' ) ) {
                 continue;
             }
             if ( ! isset( $latest[ $cc ] ) || $period > $latest[ $cc ]['period'] ) {
-                $latest[ $cc ] = array( 'value' => (float) $val, 'period' => $period );
+                $latest[ $cc ] = array(
+                    'value'  => (float) $val,
+                    'period' => $period,
+                );
             }
         }
         return $latest;
@@ -1207,7 +1210,7 @@ if ( ! function_exists( 'blomstra_eia_pick_latest_per_country' ) ) {
 }
 
 // ─── EIA processing with conditional updates ──────────────────────
-// Removed unused $retry_count parameter.
+// Now stores year for each country per fuel (for DQI).
 
 if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
     function blomstra_process_eia_activity( $fuel_index, $activity, $iso3_list, &$failed_fuels ) {
@@ -1259,7 +1262,11 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
             if ( $result['status'] === 'ok' ) {
                 $latest = blomstra_eia_pick_latest_per_country( $result['rows'] );
                 foreach ( $latest as $iso3 => $row ) {
-                    $activity_data[ $iso3 ] = $row['value'];
+                    // ─── FIX: Store value AND year (for DQI) ──────────
+                    $activity_data[ $iso3 ] = array(
+                        'value' => $row['value'],
+                        'year'  => (int) substr( $row['period'], 0, 4 ),
+                    );
                 }
             } elseif ( $result['status'] === 'empty' ) {
                 // no data for this chunk
@@ -1292,24 +1299,26 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
 
         // ─── Conditional update based on activity ──────────────
         if ( $activity === 'consumption' ) {
-            // Only update consumption
+            // Only update consumption – store value AND year
             $existing_fuel_consumption = $existing_consumption[ $product_id ] ?? array();
             $new_consumption = $existing_fuel_consumption;
-            foreach ( $activity_data as $iso3 => $val ) {
+            foreach ( $activity_data as $iso3 => $entry ) {
                 $new_consumption[ $iso3 ] = array(
-                    'value'  => $val,
+                    'value'  => $entry['value'],
+                    'year'   => $entry['year'],
                     'status' => 'ok',
                 );
             }
             $existing_consumption[ $product_id ] = $new_consumption;
             // production unchanged
         } else {
-            // Only update production
+            // Only update production – store value AND year
             $existing_fuel_production = $existing_production[ $product_id ] ?? array();
             $new_production = $existing_fuel_production;
-            foreach ( $activity_data as $iso3 => $val ) {
+            foreach ( $activity_data as $iso3 => $entry ) {
                 $new_production[ $iso3 ] = array(
-                    'value'  => $val,
+                    'value'  => $entry['value'],
+                    'year'   => $entry['year'],
                     'status' => 'ok',
                 );
             }
@@ -1403,7 +1412,6 @@ if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
                 return;
             }
 
-            // ─── FIX: Remove unused $retry_count ──────────────────
             $result = blomstra_process_eia_activity( $fuel_index, $activity, $iso3_list, $failed_fuels );
 
             // ─── Handle skipped_permanent ──────────────────────────────
@@ -2812,7 +2820,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         }
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.7.28', 'blomstra' ) . '</h1>';
+        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.7.29', 'blomstra' ) . '</h1>';
         echo '<p style="color:#666;">Centralised reference data layer for SIVI, SERI, and dependent tools with granular control, live API sandbox, & non-blocking background tasks.</p>';
 
         if ( isset( $_GET['triggered'] ) ) {
