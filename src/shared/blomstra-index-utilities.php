@@ -7,7 +7,7 @@
  *
  * @package Blomstra\Insights\Shared
  * @since   1.0.0
- * @version 1.1.5  – Alert system moved to separate file (blomstra-alerts.php)
+ * @version 1.2.0  – Added Data Quality Index (DQI) functions (Phase 5b)
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -1005,4 +1005,71 @@ function blomstra_build_partial_rank_display( $ranks_by_injection ) {
             ? '#' . $range_80_low . '–' . $range_80_high . '*'
             : '#?–?*',
     );
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 11. DATA QUALITY INDEX (DQI) – PHASE 5b
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Compute DQI for a single pillar.
+ *
+ * DQI is a disclosure-only confidence metric indicating how fresh
+ * the data is for a specific pillar. It does NOT affect the composite score.
+ *
+ * @param int|null $data_year     Year of the data (null = missing/structural)
+ * @param int      $current_year  Current reference year (T)
+ * @param int      $max_lag       Maximum allowable lag in years
+ * @return float|null             DQI 0-100, or null if data is missing
+ */
+function blomstra_compute_dqi( $data_year, $current_year, $max_lag ) {
+    // If data_year is null, the pillar is missing – return null (not 0)
+    if ( $data_year === null || $data_year <= 0 ) {
+        return null;
+    }
+    
+    $lag = $current_year - $data_year;
+    
+    // Data from the future? (shouldn't happen, but clamp to 100)
+    if ( $lag < 0 ) {
+        return 100.0;
+    }
+    
+    // Data is outside the acceptable window – 0% confidence
+    if ( $lag >= $max_lag ) {
+        return 0.0;
+    }
+    
+    // Linear decay from 100 at lag=0 to 0 at lag=max_lag
+    return round( ( 1 - ( $lag / $max_lag ) ) * 100, 1 );
+}
+
+/**
+ * Compute composite DQI for an index (weighted average of pillar DQIs).
+ *
+ * Missing pillars are EXCLUDED from the average, not scored as 0.
+ * This prevents countries with missing data from having a misleadingly low DQI.
+ *
+ * @param array $pillar_data Array of [ 'dqi' => float|null, 'weight' => float ]
+ * @return float|null Composite DQI 0-100, or null if no pillars present
+ */
+function blomstra_compute_composite_dqi( $pillar_data ) {
+    $total_weight = 0;
+    $weighted_sum = 0;
+    
+    foreach ( $pillar_data as $pillar ) {
+        // Only include pillars that have a non-null DQI
+        if ( $pillar['dqi'] !== null ) {
+            $weighted_sum += $pillar['dqi'] * $pillar['weight'];
+            $total_weight += $pillar['weight'];
+        }
+    }
+    
+    // If no pillars have data, return null
+    if ( $total_weight <= 0 ) {
+        return null;
+    }
+    
+    return round( $weighted_sum / $total_weight, 1 );
 }
