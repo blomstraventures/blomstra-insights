@@ -1,10 +1,12 @@
 /**
- * Blomstra Reference Data — Shared Utility & Reference Layer (v2.7.29)
+ * Blomstra Reference Data — Shared Utility & Reference Layer (v2.8.6)
  *
- * Added EIA per-country year tracking for DQI (Phase 5b).
+ * - Cache wrapper: only persists non‑empty results (fixes EIA poisoning).
+ * - World Bank & IMF counting uses unique ISO3s.
+ * - Admin button to purge empty EIA cache entries.
  *
  * @package Blomstra
- * @version 2.7.29
+ * @version 2.8.6
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -17,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // ─── USER-AGENT CONSTANT ────────────────────────────────────────────
 
 if ( ! defined( 'BLOMSTRA_USER_AGENT' ) ) {
-    define( 'BLOMSTRA_USER_AGENT', 'BlomstraReferenceData/2.7.29' );
+    define( 'BLOMSTRA_USER_AGENT', 'BlomstraReferenceData/2.8.6' );
 }
 
 // ─── WB INDICATOR LIST ─────────────────────────────────────────────
@@ -40,8 +42,20 @@ if ( ! defined( 'BLOMSTRA_WB_INDICATORS' ) ) {
     ) );
 }
 
+// ─── IMF INDICATOR LIST ─────────────────────────────────────────────
+
+if ( ! defined( 'BLOMSTRA_IMF_INDICATORS' ) ) {
+    define( 'BLOMSTRA_IMF_INDICATORS', array(
+        'NGDP_RPCH'   => 'gdp_growth_imf',
+        'PCPIPCH'     => 'inflation_imf',
+        'BCA_NGDPD'   => 'current_account_imf',
+        'GGXWDG_NGDP' => 'gov_debt_imf',
+        'GGXCNL_NGDP' => 'gov_balance_imf',
+        'LUR'         => 'unemployment_imf',
+    ) );
+}
+
 // ─── GLOBAL COUNTRY LIST (World Bank) ─────────────────────────────
-// RD-04: Use page-reached verification; fixed null $total_pages bug.
 
 if ( ! function_exists( 'blomstra_get_global_country_list' ) ) {
     function blomstra_get_global_country_list( $force = false ) {
@@ -89,10 +103,8 @@ if ( ! function_exists( 'blomstra_get_global_country_list' ) ) {
             $page++;
         } while ( $page <= $total_pages );
 
-        // ─── FIX: Only set reached_end if total_pages is known ──
         $reached_end = ( $total_pages !== null && $page > $total_pages );
 
-        // Cache only if we completed all pages
         if ( ! empty( $names ) && $reached_end ) {
             set_transient( $cache_key, $names, DAY_IN_SECONDS );
             return $names;
@@ -108,7 +120,6 @@ if ( ! function_exists( 'blomstra_get_global_country_list' ) ) {
 }
 
 // ─── COMTRADE REPORTER-CODE MAP ───────────────────────────────────
-// RD-16: Fixed dedup logic – skip expired entries entirely.
 
 if ( ! defined( 'BLOMSTRA_COMTRADE_REPORTER_URL' ) ) {
     define( 'BLOMSTRA_COMTRADE_REPORTER_URL', 'https://comtradeapi.un.org/files/v1/app/reference/Reporters.json' );
@@ -160,7 +171,6 @@ if ( ! function_exists( 'blomstra_get_comtrade_reporter_map' ) ) {
             return is_array( $stale ) ? $stale : array();
         }
 
-        // ─── FIX: Skip expired entries entirely ────────────────────
         $map = array();
         foreach ( $reporters as $reporter ) {
             if ( ! empty( $reporter['isGroup'] ) ) {
@@ -172,15 +182,12 @@ if ( ! function_exists( 'blomstra_get_comtrade_reporter_map' ) ) {
             if ( $iso3 === '' || $code === null ) {
                 continue;
             }
-            // If expired, skip entirely (don't store, don't overwrite)
             if ( $expired ) {
                 continue;
             }
-            // Valid entry – store if not already present, or overwrite if present (should not happen)
             if ( ! isset( $map[ $iso3 ] ) ) {
                 $map[ $iso3 ] = $code;
             }
-            // If already present, keep the first valid (should not have duplicate valid entries)
         }
 
         $debug['result']           = ! empty( $map ) ? 'ok' : 'parsed_but_empty';
@@ -197,7 +204,6 @@ if ( ! function_exists( 'blomstra_get_comtrade_reporter_map' ) ) {
 }
 
 // ─── MARITIME (WORLD BANK LSCI, RAW ONLY) ─────────────────────────
-// FIX: Retry on empty responses (move return outside loop).
 
 if ( ! defined( 'BLOMSTRA_MARITIME_INDICATOR_CODE' ) ) {
     define( 'BLOMSTRA_MARITIME_INDICATOR_CODE', 'IS.SHP.GCNW.XQ' );
@@ -224,7 +230,7 @@ if ( ! function_exists( 'blomstra_get_maritime_raw' ) ) {
         $max_attempts = 2;
         $backoff = 3;
         $attempt_inner = 1;
-        $data = array(); // default empty
+        $data = array();
         $got_data = false;
 
         while ( $attempt_inner <= $max_attempts ) {
@@ -287,19 +293,16 @@ if ( ! function_exists( 'blomstra_get_maritime_raw' ) ) {
             $debug['countries_parsed'] = count( $data );
             update_option( 'blomstra_maritime_fetch_debug', $debug, false );
 
-            // If we got data, break out of loop and return it
             if ( ! empty( $data ) ) {
                 $got_data = true;
                 break;
             }
 
-            // If empty, but attempts remain, continue loop
             if ( $attempt_inner < $max_attempts ) {
                 sleep( $backoff * $attempt_inner );
                 $attempt_inner++;
                 continue;
             } else {
-                // Last attempt, break to return empty (or stale)
                 break;
             }
         }
@@ -309,7 +312,6 @@ if ( ! function_exists( 'blomstra_get_maritime_raw' ) ) {
             return $data;
         }
 
-        // If we exhausted attempts and got no data, return stale cache if available
         $stale = get_transient( $cache_key );
         return is_array( $stale ) ? $stale : array();
     }
@@ -1180,8 +1182,16 @@ if ( ! function_exists( 'blomstra_eia_fetch_activity_batch' ) ) {
             $body = json_decode( wp_remote_retrieve_body( $response ), true );
             $rows = $body['response']['data'] ?? array();
             $status = empty( $rows ) ? 'empty' : 'ok';
-            blomstra_log_eia_call( $chunk_label, $activity_id, $product_id, $status, 'Retrieved ' . count( $rows ) . ' rows' );
-            return array( 'status' => $status, 'rows' => $rows, 'error' => null );
+            $http_code = wp_remote_retrieve_response_code( $response );
+            $detail = 'Retrieved ' . count( $rows ) . ' rows';
+            if ( $status === 'empty' && ! empty( $response ) ) {
+                $body_snippet = substr( wp_remote_retrieve_body( $response ), 0, 200 );
+                if ( strpos( $body_snippet, 'error' ) !== false || strpos( $body_snippet, 'message' ) !== false ) {
+                    $detail .= '; Response snippet: ' . $body_snippet;
+                }
+            }
+            blomstra_log_eia_call( $chunk_label, $activity_id, $product_id, $status, $detail );
+            return array( 'status' => $status, 'rows' => $rows, 'error' => null, 'http_code' => $http_code, 'detail' => $detail );
         }
 
         return array( 'status' => 'retryable_failure', 'rows' => array(), 'error' => 'Max attempts exceeded' );
@@ -1210,7 +1220,6 @@ if ( ! function_exists( 'blomstra_eia_pick_latest_per_country' ) ) {
 }
 
 // ─── EIA processing with conditional updates ──────────────────────
-// Now stores year for each country per fuel (for DQI).
 
 if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
     function blomstra_process_eia_activity( $fuel_index, $activity, $iso3_list, &$failed_fuels ) {
@@ -1221,7 +1230,6 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
         $product_id = $fuel_ids[ $fuel_index ];
         $fuel_name = BLOMSTRA_EIA_FUEL_PRODUCT_IDS[ $product_id ];
 
-        // Check if this fuel is in the permanent failure list
         if ( isset( $failed_fuels[ $product_id ] ) && $failed_fuels[ $product_id ]['permanent'] === true ) {
             return array(
                 'status' => 'skipped_permanent',
@@ -1233,9 +1241,7 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
             );
         }
 
-        // RD-06: Check retry count for quota/permanent failures
         if ( isset( $failed_fuels[ $product_id ] ) && $failed_fuels[ $product_id ]['retries'] >= 3 ) {
-            // After 3 retries, mark as permanent and skip
             $failed_fuels[ $product_id ]['permanent'] = true;
             return array(
                 'status' => 'skipped_permanent',
@@ -1262,7 +1268,6 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
             if ( $result['status'] === 'ok' ) {
                 $latest = blomstra_eia_pick_latest_per_country( $result['rows'] );
                 foreach ( $latest as $iso3 => $row ) {
-                    // ─── FIX: Store value AND year (for DQI) ──────────
                     $activity_data[ $iso3 ] = array(
                         'value' => $row['value'],
                         'year'  => (int) substr( $row['period'], 0, 4 ),
@@ -1277,7 +1282,6 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
                 $failed_fuels[ $product_id ] = array( 'permanent' => true, 'retries' => 0 );
             } elseif ( $result['status'] === 'quota_exhausted' ) {
                 $quota_chunks++;
-                // Increment retry count for this fuel
                 if ( ! isset( $failed_fuels[ $product_id ] ) ) {
                     $failed_fuels[ $product_id ] = array( 'permanent' => false, 'retries' => 1 );
                 } else {
@@ -1292,14 +1296,11 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
         $production_key = 'blomstra_eia_raw_data';
         $staging_key = $production_key . '_staging';
 
-        // Load existing production data
         $existing = get_option( $production_key, array( 'consumption' => array(), 'production' => array() ) );
         $existing_consumption = $existing['consumption'] ?? array();
         $existing_production = $existing['production'] ?? array();
 
-        // ─── Conditional update based on activity ──────────────
         if ( $activity === 'consumption' ) {
-            // Only update consumption – store value AND year
             $existing_fuel_consumption = $existing_consumption[ $product_id ] ?? array();
             $new_consumption = $existing_fuel_consumption;
             foreach ( $activity_data as $iso3 => $entry ) {
@@ -1310,9 +1311,7 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
                 );
             }
             $existing_consumption[ $product_id ] = $new_consumption;
-            // production unchanged
         } else {
-            // Only update production – store value AND year
             $existing_fuel_production = $existing_production[ $product_id ] ?? array();
             $new_production = $existing_fuel_production;
             foreach ( $activity_data as $iso3 => $entry ) {
@@ -1323,17 +1322,14 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
                 );
             }
             $existing_production[ $product_id ] = $new_production;
-            // consumption unchanged
         }
 
-        // Build staging dataset
         $staging_data = array(
             'consumption' => $existing_consumption,
             'production'  => $existing_production,
         );
         update_option( $staging_key, $staging_data, false );
 
-        // Update summary
         $summary = get_option( 'blomstra_eia_refresh_summary', array() );
         if ( ! isset( $summary['fuels'] ) ) {
             $summary['fuels'] = array();
@@ -1360,7 +1356,6 @@ if ( ! function_exists( 'blomstra_process_eia_activity' ) ) {
             $status = 'partial';
         }
 
-        // RD-06: 80% coverage threshold for pointer advancement
         $successful_chunks = $total_chunks - $failed_chunks - $retryable_chunks - $permanent_chunks - $quota_chunks;
         $advance_pointer = ( $successful_chunks / $total_chunks ) >= 0.8 && $permanent_chunks === 0;
 
@@ -1414,7 +1409,6 @@ if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
 
             $result = blomstra_process_eia_activity( $fuel_index, $activity, $iso3_list, $failed_fuels );
 
-            // ─── Handle skipped_permanent ──────────────────────────────
             if ( $result['status'] === 'skipped_permanent' ) {
                 blomstra_update_cron_status( 'eia', 'partial', 'Fuel ' . $result['fuel_name'] . ' skipped (permanent failure). Advancing pointer.', $fuel_index + 1 );
                 $new_fuel_index = $fuel_index;
@@ -1431,10 +1425,8 @@ if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
                 return;
             }
 
-            // ─── Atomic promotion ──────────────────────────────────────────
             $staging_data = get_option( $result['staging_key'], array() );
             if ( ! empty( $staging_data['consumption'] ) || ! empty( $staging_data['production'] ) ) {
-                // RD-06: Per-fuel coverage check for promotion
                 $fuel_consumption_count = isset( $staging_data['consumption'][ $result['product_id'] ] ) ? count( $staging_data['consumption'][ $result['product_id'] ] ) : 0;
                 $fuel_production_count = isset( $staging_data['production'][ $result['product_id'] ] ) ? count( $staging_data['production'][ $result['product_id'] ] ) : 0;
                 $fuel_expected = count( $iso3_list );
@@ -1448,7 +1440,6 @@ if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
             }
             delete_option( $result['staging_key'] );
 
-            // ─── Advance pointer ──────────────────────────────────────────
             if ( $result['advance_pointer'] ) {
                 $new_fuel_index = $fuel_index;
                 $new_activity = ( $activity === 'consumption' ) ? 'production' : 'consumption';
@@ -1461,7 +1452,6 @@ if ( ! function_exists( 'blomstra_cron_handle_eia' ) ) {
                 blomstra_update_eia_pointer( $fuel_index, $activity, $failed_fuels, current_time( 'mysql' ) );
             }
 
-            // ─── Determine completion ─────────────────────────────────────
             $pointer = blomstra_get_eia_pointer();
             $is_complete = ( $pointer['fuel_index'] >= $total_fuels );
             $fuels_done = min( $pointer['fuel_index'], $total_fuels );
@@ -1591,8 +1581,11 @@ if ( ! function_exists( 'blomstra_get_weo_vintage' ) ) {
 }
 
 if ( ! function_exists( 'blomstra_fetch_imf_generic' ) ) {
-    function blomstra_fetch_imf_generic( $code, $force, $forecast_horizon = null ) {
+    function blomstra_fetch_imf_generic( $code, $force, $forecast_horizon = null, $target_year = null ) {
         $cache_key = 'blomstra_imf_' . ( $forecast_horizon !== null ? 'forecast_' . md5( $code . '_h' . $forecast_horizon ) : 'indicator_' . md5( $code ) );
+        if ( $target_year !== null ) {
+            $cache_key .= '_year_' . $target_year;
+        }
         $staging_key = $cache_key . '_tmp';
 
         if ( ! $force ) {
@@ -1667,59 +1660,82 @@ if ( ! function_exists( 'blomstra_fetch_imf_generic' ) ) {
                 return blomstra_stale_cache_fallback( $cache_key );
             }
 
-            foreach ( $body['values'][ $code ] as $imf_code => $years ) {
-                $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
-                if ( ! is_array( $years ) || empty( $years ) ) {
-                    continue;
-                }
-
-                if ( $forecast_horizon !== null ) {
-                    $target_year = $current_year + $forecast_horizon;
-                    if ( isset( $years[ $target_year ] ) && is_numeric( $years[ $target_year ] ) ) {
-                        $out[ $iso3 ] = array(
-                            'value'     => floatval( $years[ $target_year ] ),
-                            'year'      => (string) $target_year,
-                            'data_type' => 'forecast',
-                            'horizon'   => $forecast_horizon,
-                            'fetched_at' => current_time( 'mysql' ),
-                            'source'    => 'IMF WEO DataMapper (forecast)',
-                            'weo_vintage' => blomstra_get_weo_vintage(),
-                        );
+            // If a specific year is requested, extract that year directly
+            if ( $target_year !== null ) {
+                foreach ( $body['values'][ $code ] as $imf_code => $years ) {
+                    $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
+                    if ( ! is_array( $years ) || ! isset( $years[ $target_year ] ) ) {
+                        continue;
                     }
-                } else {
-                    $actual_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
-                        return (int) $y <= $current_year;
-                    } );
-                    $forecast_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
-                        return (int) $y > $current_year;
-                    } );
+                    $val = $years[ $target_year ];
+                    if ( ! is_numeric( $val ) ) {
+                        continue;
+                    }
+                    $out[ $iso3 ] = array(
+                        'value'       => floatval( $val ),
+                        'year'        => (string) $target_year,
+                        'data_type'   => 'historical',
+                        'fetched_at'  => current_time( 'mysql' ),
+                        'source'      => 'IMF WEO DataMapper',
+                        'weo_vintage' => blomstra_get_weo_vintage(),
+                    );
+                }
+            } else {
+                // Original behaviour: latest actual or forecast
+                foreach ( $body['values'][ $code ] as $imf_code => $years ) {
+                    $iso3 = $iso3_map[ $imf_code ] ?? $imf_code;
+                    if ( ! is_array( $years ) || empty( $years ) ) {
+                        continue;
+                    }
 
-                    if ( ! empty( $actual_years ) ) {
-                        $latest_actual_year = max( $actual_years );
-                        $val = $years[ $latest_actual_year ];
-                        if ( ! is_numeric( $val ) ) {
-                            continue;
+                    if ( $forecast_horizon !== null ) {
+                        $target_year = $current_year + $forecast_horizon;
+                        if ( isset( $years[ $target_year ] ) && is_numeric( $years[ $target_year ] ) ) {
+                            $out[ $iso3 ] = array(
+                                'value'     => floatval( $years[ $target_year ] ),
+                                'year'      => (string) $target_year,
+                                'data_type' => 'forecast',
+                                'horizon'   => $forecast_horizon,
+                                'fetched_at' => current_time( 'mysql' ),
+                                'source'    => 'IMF WEO DataMapper (forecast)',
+                                'weo_vintage' => blomstra_get_weo_vintage(),
+                            );
                         }
-                        $out[ $iso3 ] = array(
-                            'value'       => floatval( $val ),
-                            'year'        => (string) $latest_actual_year,
-                            'data_type'   => $latest_actual_year == $current_year ? 'current_year_estimate' : 'actual',
-                            'fetched_at'  => current_time( 'mysql' ),
-                            'source'      => 'IMF WEO DataMapper',
-                        );
-                    } elseif ( ! empty( $forecast_years ) ) {
-                        $earliest_forecast_year = min( $forecast_years );
-                        $val = $years[ $earliest_forecast_year ];
-                        if ( ! is_numeric( $val ) ) {
-                            continue;
+                    } else {
+                        $actual_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
+                            return (int) $y <= $current_year;
+                        } );
+                        $forecast_years = array_filter( array_keys( $years ), function( $y ) use ( $current_year ) {
+                            return (int) $y > $current_year;
+                        } );
+
+                        if ( ! empty( $actual_years ) ) {
+                            $latest_actual_year = max( $actual_years );
+                            $val = $years[ $latest_actual_year ];
+                            if ( ! is_numeric( $val ) ) {
+                                continue;
+                            }
+                            $out[ $iso3 ] = array(
+                                'value'       => floatval( $val ),
+                                'year'        => (string) $latest_actual_year,
+                                'data_type'   => $latest_actual_year == $current_year ? 'current_year_estimate' : 'actual',
+                                'fetched_at'  => current_time( 'mysql' ),
+                                'source'      => 'IMF WEO DataMapper',
+                            );
+                        } elseif ( ! empty( $forecast_years ) ) {
+                            $earliest_forecast_year = min( $forecast_years );
+                            $val = $years[ $earliest_forecast_year ];
+                            if ( ! is_numeric( $val ) ) {
+                                continue;
+                            }
+                            $out[ $iso3 ] = array(
+                                'value'       => floatval( $val ),
+                                'year'        => (string) $earliest_forecast_year,
+                                'data_type'   => 'forecast_fallback',
+                                'fetched_at'  => current_time( 'mysql' ),
+                                'source'      => 'IMF WEO DataMapper (forecast)',
+                            );
                         }
-                        $out[ $iso3 ] = array(
-                            'value'       => floatval( $val ),
-                            'year'        => (string) $earliest_forecast_year,
-                            'data_type'   => 'forecast_fallback',
-                            'fetched_at'  => current_time( 'mysql' ),
-                            'source'      => 'IMF WEO DataMapper (forecast)',
-                        );
                     }
                 }
             }
@@ -1805,13 +1821,16 @@ if ( ! function_exists( 'blomstra_refresh_imf_indicators' ) ) {
 
 if ( ! function_exists( 'blomstra_count_imf_cache' ) ) {
     function blomstra_count_imf_cache() {
-        global $wpdb;
+       global $wpdb;
+       // Count only base indicator transients (no year-specific or forecast copies)
         $count = $wpdb->get_var(
-            "SELECT COUNT(*) FROM {$wpdb->options}
-             WHERE option_name LIKE '_transient_blomstra_imf_%'
-             AND option_name NOT LIKE '_transient_timeout_%'"
-        );
-        return (int) $count;
+           "SELECT COUNT(*) FROM {$wpdb->options}
+            WHERE option_name LIKE '_transient_blomstra_imf_indicator_%'
+            AND option_name NOT LIKE '%_year_%'
+            AND option_name NOT LIKE '%_forecast_%'
+            AND option_name NOT LIKE '_transient_timeout_%'"
+       );
+       return (int) $count;
     }
 }
 
@@ -1867,9 +1886,6 @@ if ( ! function_exists( 'blomstra_cron_handle_imf' ) ) {
     }
     add_action( 'blomstra_cron_imf_weekly_event', 'blomstra_cron_handle_imf' );
 }
-
-// ─── SHARED PERCENTILE‑RANK HELPERS ───────────────────────────────
-// (moved to utilities file)
 
 // ─── WORLD BANK INDICATOR BATCH FETCHER ────────────────────────────
 
@@ -2007,7 +2023,6 @@ if ( ! function_exists( 'blomstra_fetch_wb_indicator_batch' ) ) {
             return blomstra_stale_cache_fallback( $cache_key );
         }
 
-        // WDI: hybrid
         $attempt = 1;
         $out = array();
         $fetched_at = current_time( 'mysql' );
@@ -2256,7 +2271,6 @@ if ( ! function_exists( 'blomstra_fetch_wb_historical_batch' ) ) {
                 delete_transient( $staging_key );
                 return $result;
             }
-            // empty but 200 – break to avoid infinite loop
             break;
         }
 
@@ -2695,6 +2709,99 @@ if ( ! function_exists( 'blomstra_ref_handle_early_actions' ) ) {
             wp_safe_redirect( add_query_arg( array( 'page' => 'blomstra-insights-tools', 'landlocked_updated' => '1' ), admin_url( 'admin.php' ) ) );
             exit;
         }
+
+        // ─── HISTORICAL CACHE RANGE SAVE ──────────────────────────
+        if ( isset( $_POST['blomstra_save_backfill_range'] ) && check_admin_referer( 'blomstra_backfill_range_action', 'blomstra_backfill_range_nonce' ) ) {
+            $index_slug = sanitize_key( $_POST['index_slug'] ?? 'sivi' );
+            $start = (int) $_POST['backfill_start'];
+            $end   = (int) $_POST['backfill_end'];
+            if ( $start > 0 && $end > 0 && $start <= $end ) {
+                update_option( $index_slug . '_backfill_range_start', $start, false );
+                update_option( $index_slug . '_backfill_range_end', $end, false );
+                echo '<div class="notice notice-success"><p>✅ Backfill range for ' . strtoupper( $index_slug ) . ' updated to ' . $start . '–' . $end . '.</p></div>';
+            } else {
+                echo '<div class="notice notice-error"><p>❌ Invalid range. Start must be ≤ End.</p></div>';
+            }
+        }
+
+        // ─── HISTORICAL CACHE BULK FETCH ──────────────────────────
+        if ( isset( $_POST['blomstra_hist_cache_bulk'] ) && check_admin_referer( 'blomstra_historical_cache_bulk_action', 'blomstra_historical_cache_bulk_nonce' ) ) {
+            $start = (int) $_POST['cache_start_year'];
+            $end   = (int) $_POST['cache_end_year'];
+            $sources = array_map( 'sanitize_text_field', (array) $_POST['cache_sources'] );
+            if ( $start <= 0 || $end <= 0 || $start > $end || empty( $sources ) ) {
+                echo '<div class="notice notice-error"><p>❌ Invalid range or no sources selected.</p></div>';
+            } else {
+                $count = 0;
+                $skipped = 0;
+                $source_registry = blomstra_get_historical_sources();
+                foreach ( $source_registry as $source_key => $source_def ) {
+                    if ( ! in_array( $source_key, $sources, true ) ) {
+                        continue;
+                    }
+                    if ( ! $source_def['enabled'] ) {
+                        continue;
+                    }
+                    for ( $year = $start; $year <= $end; $year++ ) {
+                        $status = blomstra_cache_job_get_status( $source_key, $year );
+                        if ( $status && $status['status'] === 'success' ) {
+                            $skipped++;
+                            continue;
+                        }
+                        blomstra_cache_job_update( $source_key, $year, 'pending' );
+                        wp_schedule_single_event( time() + ( $count * 30 ), 'blomstra_cache_historical_job', array( $source_key, $year ) );
+                        $count++;
+                    }
+                }
+                $msg = "✅ Scheduled $count cache jobs for $start – $end.";
+                if ( $skipped > 0 ) {
+                    $msg .= " Skipped $skipped already successful jobs.";
+                }
+                echo '<div class="notice notice-success"><p>' . $msg . ' They will run in the background.</p></div>';
+            }
+        }
+
+        // ─── PURGE EMPTY EIA CACHE ────────────────────────────────
+        if ( isset( $_POST['blomstra_purge_empty_eia_cache'] ) && check_admin_referer( 'blomstra_purge_empty_eia_action', 'blomstra_purge_empty_eia_nonce' ) ) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'blomstra_historical_data';
+            $deleted = $wpdb->query( $wpdb->prepare(
+                "DELETE FROM $table WHERE source = %s AND value IS NULL",
+                'eia'
+            ) );
+            echo '<div class="notice notice-success"><p>🗑️ Purged ' . $deleted . ' empty EIA cache entries.</p></div>';
+        }
+
+        // ─── CACHE JOB RETRY ──────────────────────────────────────
+        if ( isset( $_POST['blomstra_cache_job_retry'] ) && check_admin_referer( 'blomstra_cache_job_action', 'blomstra_cache_job_nonce' ) ) {
+            $source = sanitize_text_field( $_POST['source'] );
+            $year   = (int) $_POST['year'];
+            blomstra_cache_job_update( $source, $year, 'pending' );
+            wp_schedule_single_event( time() + 5, 'blomstra_cache_historical_job', array( $source, $year ) );
+            echo '<div class="notice notice-success"><p>🔄 Retry scheduled for ' . $source . ' ' . $year . '.</p></div>';
+        }
+
+        // ─── RETRY ALL FAILED ──────────────────────────────────────
+        if ( isset( $_POST['blomstra_cache_job_retry_all_failed'] ) && check_admin_referer( 'blomstra_cache_job_retry_all_action', 'blomstra_cache_job_retry_all_nonce' ) ) {
+            $jobs = blomstra_cache_job_get_all();
+            $retried = 0;
+            foreach ( $jobs as $source => $years ) {
+                foreach ( $years as $year => $data ) {
+                    if ( $data['status'] === 'failed' ) {
+                        blomstra_cache_job_update( $source, $year, 'pending' );
+                        wp_schedule_single_event( time() + ( $retried * 30 ), 'blomstra_cache_historical_job', array( $source, $year ) );
+                        $retried++;
+                    }
+                }
+            }
+            echo '<div class="notice notice-success"><p>🔄 Retry scheduled for ' . $retried . ' failed jobs.</p></div>';
+        }
+
+        // ─── CACHE JOB CLEAR ALL ────────────────────────────────────
+        if ( isset( $_POST['blomstra_cache_job_clear_all'] ) && check_admin_referer( 'blomstra_cache_job_clear_all_action', 'blomstra_cache_job_clear_all_nonce' ) ) {
+            blomstra_cache_job_clear_all();
+            echo '<div class="notice notice-warning"><p>🗑️ All cache job statuses cleared. You can now re-run caching.</p></div>';
+        }
     }
     add_action( 'admin_init', 'blomstra_ref_handle_early_actions' );
 }
@@ -2820,8 +2927,8 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         }
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.7.29', 'blomstra' ) . '</h1>';
-        echo '<p style="color:#666;">Centralised reference data layer for SIVI, SERI, and dependent tools with granular control, live API sandbox, & non-blocking background tasks.</p>';
+        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.8.6', 'blomstra' ) . '</h1>';
+        echo '<p style="color:#666;">Centralised reference data layer with shared historical cache for all indices.</p>';
 
         if ( isset( $_GET['triggered'] ) ) {
             $label = strtoupper( sanitize_text_field( $_GET['triggered'] ) );
@@ -2846,7 +2953,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
             echo '<div class="notice notice-success is-dismissible"><p>📅 Landlocked verification date updated to today.</p></div>';
         }
 
-        // ─── SECTION 0: SYSTEM & API KEY HEALTH + DATA STORAGE ────
+        // ─── SECTION 1: SYSTEM & API KEY HEALTH + DATA STORAGE ────
         $api_status = blomstra_check_api_keys_status();
 
         global $wpdb;
@@ -2887,7 +2994,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 1: DATA HEALTH DASHBOARD ──────────────────────
+        // ─── SECTION 2: DATA HEALTH DASHBOARD ──────────────────────
         $cron_statuses = get_option( 'blomstra_cron_status', array() );
         $expected_countries = count( blomstra_get_global_country_list() );
 
@@ -3017,8 +3124,6 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         $wb_expected = count( BLOMSTRA_WB_INDICATORS );
         $wb_status = $cron_statuses['wb_indicators'] ?? null;
         $wb_lock_age = $get_lock_age( 'blomstra_wb_refresh_in_progress' );
-
-        // ─── FIX: Only treat as incomplete if pointer exists AND next_index < expected ───
         $wb_pointer = blomstra_get_wb_pointer();
         $wb_pointer_exists = ( get_option( 'blomstra_wb_refresh_pointer' ) !== false );
         $wb_next_index = $wb_pointer['next_index'] ?? 0;
@@ -3035,7 +3140,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
             'next_scheduled' => $get_next_scheduled( 'blomstra_cron_wb_indicators_weekly_event' ),
             'coverage_note' => '',
             'state_counts' => array(),
-            'pointer_incomplete' => ( $wb_pointer_exists && $wb_next_index < $wb_expected ), // ← FIX
+            'pointer_incomplete' => ( $wb_pointer_exists && $wb_next_index < $wb_expected ),
         );
 
         // IMF
@@ -3100,7 +3205,6 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                 }
             }
 
-            // Coverage
             $coverage_text = '';
             $coverage_pct = 0;
             if ( $p['expected'] > 0 && $p['count'] > 0 ) {
@@ -3113,7 +3217,6 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                 $coverage_text .= ' – ' . $p['coverage_note'];
             }
 
-            // State breakdown
             $state_breakdown = '';
             if ( ! empty( $p['state_counts'] ) && is_array( $p['state_counts'] ) ) {
                 $parts = array();
@@ -3125,7 +3228,6 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                 $state_breakdown = implode( ', ', $parts );
             }
 
-            // ─── ACTION SUGGESTION ──────────────────────────────────
             $action_suggestion = '';
             $lock_exists = $p['lock_exists'];
             $is_stuck = ( $status_class === 'stuck' );
@@ -3139,20 +3241,13 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                 }
             }
 
-            // ─── Override: cache empty ──────────────────────────────
             if ( $p['count'] === 0 ) {
                 $action_suggestion = '⚠️ Cache is empty – use "Refresh" in Data Layers below.';
-            }
-            // ─── Override: pointer incomplete (in-progress) ─────────
-            elseif ( ! empty( $p['pointer_incomplete'] ) && ( $status_class === 'success' || $status_class === 'partial' ) ) {
+            } elseif ( ! empty( $p['pointer_incomplete'] ) && ( $status_class === 'success' || $status_class === 'partial' ) ) {
                 $action_suggestion = '⏳ Refresh in progress – next step will run shortly.';
-            }
-            // ─── Override: end-of-run partial (gaps remain) ─────────
-            elseif ( $status_class === 'partial' && empty( $p['pointer_incomplete'] ) && $p['count'] > 0 ) {
+            } elseif ( $status_class === 'partial' && empty( $p['pointer_incomplete'] ) && $p['count'] > 0 ) {
                 $action_suggestion = '⚠️ Some data could not be fetched. Use "Refresh" below to retry, or wait for next weekly run.';
-            }
-            // ─── Standard suggestions ──────────────────────────────
-            elseif ( $status_class === 'success' && ! $is_stale && empty( $action_suggestion ) ) {
+            } elseif ( $status_class === 'success' && ! $is_stale && empty( $action_suggestion ) ) {
                 $action_suggestion = '✅ Up to date – no action needed.';
             } elseif ( $is_stuck && $lock_exists && empty( $action_suggestion ) ) {
                 $action_suggestion = '🔒 Stuck – click "Refresh" in Data Layers below to clear lock and retry.';
@@ -3164,7 +3259,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
                 $action_suggestion = '⚠️ ' . ( $status_class === 'error' ? 'Error – check logs, then ' : 'Partial – ' ) . 'use "Refresh" in Data Layers below.';
             } elseif ( $status_class === 'running' && empty( $action_suggestion ) ) {
                 $action_suggestion = '🔄 Running – wait for completion.';
-            } elseif ( empty( $action_suggestion ) ) {
+            } else {
                 $action_suggestion = '—';
             }
 
@@ -3183,7 +3278,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<p style="color:#666; font-size:12px; margin:5px 0 0 0;"><strong>Legend:</strong> ✅ Success &nbsp;|&nbsp; ⚠️ Partial &nbsp;|&nbsp; ❌ Error &nbsp;|&nbsp; 🔒 Stuck &nbsp;|&nbsp; 🔄 Running &nbsp;|&nbsp; ⏳ Never Run &nbsp;|&nbsp; ⏳ Retryable</p>';
         echo '</div></div>';
 
-        // ─── SECTION 2: DATA LAYERS & GRANULAR CACHE CONTROL ──────
+        // ─── SECTION 3: DATA LAYERS & GRANULAR CACHE CONTROL ──────
         echo '<div class="postbox" style="background:#f9f9f9; border-left:4px solid #2271b1;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-dashboard"></span> Data Layers &amp; Granular Cache Control</h2></div>';
         echo '<div class="inside">';
@@ -3355,13 +3450,243 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 3: API DIAGNOSTIC SANDBOX ────────────────────────
+        // ─── SECTION 4: HISTORICAL CACHE STATUS (MATRIX) ──────────
+        echo '<div class="postbox" style="border-left:4px solid #9b51e0;">';
+        echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-database-add"></span> 📦 Historical Cache Status</h2></div>';
+        echo '<div class="inside">';
+
+        // This next line uses blomstra_cache_job_get_summary() – must be defined
+        $summary = blomstra_cache_job_get_summary();
+        echo '<p><strong>Summary:</strong> ';
+        echo '✅ ' . $summary['success'] . ' jobs completed · ';
+        echo '❌ ' . $summary['failed'] . ' failed · ';
+        echo '⏳ ' . $summary['pending'] . ' pending · ';
+        echo '⏹️ ' . $summary['skipped'] . ' skipped · ';
+        echo 'Total: ' . $summary['total'];
+        echo '</p>';
+
+        echo '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">';
+        // Retry all failed
+        echo '<form method="post" style="display:inline-block;">';
+        wp_nonce_field( 'blomstra_cache_job_retry_all_action', 'blomstra_cache_job_retry_all_nonce' );
+        echo '<input type="submit" name="blomstra_cache_job_retry_all_failed" value="🔄 Retry All Failed" class="button button-secondary">';
+        echo '</form>';
+
+        // Purge empty EIA cache
+        echo '<form method="post" style="display:inline-block;">';
+        wp_nonce_field( 'blomstra_purge_empty_eia_action', 'blomstra_purge_empty_eia_nonce' );
+        echo '<input type="submit" name="blomstra_purge_empty_eia_cache" value="🗑️ Purge Empty EIA Cache" class="button button-secondary" onclick="return confirm(\'This will delete all empty EIA cache entries. Continue?\');">';
+        echo '</form>';
+
+        // Clear all job statuses
+        echo '<form method="post" style="display:inline-block;">';
+        wp_nonce_field( 'blomstra_cache_job_clear_all_action', 'blomstra_cache_job_clear_all_nonce' );
+        echo '<input type="submit" name="blomstra_cache_job_clear_all" value="🗑️ Clear All Statuses" class="button button-secondary" onclick="return confirm(\'This will reset all cache job statuses. Continue?\');">';
+        echo '</form>';
+        echo '</div>';
+
+        // Build matrix from registry
+        $source_registry = blomstra_get_historical_sources();
+        $jobs = blomstra_cache_job_get_all();
+        $range = blomstra_get_index_backfill_range('sivi');
+        $years = range( $range['start'], $range['end'] );
+
+        echo '<div style="overflow-x:auto; margin-top:15px;">';
+        echo '<table class="widefat" style="text-align:center;">';
+        echo '<thead><tr><th>Year</th>';
+        foreach ( $source_registry as $source_key => $source_def ) {
+            if ( $source_def['enabled'] ) {
+                echo '<th>' . esc_html( $source_def['label'] ) . '</th>';
+            }
+        }
+        echo '</tr></thead><tbody>';
+
+        foreach ( $years as $year ) {
+            echo '<tr><td><strong>' . $year . '</strong></td>';
+            foreach ( $source_registry as $source_key => $source_def ) {
+                if ( ! $source_def['enabled'] ) {
+                    continue;
+                }
+                $status = $jobs[ $source_key ][ $year ] ?? array( 'status' => 'not_started', 'countries_cached' => 0, 'error_message' => '' );
+                $cell_class = '';
+                $icon = '';
+                $display_text = '';
+                $tooltip = '';
+
+                switch ( $status['status'] ) {
+                    case 'success':
+                        $cell_class = 'success';
+                        $icon = '✅';
+                        $display_text = $status['countries_cached'];
+                        $tooltip = 'Success: ' . $status['countries_cached'] . ' countries cached.';
+                        break;
+                    case 'failed':
+                        $cell_class = 'failed';
+                        $icon = '❌';
+                        $display_text = substr( $status['error_message'], 0, 20 );
+                        $tooltip = 'Failed: ' . $status['error_message'];
+                        break;
+                    case 'partial':
+                        $cell_class = 'partial';
+                        $icon = '⚠️';
+                        $display_text = $status['countries_cached'];
+                        $tooltip = 'Partial: ' . $status['countries_cached'] . ' countries cached. Error: ' . $status['error_message'];
+                        break;
+                    case 'pending':
+                        $cell_class = 'pending';
+                        $icon = '⏳';
+                        $display_text = '…';
+                        $tooltip = 'Pending – waiting to run.';
+                        break;
+                    case 'running':
+                        $cell_class = 'running';
+                        $icon = '🔄';
+                        $display_text = '…';
+                        $tooltip = 'Running – in progress.';
+                        break;
+                    case 'skipped':
+                        $cell_class = 'skipped';
+                        $icon = '⏹️';
+                        $display_text = '—';
+                        $tooltip = 'Skipped (already cached).';
+                        break;
+                    default:
+                        $cell_class = 'not_started';
+                        $icon = '⚪';
+                        $display_text = '—';
+                        $tooltip = 'Not started.';
+                        break;
+                }
+
+                $color_map = array(
+                    'success' => '#2e7d32',
+                    'failed' => '#d63638',
+                    'partial' => '#f0ad4e',
+                    'pending' => '#2271b1',
+                    'running' => '#ffa500',
+                    'skipped' => '#999',
+                    'not_started' => '#ddd',
+                );
+                $bg = $color_map[ $cell_class ] ?? '#ddd';
+                echo '<td class="cache-cell" data-source="' . $source_key . '" data-year="' . $year . '" style="cursor:pointer; background:' . $bg . '; color:#fff; font-weight:bold; padding:6px;" title="' . esc_attr($tooltip) . '">';
+                echo $icon . ' ' . esc_html( $display_text );
+                echo '</td>';
+            }
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+        echo '</div>';
+
+        echo '<p style="color:#666; font-size:12px; margin-top:10px;">Click a cell to retry that specific job. Hover for details.</p>';
+        echo '</div></div>';
+
+        // ─── SECTION 5: HISTORICAL DATA CACHE MANAGER (BULK) ──────
+        echo '<div class="postbox" style="border-left:4px solid #9b51e0;">';
+        echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-database-add"></span> Historical Data Cache Manager</h2></div>';
+        echo '<div class="inside">';
+        echo '<p>Fetch and cache historical data for multiple years and sources in bulk. Already cached data will be skipped. Jobs run in the background.</p>';
+        echo '<form method="post" id="cache-manager-form">';
+        wp_nonce_field( 'blomstra_historical_cache_bulk_action', 'blomstra_historical_cache_bulk_nonce' );
+        $range = blomstra_get_index_backfill_range('sivi');
+        echo '<div style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end;">';
+        echo '<div><label>Year Range:</label><div style="display:flex; gap:8px; margin-top:4px;">';
+        echo '<input type="number" name="cache_start_year" value="' . esc_attr( $range['start'] ) . '" min="2004" max="2030" style="width:80px;">';
+        echo '<span>to</span>';
+        echo '<input type="number" name="cache_end_year" value="' . esc_attr( $range['end'] ) . '" min="2004" max="2030" style="width:80px;">';
+        echo '</div></div>';
+        echo '<div><label>Sources:</label><div style="display:flex; gap:12px; margin-top:4px; flex-wrap:wrap;">';
+        $source_registry = blomstra_get_historical_sources();
+        foreach ( $source_registry as $source_key => $source_def ) {
+            if ( $source_def['enabled'] ) {
+                echo '<label><input type="checkbox" name="cache_sources[]" value="' . $source_key . '" checked> ' . $source_def['label'] . '</label>';
+            }
+        }
+        echo '<label><input type="checkbox" id="select-all-sources" checked> Select All</label>';
+        echo '</div></div>';
+        echo '<div><button type="submit" name="blomstra_hist_cache_bulk" class="button button-primary">📥 Cache Selected Years & Sources</button></div>';
+        echo '</div>';
+        echo '<p id="cache-job-preview" style="margin-top:10px; color:#666; font-size:13px;"></p>';
+        echo '</form>';
+        echo '</div></div>';
+        ?>
+        <script>
+        jQuery(document).ready(function($) {
+            function updateCachePreview() {
+                var start = parseInt($('input[name="cache_start_year"]').val()) || 0;
+                var end   = parseInt($('input[name="cache_end_year"]').val()) || 0;
+                var sources = $('input[name="cache_sources[]"]:checked').length;
+                if (start > 0 && end > 0 && start <= end && sources > 0) {
+                    var total = (end - start + 1) * sources;
+                    $('#cache-job-preview').text('⚡ This will schedule ' + total + ' jobs (' + (end - start + 1) + ' years × ' + sources + ' sources).');
+                } else {
+                    $('#cache-job-preview').text('');
+                }
+            }
+            $('input[name="cache_start_year"], input[name="cache_end_year"], input[name="cache_sources[]"]').on('change keyup', updateCachePreview);
+            $('#select-all-sources').on('change', function() {
+                $('input[name="cache_sources[]"]').prop('checked', this.checked);
+                updateCachePreview();
+            });
+            updateCachePreview();
+
+            // Click on cache cell -> trigger retry
+            $('.cache-cell').on('click', function() {
+                var source = $(this).data('source');
+                var year   = $(this).data('year');
+                if (!source || !year) return;
+                if (confirm('Retry caching for ' + source + ' ' + year + '?')) {
+                    var form = $('<form method="post">' +
+                        '<input type="hidden" name="blomstra_cache_job_retry" value="1">' +
+                        '<input type="hidden" name="source" value="' + source + '">' +
+                        '<input type="hidden" name="year" value="' + year + '">' +
+                        '<?php wp_nonce_field( 'blomstra_cache_job_action', 'blomstra_cache_job_nonce' ); ?>' +
+                        '</form>');
+                    $('body').append(form);
+                    form.submit();
+                }
+            });
+        });
+        </script>
+        <?php
+
+        // ─── SECTION 6: HISTORICAL BACKFILL RANGE (PER INDEX) ──────
+        echo '<div class="postbox" style="border-left:4px solid #f56e28;">';
+        echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-settings"></span> ⚙️ Historical Backfill Range (Per Index)</h2></div>';
+        echo '<div class="inside">';
+        echo '<p>Configure the range of years to backfill for each index. The default is the previous 5 years (capped at 2004 for SIVI due to Maritime).</p>';
+        echo '<div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:15px;">';
+        $indices = array( 'sivi', 'seri', 'geri' );
+        foreach ( $indices as $idx ) {
+            $start = (int) get_option( $idx . '_backfill_range_start', 0 );
+            $end   = (int) get_option( $idx . '_backfill_range_end', 0 );
+            if ( $start <= 0 || $end <= 0 || $start > $end ) {
+                $current_year = (int) current_time('Y');
+                $default_start = ( $idx === 'sivi' ) ? max( 2004, $current_year - 5 ) : $current_year - 5;
+                $default_end = $current_year - 1;
+                $start = $start > 0 ? $start : $default_start;
+                $end   = $end   > 0 ? $end   : $default_end;
+            }
+            echo '<div style="background:#f5f5f5; padding:12px; border-radius:4px; border:1px solid #ddd;">';
+            echo '<form method="post">';
+            wp_nonce_field( 'blomstra_backfill_range_action', 'blomstra_backfill_range_nonce' );
+            echo '<input type="hidden" name="index_slug" value="' . esc_attr( $idx ) . '">';
+            echo '<strong>' . strtoupper( $idx ) . ':</strong><br>';
+            echo '<label>Start: <input type="number" name="backfill_start" value="' . esc_attr( $start ) . '" min="2004" max="2030" style="width:70px;"></label> ';
+            echo '<label>End: <input type="number" name="backfill_end" value="' . esc_attr( $end ) . '" min="2004" max="2030" style="width:70px;"></label> ';
+            echo '<br><button type="submit" name="blomstra_save_backfill_range" class="button button-secondary" style="margin-top:6px;">💾 Save</button>';
+            echo '</form>';
+            echo '</div>';
+        }
+        echo '</div>';
+        echo '<p style="color:#666; font-size:12px; margin-top:10px;">Note: SIVI is capped at 2004 due to Maritime LSCI data availability.</p>';
+        echo '</div></div>';
+
+        // ─── SECTION 7: API DIAGNOSTIC SANDBOX ────────────────────────
         echo '<div class="postbox" style="border-left:4px solid #00a0d2; background:#fff;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-testimonial"></span> API Diagnostic Sandbox (Single Target Tester)</h2></div>';
         echo '<div class="inside">';
         echo '<p style="color:#666;">Run an isolated call for a single target without exhausting quotas or triggering batch execution across all countries.</p>';
 
-        // ─── Sandbox Form ──────────────────────────────────────────────
         echo '<form method="post" style="display:flex; flex-wrap:wrap; gap:15px; align-items:flex-end; margin-bottom:15px; background:#f9f9f9; padding:12px; border:1px solid #e5e5e5; border-radius:4px;">';
         wp_nonce_field( 'blomstra_ref_sandbox_action', 'blomstra_ref_sandbox_nonce' );
 
@@ -3391,7 +3716,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<div><button type="submit" name="blomstra_ref_sandbox_test" value="1" class="button button-primary">🧪 Execute Isolated API Test</button></div>';
         echo '</form>';
 
-        // ─── FULL SANDBOX PROVIDER GUIDE (restored) ──────────────────
+        // ─── FULL SANDBOX PROVIDER GUIDE ──────────────────────────
         echo '<div style="background:#f0f6fc; border-left:4px solid #2271b1; padding:10px 15px; margin:15px 0; border-radius:4px;">';
         echo '<p style="margin:0 0 8px 0;"><strong>🔍 Sandbox Provider Guide</strong> — click each section for details.</p>';
 
@@ -3570,7 +3895,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 4: API CALL LOGS ──────────────────────────────────
+        // ─── SECTION 8: API CALL LOGS ──────────────────────────────────
         echo '<div class="postbox" style="border-left:4px solid #f56e28;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-list-view"></span> API Call Logs &amp; Historical Summaries</h2></div>';
         echo '<div class="inside">';
@@ -3652,7 +3977,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 5: RAW DEBUG INSPECTOR ───────────────────────────
+        // ─── SECTION 9: RAW DEBUG INSPECTOR ───────────────────────────
         echo '<div class="postbox" style="background:#f4f4f4;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-code-standards"></span> Raw Debug &amp; Dump Inspector</h2></div>';
         echo '<div class="inside">';
@@ -3684,8 +4009,8 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '</div></div>';
 
         echo '</div>'; // .wrap
-    }
-}
+    } // <-- THIS BRACE CLOSES THE FUNCTION (DO NOT REMOVE)
+} // <-- THIS BRACE CLOSES THE if (!function_exists) WRAPPER
 
 // ─── MULTI‑YEAR SNAPSHOT HISTORY ──────────────────────────────────
 
@@ -3720,13 +4045,13 @@ function blomstra_index_history_maybe_install() {
 }
 add_action( 'admin_init', 'blomstra_index_history_maybe_install' );
 
-function blomstra_index_snapshot_save( $index_slug, $countries ) {
+function blomstra_index_snapshot_save( $index_slug, $countries, $custom_period = null ) {
     if ( empty( $countries ) || ! is_array( $countries ) ) {
         return 0;
     }
     global $wpdb;
     $table  = $wpdb->prefix . 'blomstra_index_history';
-    $period = current_time( 'Y-m' );
+    $period = $custom_period ? $custom_period : current_time( 'Y-m' );
     $now    = current_time( 'mysql' );
     $written = 0;
     foreach ( $countries as $iso3 => $row ) {
@@ -3838,3 +4163,675 @@ add_action( 'admin_notices', function () {
     }
     echo '</ul></div>';
 } );
+
+// ================================================================
+// PART 2 STARTS HERE – Historical Cache Helpers, Fetchers & Jobs
+// ================================================================
+// ─── HISTORICAL DATA CACHE TABLE INSTALL ──────────────────────────
+
+function blomstra_historical_data_maybe_install() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'blomstra_historical_data';
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        source VARCHAR(20) NOT NULL,
+        indicator VARCHAR(50) NOT NULL,
+        fuel VARCHAR(20) DEFAULT NULL,
+        iso3 CHAR(3) NOT NULL,
+        year SMALLINT UNSIGNED NOT NULL,
+        value DECIMAL(12,4) DEFAULT NULL,
+        meta JSON DEFAULT NULL,
+        fetched_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY idx_source_indicator_fuel_iso3_year (source, indicator, fuel, iso3, year),
+        KEY idx_source_year (source, year),
+        KEY idx_iso3 (iso3)
+    ) $charset_collate;";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta( $sql );
+}
+add_action( 'admin_init', 'blomstra_historical_data_maybe_install' );
+
+// ─── HISTORICAL CACHE JOB STATUS TABLE ────────────────────────────
+
+function blomstra_cache_jobs_maybe_install() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'blomstra_cache_jobs';
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        source VARCHAR(20) NOT NULL,
+        year SMALLINT UNSIGNED NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        countries_cached INT DEFAULT 0,
+        error_message TEXT DEFAULT NULL,
+        started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        attempts INT DEFAULT 0,
+        PRIMARY KEY (id),
+        UNIQUE KEY idx_source_year (source, year),
+        KEY idx_status (status),
+        KEY idx_year (year)
+    ) $charset_collate;";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta( $sql );
+}
+add_action( 'admin_init', 'blomstra_cache_jobs_maybe_install' );
+
+// ─── SOURCE REGISTRY ───────────────────────────────────────────────
+
+if ( ! function_exists( 'blomstra_get_historical_sources' ) ) {
+    function blomstra_get_historical_sources() {
+        return array(
+            'eia' => array(
+                'label' => 'EIA Energy',
+                'fetcher' => 'blomstra_fetch_eia_for_year',
+                'available_since' => 2000,
+                'enabled' => true,
+                'implemented' => true,
+            ),
+            'comtrade' => array(
+                'label' => 'Comtrade HHI',
+                'fetcher' => 'blomstra_fetch_hhi_for_year',
+                'available_since' => 2000,
+                'enabled' => true,
+                'implemented' => true,
+            ),
+            'maritime' => array(
+                'label' => 'Maritime LSCI',
+                'fetcher' => 'blomstra_fetch_maritime_for_year',
+                'available_since' => 2004,
+                'enabled' => true,
+                'implemented' => true,
+            ),
+            'imf' => array(
+                'label' => 'IMF WEO',
+                'fetcher' => 'blomstra_fetch_imf_for_year',
+                'available_since' => 1990,
+                'enabled' => true,
+                'implemented' => true,
+            ),
+            'wb' => array(
+                'label' => 'World Bank',
+                'fetcher' => 'blomstra_fetch_wb_for_year',
+                'available_since' => 1990,
+                'enabled' => true,
+                'implemented' => true,
+            ),
+        );
+    }
+}
+
+// ─── CACHE JOB HELPER FUNCTIONS ────────────────────────────────────
+
+if ( ! function_exists( 'blomstra_cache_job_get_status' ) ) {
+    function blomstra_cache_job_get_status( $source, $year ) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'blomstra_cache_jobs';
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM $table WHERE source = %s AND year = %d",
+            $source, $year
+        ), ARRAY_A );
+        return $row;
+    }
+}
+
+if ( ! function_exists( 'blomstra_cache_job_update' ) ) {
+    function blomstra_cache_job_update( $source, $year, $status, $countries = null, $error = null ) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'blomstra_cache_jobs';
+        $now = current_time( 'mysql' );
+        $data = array( 'status' => $status );
+        if ( $countries !== null ) $data['countries_cached'] = (int) $countries;
+        if ( $error !== null ) $data['error_message'] = $error;
+        if ( $status === 'running' ) $data['started_at'] = $now;
+        if ( $status === 'success' || $status === 'failed' || $status === 'skipped' ) $data['completed_at'] = $now;
+        $existing = blomstra_cache_job_get_status( $source, $year );
+        if ( $existing ) {
+            $data['attempts'] = (int) $existing['attempts'] + 1;
+            $wpdb->update( $table, $data, array( 'source' => $source, 'year' => $year ) );
+        } else {
+            $data['source'] = $source;
+            $data['year'] = $year;
+            $data['attempts'] = 1;
+            $wpdb->insert( $table, $data );
+        }
+    }
+}
+
+if ( ! function_exists( 'blomstra_cache_job_get_all' ) ) {
+    function blomstra_cache_job_get_all() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'blomstra_cache_jobs';
+        $rows = $wpdb->get_results( "SELECT * FROM $table", ARRAY_A );
+        $result = array();
+        foreach ( $rows as $row ) {
+            $result[ $row['source'] ][ $row['year'] ] = $row;
+        }
+        return $result;
+    }
+}
+
+if ( ! function_exists( 'blomstra_cache_job_get_summary' ) ) {
+    function blomstra_cache_job_get_summary() {
+        $jobs = blomstra_cache_job_get_all();
+        $total = 0; $success = 0; $failed = 0; $pending = 0; $skipped = 0;
+        foreach ( $jobs as $source => $years ) {
+            foreach ( $years as $year => $data ) {
+                $total++;
+                switch ( $data['status'] ) {
+                    case 'success': $success++; break;
+                    case 'failed': $failed++; break;
+                    case 'pending': $pending++; break;
+                    case 'running': $pending++; break;
+                    case 'skipped': $skipped++; break;
+                    default: break;
+                }
+            }
+        }
+        return array(
+            'total' => $total,
+            'success' => $success,
+            'failed' => $failed,
+            'pending' => $pending,
+            'skipped' => $skipped,
+        );
+    }
+}
+
+if ( ! function_exists( 'blomstra_cache_job_clear_all' ) ) {
+    function blomstra_cache_job_clear_all() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'blomstra_cache_jobs';
+        $wpdb->query( "TRUNCATE TABLE $table" );
+    }
+}
+
+// ─── YEAR‑SPECIFIC FETCHERS FOR IMF & WB ──────────────────────────
+
+function blomstra_fetch_imf_for_year( $year, $iso3_list = null ) {
+    if ( $iso3_list === null ) {
+        $iso3_list = array_keys( blomstra_get_global_country_list() );
+    }
+
+    $results = array();
+    $indicator_codes = array_keys( BLOMSTRA_IMF_INDICATORS );
+    foreach ( $indicator_codes as $code ) {
+        // Call the generic function with target_year = $year
+        $data = blomstra_fetch_imf_generic( $code, true, null, $year );
+        // Filter to requested ISO3 list
+        $filtered = array();
+        foreach ( $data as $iso3 => $entry ) {
+            if ( in_array( $iso3, $iso3_list, true ) ) {
+                $filtered[ $iso3 ] = $entry;
+            }
+        }
+        // Shape as expected: [value, year]
+        $shaped = array();
+        foreach ( $filtered as $iso3 => $entry ) {
+            $shaped[ $iso3 ] = array(
+                'value' => $entry['value'],
+                'year'  => (int) $entry['year'],
+            );
+        }
+        $results[ $code ] = $shaped;
+    }
+    return $results;
+}
+
+function blomstra_fetch_wb_for_year( $year, $iso3_list = null ) {
+    if ( $iso3_list === null ) {
+        $iso3_list = array_keys( blomstra_get_global_country_list() );
+    }
+
+    $results = array();
+    foreach ( BLOMSTRA_WB_INDICATORS as $code => $config ) {
+        $source_id = $config['source'];
+        // Use the historical batch fetcher that respects exact year
+        $data = blomstra_fetch_wb_historical_batch( $code, $year, $year, $source_id, true );
+        // $data is [iso3 => [year => value, ...]] – but we only have one year
+        $shaped = array();
+        foreach ( $data as $iso3 => $years ) {
+            if ( isset( $years[ $year ] ) ) {
+                $shaped[ $iso3 ] = array(
+                    'value' => $years[ $year ],
+                    'year'  => $year,
+                );
+            }
+        }
+        $results[ $code ] = $shaped;
+    }
+    return $results;
+}
+
+// ─── HISTORICAL DATA CACHE WRAPPER (with empty‑cache fix) ────────
+
+function blomstra_get_historical_data( $source, $indicator, $fuel, $iso3_list, $year, $fetch_callback ) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'blomstra_historical_data';
+
+    if ( empty( $iso3_list ) ) {
+        return array();
+    }
+
+    $current_year = (int) current_time('Y');
+    $should_cache = ( $year <= ( $current_year - 2 ) );
+
+    $iso3_list = array_unique( array_map( 'strtoupper', $iso3_list ) );
+
+    $cached = array();
+    $missing = $iso3_list;
+
+    if ( $should_cache ) {
+        $placeholders = implode( ',', array_fill( 0, count( $iso3_list ), '%s' ) );
+        if ( $fuel === null ) {
+            $fuel_condition = 'IS NULL';
+            $fuel_params = array();
+        } else {
+            $fuel_condition = '= %s';
+            $fuel_params = array( $fuel );
+        }
+        $cached_rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT iso3, value, meta FROM $table 
+             WHERE source = %s AND indicator = %s AND fuel $fuel_condition AND year = %d AND iso3 IN ($placeholders)",
+            array_merge( array( $source, $indicator ), $fuel_params, array( (int) $year ), $iso3_list )
+        ), OBJECT_K );
+
+        foreach ( $cached_rows as $row ) {
+            $cached[ $row->iso3 ] = array(
+                'value' => (float) $row->value,
+                'year'  => (int) $year,
+                'meta'  => json_decode( $row->meta, true ) ?: array(),
+            );
+        }
+
+        $missing = array_diff( $iso3_list, array_keys( $cached ) );
+    }
+
+    $new_data = array();
+    if ( ! empty( $missing ) ) {
+        $api_result = call_user_func( $fetch_callback, $missing, $year );
+        if ( is_array( $api_result ) ) {
+            foreach ( $api_result as $iso3 => $row ) {
+                if ( ! isset( $row['value'] ) ) {
+                    continue;
+                }
+                $new_data[ $iso3 ] = array(
+                    'value' => (float) $row['value'],
+                    'year'  => isset( $row['year'] ) ? (int) $row['year'] : (int) $year,
+                    'meta'  => isset( $row['meta'] ) && is_array( $row['meta'] ) ? $row['meta'] : array(),
+                );
+            }
+
+            // ✅ FIX: Only cache if we actually got data
+            if ( $should_cache && ! empty( $new_data ) ) {
+                foreach ( $new_data as $iso3 => $row ) {
+                    $wpdb->insert( $table, array(
+                        'source'     => $source,
+                        'indicator'  => $indicator,
+                        'fuel'       => $fuel,
+                        'iso3'       => $iso3,
+                        'year'       => (int) $year,
+                        'value'      => $row['value'],
+                        'meta'       => json_encode( $row['meta'] ),
+                        'fetched_at' => current_time( 'mysql' ),
+                    ), array( '%s', '%s', '%s', '%s', '%d', '%f', '%s', '%s' ) );
+                }
+            }
+        }
+    }
+
+    $result = array();
+    foreach ( $iso3_list as $iso3 ) {
+        if ( isset( $cached[ $iso3 ] ) ) {
+            $result[ $iso3 ] = $cached[ $iso3 ];
+        } elseif ( isset( $new_data[ $iso3 ] ) ) {
+            $result[ $iso3 ] = $new_data[ $iso3 ];
+        }
+    }
+    return $result;
+}
+
+// ─── YEAR‑SPECIFIC FETCHERS (EIA, HHI, Maritime) ──────────────────
+
+function blomstra_fetch_eia_for_year( $year, $iso3_list = null ) {
+    if ( ! defined( 'EIA_API_KEY' ) || EIA_API_KEY === '' ) {
+        return array( 'consumption' => array(), 'production' => array() );
+    }
+
+    if ( $iso3_list === null ) {
+        $iso3_list = array_keys( blomstra_get_global_country_list() );
+    }
+
+    $fuel_ids = array_keys( BLOMSTRA_EIA_FUEL_PRODUCT_IDS );
+    $result = array( 'consumption' => array(), 'production' => array() );
+
+    foreach ( $fuel_ids as $product_id ) {
+        // Try to fetch data for the requested year; if none, go backward up to 5 years
+        $found_cons = false;
+        $found_prod = false;
+        for ( $offset = 0; $offset <= 5; $offset++ ) {
+            $try_year = $year - $offset;
+            if ( $try_year < 2000 ) break;
+
+            // Consumption
+            if ( ! $found_cons ) {
+                $cons_callback = function( $missing_iso3s, $try_year ) use ( $product_id ) {
+                    return blomstra_eia_fetch_one_fuel_activity( $missing_iso3s, $try_year, $product_id, BLOMSTRA_EIA_ACTIVITY_CONS );
+                };
+                $cons_result = blomstra_get_historical_data( 'eia', 'consumption', $product_id, $iso3_list, $try_year, $cons_callback );
+                if ( ! empty( $cons_result ) ) {
+                    $found_cons = true;
+                    // Store under the original requested year so matrix shows requested year
+                    $shaped_cons = array();
+                    foreach ( $cons_result as $iso3 => $row ) {
+                        $shaped_cons[ $iso3 ] = array(
+                            'value' => $row['value'],
+                            'year'  => $year, // store requested year, but actual source year is $try_year
+                        );
+                    }
+                    $result['consumption'][ $product_id ] = $shaped_cons;
+                }
+            }
+
+            // Production
+            if ( ! $found_prod ) {
+                $prod_callback = function( $missing_iso3s, $try_year ) use ( $product_id ) {
+                    return blomstra_eia_fetch_one_fuel_activity( $missing_iso3s, $try_year, $product_id, BLOMSTRA_EIA_ACTIVITY_PROD );
+                };
+                $prod_result = blomstra_get_historical_data( 'eia', 'production', $product_id, $iso3_list, $try_year, $prod_callback );
+                if ( ! empty( $prod_result ) ) {
+                    $found_prod = true;
+                    $shaped_prod = array();
+                    foreach ( $prod_result as $iso3 => $row ) {
+                        $shaped_prod[ $iso3 ] = array(
+                            'value' => $row['value'],
+                            'year'  => $year,
+                        );
+                    }
+                    $result['production'][ $product_id ] = $shaped_prod;
+                }
+            }
+
+            if ( $found_cons && $found_prod ) break;
+        }
+
+        // If still no data, leave empty arrays
+        if ( ! isset( $result['consumption'][ $product_id ] ) ) {
+            $result['consumption'][ $product_id ] = array();
+        }
+        if ( ! isset( $result['production'][ $product_id ] ) ) {
+            $result['production'][ $product_id ] = array();
+        }
+    }
+
+    return $result;
+}
+
+function blomstra_eia_fetch_one_fuel_activity( $iso3_list, $year, $product_id, $activity_id ) {
+    $all_results = array();
+    $chunks = array_chunk( $iso3_list, BLOMSTRA_EIA_CHUNK_SIZE );
+    foreach ( $chunks as $chunk ) {
+        $result = blomstra_eia_fetch_activity_batch( $chunk, $activity_id, $product_id, 1 );
+        if ( $result['status'] === 'ok' ) {
+            // Iterate over all rows, not just the latest per country
+            foreach ( $result['rows'] as $row ) {
+                $cc     = $row['countryRegionId'] ?? null;
+                $val    = $row['value'] ?? null;
+                $period = $row['period'] ?? null;
+                if ( ! $cc || $val === null || $period === null ) {
+                    continue;
+                }
+                $row_year = (int) substr( $period, 0, 4 );
+                if ( $row_year === $year ) {
+                    $all_results[ $cc ] = array(
+                        'value' => (float) $val,
+                        'year'  => $row_year,
+                        'meta'  => array( 'period' => $period ),
+                    );
+                }
+            }
+        } elseif ( $result['status'] === 'empty' ) {
+            // No data for this chunk; continue
+        } else {
+            error_log( "EIA historical: chunk failed for activity $activity_id, product $product_id, year $year: " . $result['status'] );
+        }
+        usleep( 200000 );
+    }
+    return $all_results;
+}
+
+function blomstra_fetch_hhi_for_year( $year, $iso3_list = null ) {
+    if ( ! defined( 'COMTRADE_PRIMARY_KEY' ) || COMTRADE_PRIMARY_KEY === '' ) {
+        return array();
+    }
+
+    if ( $iso3_list === null ) {
+        $iso3_list = array_keys( blomstra_get_global_country_list() );
+    }
+
+    $reporter_map = blomstra_get_comtrade_reporter_map();
+    $fetchable_iso3s = array();
+    foreach ( $iso3_list as $iso3 ) {
+        if ( isset( $reporter_map[ $iso3 ] ) ) {
+            $fetchable_iso3s[] = $iso3;
+        }
+    }
+
+    $fetch_callback = function( $missing_iso3s, $year ) use ( $reporter_map ) {
+        $results = array();
+        $chunks = array_chunk( $missing_iso3s, BLOMSTRA_HHI_CHUNK_SIZE );
+        foreach ( $chunks as $chunk_iso3s ) {
+            $chunk_codes = array();
+            $chunk_map = array();
+            foreach ( $chunk_iso3s as $iso3 ) {
+                $code = $reporter_map[ $iso3 ];
+                $chunk_codes[] = $code;
+                $chunk_map[ $code ] = $iso3;
+            }
+            $rows = blomstra_comtrade_fetch_partner_imports_batch( $chunk_codes, $year );
+            if ( $rows === BLOMSTRA_COMTRADE_QUOTA_EXHAUSTED || $rows === BLOMSTRA_COMTRADE_PERMANENT_FAILURE ) {
+                continue;
+            }
+            if ( ! is_array( $rows ) ) {
+                continue;
+            }
+            $computed = blomstra_compute_hhi_from_batch_rows( $rows, $chunk_codes, $year );
+            foreach ( $computed as $code => $data ) {
+                $iso3 = $chunk_map[ $code ];
+                $results[ $iso3 ] = array(
+                    'value' => $data['value'],
+                    'year'  => $year,
+                    'meta'  => array( 'reporter_code' => $code ),
+                );
+            }
+        }
+        return $results;
+    };
+
+    $cached = blomstra_get_historical_data( 'comtrade', 'hhi', null, $fetchable_iso3s, $year, $fetch_callback );
+
+    $results = array();
+    foreach ( $cached as $iso3 => $row ) {
+        $results[ $iso3 ] = array(
+            'value' => $row['value'],
+            'year'  => $row['year'],
+        );
+    }
+    return $results;
+}
+
+function blomstra_fetch_maritime_for_year( $year, $iso3_list = null ) {
+    if ( $iso3_list === null ) {
+        $iso3_list = array_keys( blomstra_get_global_country_list() );
+    }
+
+    $fetch_callback = function( $missing_iso3s, $year ) {
+        $results = array();
+        for ( $offset = 0; $offset <= 10; $offset++ ) {
+            $try_year = $year - $offset;
+            if ( $try_year < 2004 ) {
+                break;
+            }
+            $url = "https://api.worldbank.org/v2/country/all/indicator/" . BLOMSTRA_MARITIME_INDICATOR_CODE . "?format=json&per_page=20000&date={$try_year}";
+            $response = wp_remote_get( $url, array( 'timeout' => 30, 'user-agent' => BLOMSTRA_USER_AGENT ) );
+            if ( is_wp_error( $response ) ) {
+                continue;
+            }
+            $http_code = wp_remote_retrieve_response_code( $response );
+            if ( $http_code !== 200 ) {
+                continue;
+            }
+            $body = json_decode( wp_remote_retrieve_body( $response ), true );
+            if ( ! isset( $body[1] ) || ! is_array( $body[1] ) ) {
+                continue;
+            }
+            $data = array();
+            foreach ( $body[1] as $row ) {
+                $iso3 = $row['countryiso3code'] ?? null;
+                $value = $row['value'] ?? null;
+                if ( ! $iso3 || $value === null ) {
+                    continue;
+                }
+                if ( in_array( $iso3, $missing_iso3s, true ) ) {
+                    $data[ $iso3 ] = array(
+                        'value' => (float) $value,
+                        'year'  => $try_year,
+                        'meta'  => array( 'source_year' => $try_year ),
+                    );
+                }
+            }
+            if ( ! empty( $data ) ) {
+                return $data;
+            }
+        }
+        return array();
+    };
+
+    $cached = blomstra_get_historical_data( 'maritime', 'lsci', null, $iso3_list, $year, $fetch_callback );
+
+    $results = array();
+    foreach ( $iso3_list as $iso3 ) {
+        if ( function_exists( 'blomstra_is_landlocked' ) && blomstra_is_landlocked( $iso3 ) ) {
+            $results[ $iso3 ] = array(
+                'value' => 0.0,
+                'year'  => null,
+            );
+        } elseif ( isset( $cached[ $iso3 ] ) ) {
+            $results[ $iso3 ] = array(
+                'value' => $cached[ $iso3 ]['value'],
+                'year'  => $cached[ $iso3 ]['year'],
+            );
+        }
+    }
+    return $results;
+}
+
+// ─── DYNAMIC BACKFILL RANGE ──────────────────────────────────────
+
+if ( ! function_exists( 'blomstra_get_index_backfill_range' ) ) {
+    function blomstra_get_index_backfill_range( $index_slug ) {
+        $start = (int) get_option( $index_slug . '_backfill_range_start', 0 );
+        $end   = (int) get_option( $index_slug . '_backfill_range_end', 0 );
+
+        if ( $start <= 0 || $end <= 0 || $start > $end ) {
+            $current_year = (int) current_time('Y');
+            if ( $index_slug === 'sivi' ) {
+                $default_start = max( 2004, $current_year - 5 );
+            } else {
+                $default_start = $current_year - 5;
+            }
+            $default_end = $current_year - 1;
+            $start = $start > 0 ? $start : $default_start;
+            $end   = $end   > 0 ? $end   : $default_end;
+        }
+        return array( 'start' => $start, 'end' => $end );
+    }
+}
+
+// ─── BACKGROUND CACHE JOB ───────────────────────────────────────────
+
+add_action( 'blomstra_cache_historical_job', 'blomstra_cache_historical_job_callback', 10, 2 );
+function blomstra_cache_historical_job_callback( $source, $year ) {
+    $source_registry = blomstra_get_historical_sources();
+    if ( ! isset( $source_registry[ $source ] ) || ! $source_registry[ $source ]['implemented'] ) {
+        blomstra_cache_job_update( $source, $year, 'skipped', 0, 'Not implemented' );
+        return;
+    }
+
+    blomstra_cache_job_update( $source, $year, 'running' );
+
+    $iso3_list = array_keys( blomstra_get_global_country_list() );
+    try {
+        if ( $source === 'eia' ) {
+            $result = blomstra_fetch_eia_for_year( $year, $iso3_list );
+            $count = 0;
+            foreach ( $result['consumption'] as $fuel_data ) {
+                $count += count( $fuel_data );
+            }
+            foreach ( $result['production'] as $fuel_data ) {
+                $count += count( $fuel_data );
+            }
+            if ( $count > 0 ) {
+                blomstra_cache_job_update( $source, $year, 'success', $count );
+            } else {
+                blomstra_cache_job_update( $source, $year, 'failed', 0, 'No data returned (check call log)' );
+            }
+        } elseif ( $source === 'comtrade' ) {
+            $result = blomstra_fetch_hhi_for_year( $year, $iso3_list );
+            $count = count( $result );
+            if ( $count > 0 ) {
+                blomstra_cache_job_update( $source, $year, 'success', $count );
+            } else {
+                blomstra_cache_job_update( $source, $year, 'failed', 0, 'No data returned' );
+            }
+        } elseif ( $source === 'maritime' ) {
+            $result = blomstra_fetch_maritime_for_year( $year, $iso3_list );
+            $count = count( $result );
+            if ( $count > 0 ) {
+                blomstra_cache_job_update( $source, $year, 'success', $count );
+            } else {
+                blomstra_cache_job_update( $source, $year, 'failed', 0, 'No data returned' );
+            }
+        } elseif ( $source === 'imf' ) {
+            $result = blomstra_fetch_imf_for_year( $year, $iso3_list );
+            $unique_iso3s = array();
+            foreach ( $result as $code => $data ) {
+                foreach ( $data as $iso3 => $row ) {
+                    $unique_iso3s[ $iso3 ] = true;
+                }
+            }
+            $count = count( $unique_iso3s );
+            if ( $count > 0 ) {
+                blomstra_cache_job_update( $source, $year, 'success', $count );
+            } else {
+                blomstra_cache_job_update( $source, $year, 'failed', 0, 'No data returned for any IMF indicator' );
+            }
+        } elseif ( $source === 'wb' ) {
+            $result = blomstra_fetch_wb_for_year( $year, $iso3_list );
+            $unique_iso3s = array();
+            foreach ( $result as $code => $data ) {
+                foreach ( $data as $iso3 => $row ) {
+                    $unique_iso3s[ $iso3 ] = true;
+                }
+            }
+            $count = count( $unique_iso3s );
+            if ( $count > 0 ) {
+                blomstra_cache_job_update( $source, $year, 'success', $count );
+            } else {
+                blomstra_cache_job_update( $source, $year, 'failed', 0, 'No data returned for any WB indicator' );
+            }
+        }
+    } catch ( Exception $e ) {
+        blomstra_cache_job_update( $source, $year, 'failed', 0, 'Exception: ' . $e->getMessage() );
+    } catch ( Error $e ) {
+        blomstra_cache_job_update( $source, $year, 'failed', 0, 'Fatal error: ' . $e->getMessage() );
+    }
+
+    error_log( "Blomstra cache job completed for $source, $year" );
+}
