@@ -1,7 +1,17 @@
 /* =====================================================================
-   Blomstra Index Frontend Engine — v3.7.1 (Fixed)
-   - Year slider updates map colors using historical data
-   - Methodology uses correct CSS class & popup retained
+   Blomstra Index Frontend Engine — v3.9.6 (FIXED)
+   - Delta colours handled by CSS (green ↑, red ↓)
+   - Map zoom unified: +, -, Ctrl+scroll, double-click all use 1.12/0.89
+   - FIX: wheelDelta callback now correctly receives the wheel event
+     (was destructured as `transform, event` — d3 only ever passes the
+     event as the first arg, so `event` was undefined and every
+     ctrl+scroll threw inside the callback and silently did nothing)
+   - Zoom step bumped from 1.08/0.93 to 1.12/0.89 (previous step felt
+     too small per user feedback)
+   - DQI column removed from table
+   - Ranks recomputed among common countries
+   - Markers offset, purple colour
+   - Year slider right-aligned, legend left-aligned
    ===================================================================== */
 (function () {
     'use strict';
@@ -102,7 +112,11 @@
             isDark: true,
             hasRegionData: false,
             selectedYear: 2026,
-            mapLayer: 'score'
+            mapLayer: 'score',
+            mapProjection: null,
+            mapPath: null,
+            mapFeatures: null,
+            mapMarkers: null
         };
 
         root.innerHTML = buildShell();
@@ -119,6 +133,73 @@
         bindControls();
         loadData();
 
+        // ── Helpers ──────────────────────────────────────────────
+        function getHistoricalEntry(iso3, year) {
+            var hist = state.history[iso3] || [];
+            if (hist.length === 0) return null;
+            var best = null;
+            var bestPeriod = '';
+            hist.forEach(function (entry) {
+                var period = entry.period || '';
+                var entryYear = parseInt(period.substring(0, 4), 10);
+                if (!isNaN(entryYear) && entryYear === year) {
+                    if (period > bestPeriod) {
+                        bestPeriod = period;
+                        best = entry;
+                    }
+                }
+            });
+            if (best) return best;
+            var bestDiff = Infinity;
+            hist.forEach(function (entry) {
+                var period = entry.period || '';
+                var entryYear = parseInt(period.substring(0, 4), 10);
+                if (!isNaN(entryYear)) {
+                    var diff = Math.abs(entryYear - year);
+                    if (diff < bestDiff) {
+                        bestDiff = diff;
+                        best = entry;
+                    }
+                }
+            });
+            return best;
+        }
+
+        function getHistoricalPillar(iso3, year, pillarKey) {
+            var entry = getHistoricalEntry(iso3, year);
+            if (entry && entry.pillars && entry.pillars[pillarKey] !== undefined) {
+                return entry.pillars[pillarKey];
+            }
+            if (entry && entry[pillarKey] !== undefined) {
+                return entry[pillarKey];
+            }
+            return null;
+        }
+
+        function getHistoricalScore(iso3, year) {
+            var entry = getHistoricalEntry(iso3, year);
+            if (entry && entry.composite_score !== undefined) {
+                return entry.composite_score;
+            }
+            return null;
+        }
+
+        function getScoreForYear(iso3, year) {
+            return getHistoricalScore(iso3, year);
+        }
+
+        function getRecomputedRank(iso3, year) {
+            var scores = {};
+            state.all.forEach(function (country) {
+                var score = getScoreForYear(country.iso3, year);
+                if (score !== null && score !== undefined) scores[country.iso3] = score;
+            });
+            var sorted = Object.keys(scores).sort(function (a, b) { return scores[b] - scores[a]; });
+            var rank = sorted.indexOf(iso3) + 1;
+            return rank > 0 ? rank : null;
+        }
+
+        // ─── Build shell ──────────────────────────────────────────
         function buildShell() {
             var title = root.getAttribute('data-biw-title') || '';
             var subtitle = root.getAttribute('data-biw-subtitle') || '';
@@ -139,18 +220,14 @@
                 shell += renderTableShell();
             }
 
-            // ─── Static methodology at the bottom ───
             if (methodology) {
                 shell += '<div class="biw-methodology-bottom">' + methodology + '</div>';
             }
 
-            // ─── Drawer ───
             shell += '<div class="biw-drawer-overlay" id="biw-drawer-overlay"></div>' +
                 '<div class="biw-drawer" id="biw-drawer">' +
                 '  <button class="biw-drawer-close" id="biw-drawer-close">✕</button>' +
-                '  <div class="drawer-head">' +
-                '    <div class="drawer-country" id="drawer-country">—</div>' +
-                '  </div>' +
+                '  <div class="drawer-head"><div class="drawer-country" id="drawer-country">—</div></div>' +
                 '  <div class="drawer-score-rank">' +
                 '    <div><span class="score" id="drawer-score">—</span><br><span style="font-size:0.75rem;color:var(--biw-slate-dim);">' + esc(scoreLabel) + '</span></div>' +
                 '    <div class="rank-wrap">' +
@@ -160,19 +237,10 @@
                 '      <div id="drawer-dqi-badge" style="margin-top:4px;"></div>' +
                 '    </div>' +
                 '  </div>' +
-                '  <div class="drawer-radar">' +
-                '    <div class="drawer-radar-label">Pillar radar</div>' +
-                '    <div id="drawer-radar"></div>' +
-                '  </div>' +
+                '  <div class="drawer-radar"><div class="drawer-radar-label">Pillar radar</div><div id="drawer-radar"></div></div>' +
                 '  <div class="drawer-sensitivity" id="drawer-sensitivity" style="display:none;"></div>' +
-                '  <div class="drawer-history">' +
-                '    <div class="drawer-history-label">Score trend</div>' +
-                '    <div id="drawer-history-chart"></div>' +
-                '  </div>' +
-                '  <div class="drawer-provenance" id="drawer-provenance" style="display:none;">' +
-                '    <div class="drawer-provenance-label">Data provenance</div>' +
-                '    <div id="drawer-provenance-items"></div>' +
-                '  </div>' +
+                '  <div class="drawer-history"><div class="drawer-history-label">Score trend</div><div id="drawer-history-chart"></div></div>' +
+                '  <div class="drawer-provenance" id="drawer-provenance" style="display:none;"><div class="drawer-provenance-label">Data provenance</div><div id="drawer-provenance-items"></div></div>' +
                 '  <div class="drawer-pillars" id="drawer-pillars"></div>' +
                 '  <div class="drawer-why" id="drawer-why">Select a country to see insight.</div>' +
                 '  <div><span class="drawer-coverage" id="drawer-coverage">—</span></div>' +
@@ -183,14 +251,12 @@
                 '  </div>' +
                 '</div>';
 
-            // ─── Compare dock ───
             shell += '<div class="biw-compare-dock" id="biw-compare-dock">' +
                 '  <div class="dock-header"><span>Compare (<span id="biw-compare-count">0</span>/3)</span><button class="close-dock" id="biw-compare-dock-close">✕</button></div>' +
                 '  <div class="dock-items" id="biw-compare-items"></div>' +
                 '  <div class="dock-actions"><button id="biw-compare-view-btn">View comparison</button><button class="secondary" id="biw-compare-clear-btn">Clear</button></div>' +
                 '</div>';
 
-            // ─── Compare modal ───
             shell += '<div class="biw-compare-modal-overlay" id="biw-compare-overlay"></div>' +
                 '<div class="biw-compare-modal" id="biw-compare-modal">' +
                 '  <button class="modal-close" id="biw-compare-modal-close">✕</button>' +
@@ -201,7 +267,6 @@
                 '  </div>' +
                 '</div>';
 
-            // ─── Methodology popup ───
             shell += '<div class="biw-method-overlay" id="biw-method-overlay"></div>' +
                 '<div class="biw-method-modal" id="biw-method-modal">' +
                 '  <button class="modal-close" id="biw-method-close">✕</button>' +
@@ -212,6 +277,7 @@
             return shell;
         }
 
+        // ─── Render shells ────────────────────────────────────────
         function renderTableShell() {
             return '<div class="biw-table-toolbar">' +
                 '  <input type="text" class="biw-search" placeholder="Search countries…">' +
@@ -250,7 +316,7 @@
                 '  <div class="biw-summary-card"><b class="biw-stat-total">—</b><span>Countries</span></div>' +
                 '  <div class="biw-summary-card"><b class="biw-stat-mean">—</b><span>Global mean score</span></div>' +
                 '  <div class="biw-summary-card"><b class="biw-stat-extreme" style="color:var(--biw-extreme)">—</b><span>Ext / High / Med / Low</span></div>' +
-                '  <div class="biw-summary-card"><b class="biw-stat-mover" style="color:var(--biw-champagne)">—</b><span>Top mover</span></div>' +
+                '  <div class="biw-summary-card"><b class="biw-stat-mover" style="color:var(--biw-champagne);font-size:1.2rem;">—</b><span>Top mover</span></div>' +
                 '</div>' +
 
                 '<div class="biw-toolbar">' +
@@ -269,12 +335,18 @@
                 '    <svg></svg>' +
                 '    <div class="biw-map-zoom"><button class="biw-zoom-in">+</button><button class="biw-zoom-out">−</button><button class="biw-zoom-reset">↺</button></div>' +
                 '    <div class="biw-map-tooltip" id="biw-map-tooltip"></div>' +
-                '    <div class="biw-map-legend">' +
-                '      <div class="legend-item"><span class="legend-dot" style="background:var(--biw-low)"></span> Low</div>' +
-                '      <div class="legend-item"><span class="legend-dot" style="background:var(--biw-medium)"></span> Medium</div>' +
-                '      <div class="legend-item"><span class="legend-dot" style="background:var(--biw-high)"></span> High</div>' +
-                '      <div class="legend-item"><span class="legend-dot" style="background:var(--biw-extreme)"></span> Extreme</div>' +
-                '      <div class="legend-item"><span class="legend-line"></span> No data</div>' +
+                '    <div class="biw-year-slider-container">' +
+                '      <label>Year</label>' +
+                '      <input type="range" id="biw-year-slider" min="2021" max="2026" step="1" value="2026">' +
+                '      <span class="year-label" id="biw-year-label">2026</span>' +
+                '      <button class="play-btn" id="biw-play-btn">▶</button>' +
+                '    </div>' +
+                '    <div class="biw-legend-horizontal">' +
+                '      <span class="legend-item"><span class="legend-dot" style="background:var(--biw-low)"></span> Low</span>' +
+                '      <span class="legend-item"><span class="legend-dot" style="background:var(--biw-medium)"></span> Medium</span>' +
+                '      <span class="legend-item"><span class="legend-dot" style="background:var(--biw-high)"></span> High</span>' +
+                '      <span class="legend-item"><span class="legend-dot" style="background:var(--biw-extreme)"></span> Extreme</span>' +
+                '      <span class="legend-item"><span class="legend-line"></span> No data</span>' +
                 '    </div>' +
                 '  </div>' +
                 '  <div class="biw-map-side">' +
@@ -331,7 +403,7 @@
                 '  </div>' +
                 '</div>' +
 
-                // ─── Table Toolbar ──────────────────────────────────────
+                // Table toolbar
                 '<div class="biw-table-toolbar">' +
                 '  <input type="text" class="biw-search" placeholder="Search countries…">' +
                 '  <div class="biw-table-controls">' +
@@ -363,7 +435,7 @@
                 '<div class="biw-no-results" style="display:none;">No countries found.</div>';
         }
 
-        // ── Data loading ──
+        // ─── Data loading ──────────────────────────────────────────
         function loadData() {
             var tbody = q('.biw-tbody');
             if (tbody) {
@@ -468,32 +540,7 @@
             return bandClasses[b] || 'biw-badge-low';
         }
 
-        // ─── Get score for a specific year from history ───
-        function getScoreForYear(iso3, year) {
-            var hist = state.history[iso3] || [];
-            if (hist.length === 0) return null;
-            // Find the entry with closest period (format "YYYY-MM" or "YYYY")
-            var target = year.toString();
-            var best = null;
-            var bestDiff = Infinity;
-            hist.forEach(function (entry) {
-                var period = entry.period || '';
-                // Try to match year part
-                var entryYear = parseInt(period.substring(0, 4), 10);
-                if (!isNaN(entryYear)) {
-                    var diff = Math.abs(entryYear - year);
-                    if (diff < bestDiff) {
-                        bestDiff = diff;
-                        best = entry;
-                    }
-                }
-            });
-            if (best && best.composite_score !== undefined) {
-                return best.composite_score;
-            }
-            return null;
-        }
-
+        // ─── Apply filters ──────────────────────────────────────────
         function applyFilters() {
             var term = q('.biw-search') ? q('.biw-search').value.toLowerCase().trim() : '';
             var bandFilter = q('.biw-band-filter') ? q('.biw-band-filter').value : 'all';
@@ -506,7 +553,8 @@
                 if (regionFilter !== 'all' && c.region !== regionFilter) return false;
                 if (bandFilter !== 'all') {
                     var bf = parseInt(bandFilter, 10);
-                    if (band(c[scoreKey] || 0) !== bf) return false;
+                    var score = getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey];
+                    if (band(score) !== bf) return false;
                 }
                 if (state.showWatchlistOnly && watchlist.indexOf(c.iso3) === -1) return false;
                 return match;
@@ -520,20 +568,25 @@
                     return valA.localeCompare(valB);
                 }
                 if (sortKey === 'rank') {
-                    valA = a.rank !== undefined ? a.rank : 9999;
-                    valB = b.rank !== undefined ? b.rank : 9999;
-                    return valA - valB;
+                    var rankA = getRecomputedRank(a.iso3, state.selectedYear) || 9999;
+                    var rankB = getRecomputedRank(b.iso3, state.selectedYear) || 9999;
+                    return rankA - rankB;
                 }
                 if (sortKey === 'coverage') {
                     valA = a[coverageKey] === 'full' ? 0 : 1;
                     valB = b[coverageKey] === 'full' ? 0 : 1;
                     if (valA === valB) {
-                        return (a.rank || 999) - (b.rank || 999);
+                        var rankA2 = getRecomputedRank(a.iso3, state.selectedYear) || 9999;
+                        var rankB2 = getRecomputedRank(b.iso3, state.selectedYear) || 9999;
+                        return rankA2 - rankB2;
                     }
                     return valA - valB;
                 }
-                valA = a[sortKey] !== undefined && a[sortKey] !== null ? a[sortKey] : -1;
-                valB = b[sortKey] !== undefined && b[sortKey] !== null ? b[sortKey] : -1;
+                var pillarKey = sortKey;
+                var valA = getHistoricalPillar(a.iso3, state.selectedYear, pillarKey) ?? a[pillarKey];
+                var valB = getHistoricalPillar(b.iso3, state.selectedYear, pillarKey) ?? b[pillarKey];
+                valA = valA !== undefined && valA !== null ? valA : -1;
+                valB = valB !== undefined && valB !== null ? valB : -1;
                 return valB - valA;
             });
 
@@ -551,6 +604,7 @@
                     renderExtremes();
                     renderHistogram();
                     renderScatter();
+                    updateMapMarkers();
                 }
             }
             var noResults = q('.biw-no-results');
@@ -560,15 +614,16 @@
             updateCompareDock();
         }
 
+        // ─── Render head ────────────────────────────────────────────
         function renderHead() {
             var head = q('.biw-head-row');
             if (!head) return;
+            // DQI column removed
             var cells = '<th style="width:36px;text-align:center;">★</th>' +
                 '<th style="width:70px;text-align:center;">Rank</th>' +
                 '<th style="width:60px;text-align:center;">Δ</th>' +
                 '<th>Country</th>' +
                 '<th style="width:110px;text-align:center;">' + esc(scoreLabel) + '</th>' +
-                '<th style="width:70px;text-align:center;">DQI</th>' +
                 pillars.map(function (p) {
                     return '<th style="width:120px;text-align:center;">' + esc(p.label) + '</th>';
                 }).join('') +
@@ -587,6 +642,8 @@
         }
 
         function rankHtml(c) {
+            var rank = getRecomputedRank(c.iso3, state.selectedYear);
+            if (rank) return '#' + rank;
             var rd = c.rank_display;
             if (rd && rd.is_definitive) {
                 return '<span>' + rd.string_format + '</span>';
@@ -598,36 +655,57 @@
             return c.rank !== undefined && c.rank !== null ? '#' + c.rank : '—';
         }
 
+        // ─── Delta (YoY using common country set) ──────────────────
         function deltaInfo(c) {
-            var hist = state.history[c.iso3];
-            var currentBest = (c.rank_display && c.rank_display.best_estimate !== undefined && c.rank_display.best_estimate !== null)
-                ? c.rank_display.best_estimate
-                : (c.rank !== undefined && c.rank !== null ? c.rank : null);
-            if (!hist || hist.length < 2 || currentBest === null) return { type: 'new' };
-            var prevEntry = hist[hist.length - 2];
-            var prevBest = null;
-            if (prevEntry.pillars && prevEntry.pillars.rank_display && prevEntry.pillars.rank_display.best_estimate !== undefined && prevEntry.pillars.rank_display.best_estimate !== null) {
-                prevBest = prevEntry.pillars.rank_display.best_estimate;
-            } else if (prevEntry.rank !== null && prevEntry.rank !== undefined) {
-                prevBest = prevEntry.rank;
+            var currentYear = state.selectedYear;
+            var prevYear = currentYear - 1;
+
+            var scoresCurrent = {};
+            var scoresPrev = {};
+            state.all.forEach(function (country) {
+                var scoreCur = getScoreForYear(country.iso3, currentYear);
+                var scorePrev = getScoreForYear(country.iso3, prevYear);
+                if (scoreCur !== null && scoreCur !== undefined) scoresCurrent[country.iso3] = scoreCur;
+                if (scorePrev !== null && scorePrev !== undefined) scoresPrev[country.iso3] = scorePrev;
+            });
+
+            var common = Object.keys(scoresCurrent).filter(function (iso3) {
+                return scoresPrev[iso3] !== undefined;
+            });
+
+            if (common.length < 2) {
+                return { type: 'new' };
             }
-            if (prevBest === null) return { type: 'new' };
-            var delta = prevBest - currentBest;
+
+            var rankCurrent = {};
+            var rankPrev = {};
+            var sortedCur = common.slice().sort(function (a, b) { return scoresCurrent[b] - scoresCurrent[a]; });
+            var sortedPrev = common.slice().sort(function (a, b) { return scoresPrev[b] - scoresPrev[a]; });
+            sortedCur.forEach(function (iso3, idx) { rankCurrent[iso3] = idx + 1; });
+            sortedPrev.forEach(function (iso3, idx) { rankPrev[iso3] = idx + 1; });
+
+            var currentRank = rankCurrent[c.iso3];
+            var prevRank = rankPrev[c.iso3];
+            if (prevRank === undefined || currentRank === undefined) {
+                return { type: 'new' };
+            }
+            var delta = prevRank - currentRank;
             if (delta === 0) return { type: 'flat' };
             return { type: delta > 0 ? 'up' : 'down', value: Math.abs(delta) };
         }
 
         function deltaHtml(c) {
             var info = deltaInfo(c);
-            if (info.type === 'new') return '<span class="biw-delta biw-delta-new" title="Not enough history">NEW</span>';
-            if (info.type === 'flat') return '<span class="biw-delta biw-delta-flat" title="No change since last snapshot">—</span>';
+            if (info.type === 'new') return '<span class="biw-delta biw-delta-new" title="No previous year data">NEW</span>';
+            if (info.type === 'flat') return '<span class="biw-delta biw-delta-flat" title="No change in rank (compared among countries with data in both years)">—</span>';
             var arrow = info.type === 'up' ? '↑' : '↓';
             var cls = info.type === 'up' ? 'biw-delta-up' : 'biw-delta-down';
-            return '<span class="biw-delta ' + cls + '" title="Change since last snapshot">' + arrow + info.value + '</span>';
+            var label = info.type === 'up' ? 'Rank improved (less vulnerable)' : 'Rank worsened (more vulnerable)';
+            return '<span class="biw-delta ' + cls + '" title="' + label + ' (compared among countries with data in both years)">' + arrow + info.value + '</span>';
         }
 
         function pillarCellHtml(c, p) {
-            var v = c[p.key];
+            var v = getHistoricalPillar(c.iso3, state.selectedYear, p.key) ?? c[p.key];
             if (v === null || v === undefined) {
                 return '<span style="color:var(--biw-slate-dim);font-family:var(--biw-mono);font-size:0.7rem;">—</span>';
             }
@@ -643,16 +721,13 @@
             body.innerHTML = state.filtered.map(function (c, i) {
                 var starred = watchlist.indexOf(c.iso3) !== -1;
                 var inCompare = state.compareList.some(function (item) { return item.iso3 === c.iso3; });
-                var dqi = c.composite_dqi !== null && c.composite_dqi !== undefined ? Math.round(c.composite_dqi) : null;
-                var dqiDisplay = dqi !== null ? dqi + '%' : '—';
-                var dqiColor = dqi !== null ? (dqi >= 70 ? '#4ade80' : (dqi >= 40 ? '#fac678' : '#eb674e')) : '#6B7280';
+                var score = getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey];
                 return '<tr data-idx="' + i + '">' +
                     '<td style="text-align:center;"><button class="biw-star-btn ' + (starred ? 'active' : '') + '" data-action="star" data-idx="' + i + '">★</button></td>' +
                     '<td class="biw-rank">' + rankHtml(c) + '</td>' +
                     '<td class="biw-num">' + deltaHtml(c) + '</td>' +
                     '<td class="biw-country">' + esc(c.name) + '</td>' +
-                    '<td class="biw-num">' + badgeHtml(c[scoreKey], c[coverageKey]) + '</td>' +
-                    '<td style="text-align:center;color:' + dqiColor + ';font-weight:700;font-family:var(--biw-mono);font-size:0.85rem;" title="Data Quality Index">' + dqiDisplay + '</td>' +
+                    '<td class="biw-num">' + badgeHtml(score, c[coverageKey]) + '</td>' +
                     pillars.map(function (p) { return '<td class="biw-num">' + pillarCellHtml(c, p) + '</td>'; }).join('') +
                     '<td style="text-align:center;"><input type="checkbox" class="biw-compare-check" data-action="compare-check" data-idx="' + i + '" ' + (inCompare ? 'checked' : '') + '></td>' +
                     '<td class="biw-action"><button class="biw-btn-detail" data-action="detail" data-idx="' + i + '">Details</button></td>' +
@@ -660,16 +735,16 @@
             }).join('');
         }
 
-        // ─── Dashboard ──
+        // ─── Update summary ──────────────────────────────────────────
         function updateSummary() {
             var total = state.all.length;
-            var full = state.all.filter(function (d) { return d.coverage === 'full'; }).length;
-            var partial = state.all.filter(function (d) { return d.coverage === 'partial'; }).length;
-            var mean = (state.all.reduce(function (s, d) { return s + d[scoreKey]; }, 0) / total).toFixed(1);
-            var ext = state.all.filter(function (d) { return d[scoreKey] >= bandThresholds[2]; }).length;
-            var high = state.all.filter(function (d) { return d[scoreKey] >= bandThresholds[1] && d[scoreKey] < bandThresholds[2]; }).length;
-            var med = state.all.filter(function (d) { return d[scoreKey] >= bandThresholds[0] && d[scoreKey] < bandThresholds[1]; }).length;
-            var low = state.all.filter(function (d) { return d[scoreKey] < bandThresholds[0]; }).length;
+            var scores = state.all.map(function (d) { return getScoreForYear(d.iso3, state.selectedYear) ?? d[scoreKey]; });
+            var validScores = scores.filter(function (s) { return s !== null && s !== undefined; });
+            var mean = validScores.length ? (validScores.reduce(function (a, b) { return a + b; }, 0) / validScores.length).toFixed(1) : '—';
+            var ext = validScores.filter(function (s) { return s >= bandThresholds[2]; }).length;
+            var high = validScores.filter(function (s) { return s >= bandThresholds[1] && s < bandThresholds[2]; }).length;
+            var med = validScores.filter(function (s) { return s >= bandThresholds[0] && s < bandThresholds[1]; }).length;
+            var low = validScores.filter(function (s) { return s < bandThresholds[0]; }).length;
 
             var totalEl = q('.biw-stat-total');
             if (totalEl) totalEl.textContent = total;
@@ -680,28 +755,37 @@
             var tiersEl = extEl ? extEl.parentElement.querySelector('span') : null;
             if (tiersEl) tiersEl.textContent = 'Ext: ' + ext + ' / High: ' + high + ' / Med: ' + med + ' / Low: ' + low;
 
-            var mover = state.all.slice().sort(function (a, b) {
-                var da = deltaInfo(a);
-                var db = deltaInfo(b);
-                return (db.value || 0) - (da.value || 0);
-            })[0];
+            var movers = state.all.map(function (c) {
+                var info = deltaInfo(c);
+                return { country: c, delta: info.value || 0, type: info.type };
+            });
+            movers.sort(function (a, b) { return b.delta - a.delta; });
+            var mover = movers[0];
             var moverEl = q('.biw-stat-mover');
-            if (moverEl && mover) {
-                var info = deltaInfo(mover);
-                moverEl.textContent = mover.name + ' (' + (info.type === 'up' ? '▲' : info.type === 'down' ? '▼' : '—') + (info.value || 0) + ')';
+            if (moverEl && mover && mover.delta > 0) {
+                var arrow = mover.type === 'up' ? '▲' : mover.type === 'down' ? '▼' : '—';
+                moverEl.textContent = mover.country.name + ' (' + arrow + mover.delta + ')';
+                moverEl.style.fontSize = '1rem';
+            } else {
+                moverEl.textContent = '—';
+                moverEl.style.fontSize = '1.2rem';
             }
         }
 
-        // ─── Donut ──
+        // ─── Donut ──────────────────────────────────────────────────
         function renderDonut() {
             var container = document.getElementById('biw-donut');
             if (!container || !state.d3Ready || typeof d3 === 'undefined') return;
 
             var colors = ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)'];
-            var counts = [0, 1, 2, 3].map(function (t) {
-                return state.all.filter(function (d) { return band(d[scoreKey]) === t; }).length;
+            var scores = state.all.map(function (d) { return getScoreForYear(d.iso3, state.selectedYear) ?? d[scoreKey]; });
+            var validScores = scores.filter(function (s) { return s !== null && s !== undefined; });
+            var counts = [0, 0, 0, 0];
+            validScores.forEach(function (s) {
+                var b = band(s);
+                counts[b]++;
             });
-            var total = state.all.length;
+            var total = validScores.length;
 
             var svg = d3.select(container).html('')
                 .append('svg')
@@ -712,7 +796,6 @@
 
             var pie = d3.pie().value(function (d) { return d; });
             var arc = d3.arc().innerRadius(42).outerRadius(72);
-
             var tooltip = createContainerTooltip(container, 'biw-donut-tooltip');
 
             svg.selectAll('path')
@@ -748,26 +831,32 @@
             });
         }
 
+        // ─── Extremes ───────────────────────────────────────────────
         function renderExtremes() {
-            var sorted = state.all.slice().sort(function (a, b) { return a[scoreKey] - b[scoreKey]; });
+            var sorted = state.all.slice().map(function (c) {
+                var score = getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey];
+                return { country: c, score: score };
+            }).filter(function (d) { return d.score !== null && d.score !== undefined; })
+            .sort(function (a, b) { return a.score - b.score; });
+
             var most = sorted.slice(-3).reverse();
             var least = sorted.slice(0, 3);
 
             var mostEl = document.getElementById('biw-most-vulnerable');
             if (mostEl) {
                 mostEl.innerHTML = most.map(function (d) {
-                    return '<div class="biw-mover-item" data-iso3="' + esc(d.iso3) + '"><span class="name">' + esc(d.name) + '</span><span class="score" style="color:' + getColor(d[scoreKey]) + '">' + fmtNum(d[scoreKey]) + '</span></div>';
+                    return '<div class="biw-mover-item" data-iso3="' + esc(d.country.iso3) + '"><span class="name">' + esc(d.country.name) + '</span><span class="score" style="color:' + getColor(d.score) + '">' + fmtNum(d.score) + '</span></div>';
                 }).join('');
             }
             var leastEl = document.getElementById('biw-least-vulnerable');
             if (leastEl) {
                 leastEl.innerHTML = least.map(function (d) {
-                    return '<div class="biw-mover-item" data-iso3="' + esc(d.iso3) + '"><span class="name">' + esc(d.name) + '</span><span class="score" style="color:' + getColor(d[scoreKey]) + '">' + fmtNum(d[scoreKey]) + '</span></div>';
+                    return '<div class="biw-mover-item" data-iso3="' + esc(d.country.iso3) + '"><span class="name">' + esc(d.country.name) + '</span><span class="score" style="color:' + getColor(d.score) + '">' + fmtNum(d.score) + '</span></div>';
                 }).join('');
             }
         }
 
-        // ── Histogram ──
+        // ─── Histogram ──────────────────────────────────────────────
         function renderHistogram() {
             var container = document.getElementById('biw-histogram');
             if (!container || !state.d3Ready || typeof d3 === 'undefined') return;
@@ -775,9 +864,12 @@
             var binSize = 5;
             var numBins = 20;
             var buckets = Array.from({ length: numBins }, function () { return []; });
-            state.all.forEach(function (d) {
-                var idx = Math.min(numBins - 1, Math.floor(d[scoreKey] / binSize));
-                buckets[idx].push(d);
+            state.all.forEach(function (c) {
+                var score = getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey];
+                if (score !== null && score !== undefined) {
+                    var idx = Math.min(numBins - 1, Math.floor(score / binSize));
+                    buckets[idx].push({ name: c.name, score: score, iso3: c.iso3 });
+                }
             });
             var maxCount = Math.max.apply(null, buckets.map(function (b) { return b.length; })) || 1;
             var tooltip = createContainerTooltip(container, 'biw-histogram-tooltip');
@@ -794,7 +886,7 @@
                 else if (start < bandThresholds[2]) bar.style.backgroundColor = 'var(--biw-high)';
                 else bar.style.backgroundColor = 'var(--biw-extreme)';
 
-                var countryNames = countriesInBin.map(function (c) { return c.name + ' (' + fmtNum(c[scoreKey]) + ')'; }).slice(0, 12).join(', ');
+                var countryNames = countriesInBin.map(function (d) { return d.name + ' (' + fmtNum(d.score) + ')'; }).slice(0, 12).join(', ');
                 var extraCount = count > 12 ? '\n...and ' + (count - 12) + ' more' : '';
                 var content = count > 0
                     ? '<div><strong>Score Band: ' + start + ' – ' + end + '</strong></div><div class="count">' + count + ' countr' + (count === 1 ? 'y' : 'ies') + '</div><div class="country-list">' + countryNames + extraCount + '</div>'
@@ -827,7 +919,7 @@
             });
         }
 
-        // ── Scatter ──
+        // ─── Scatter ────────────────────────────────────────────────
         function renderScatter() {
             var container = document.getElementById('biw-scatter');
             if (!container || !state.d3Ready || typeof d3 === 'undefined') return;
@@ -837,16 +929,19 @@
             var tooltip = createContainerTooltip(container, 'biw-scatter-tooltip');
 
             state.all.forEach(function (d) {
-                var x = d[xKey] != null ? d[xKey] : 50;
-                var y = d[yKey] != null ? d[yKey] : 50;
+                var x = getHistoricalPillar(d.iso3, state.selectedYear, xKey) ?? d[xKey];
+                var y = getHistoricalPillar(d.iso3, state.selectedYear, yKey) ?? d[yKey];
+                if (x === null || x === undefined) x = 50;
+                if (y === null || y === undefined) y = 50;
                 var dot = document.createElement('div');
                 dot.className = 'biw-scatter-dot';
                 dot.style.left = Math.max(3, Math.min(97, x)) + '%';
                 dot.style.bottom = Math.max(3, Math.min(97, y)) + '%';
-                dot.style.background = getColor(d[scoreKey]);
+                var score = getScoreForYear(d.iso3, state.selectedYear) ?? d[scoreKey];
+                dot.style.background = getColor(score);
 
-                var content = '<strong>' + esc(d.name) + '</strong><br>Rank: ' + rankHtml(d) + '<br>' + esc(scoreLabel) + ': ' + fmtNum(d[scoreKey]) +
-                    '<br>' + esc(xKey) + ': ' + fmtNum(d[xKey]) + '<br>' + esc(yKey) + ': ' + fmtNum(d[yKey]);
+                var content = '<strong>' + esc(d.name) + '</strong><br>Rank: ' + rankHtml(d) + '<br>' + esc(scoreLabel) + ': ' + fmtNum(score) +
+                    '<br>' + esc(xKey) + ': ' + fmtNum(x) + '<br>' + esc(yKey) + ': ' + fmtNum(y);
 
                 dot.addEventListener('mouseenter', function (e) {
                     tooltip.innerHTML = content;
@@ -876,7 +971,7 @@
             });
         }
 
-        // ── Helper: create container-scoped tooltip ──
+        // ─── Helpers ────────────────────────────────────────────────
         function createContainerTooltip(container, id) {
             var el = container.querySelector('#' + id);
             if (el) return el;
@@ -908,7 +1003,7 @@
             return ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)'][b] || 'var(--biw-slate-dim)';
         }
 
-        // ─── Map ───
+        // ─── Map ──────────────────────────────────────────────────────
         function renderMap(layer, year) {
             var container = document.getElementById('biw-map');
             if (!container || !state.d3Ready || typeof d3 === 'undefined' || typeof topojson === 'undefined') return;
@@ -918,6 +1013,7 @@
                 return;
             }
             var svg = d3.select(container).select('svg');
+            svg.style('pointer-events', 'all');
             var width = container.clientWidth || 800;
             var height = container.clientHeight || 450;
             svg.attr('viewBox', '0 0 ' + width + ' ' + height);
@@ -926,37 +1022,79 @@
 
             var projection = d3.geoNaturalEarth1()
                 .scale(150)
-                .translate([width / 2, height / 2]);
+                .translate([width / 2, height / 2 + 20])
+                .center([0, 10]);
 
             var path = d3.geoPath().projection(projection);
-            var zoom = d3.zoom().scaleExtent([1, 10]).on('zoom', function (e) {
-                g.attr('transform', e.transform);
-            });
+
+            // ─── Zoom handler with unified factors ──────────────────
+            // Buttons / dblclick use scaleBy(1.12 / 0.89). The wheel
+            // handler below is tuned to feel like roughly the same
+            // "notch size" per scroll tick / trackpad pinch step.
+            var ZOOM_STEP_IN = 1.12;
+            var ZOOM_STEP_OUT = 0.89;
+            var WHEEL_SENSITIVITY = 0.0018; // bump up/down to taste
+
+            var zoom = d3.zoom()
+                .scaleExtent([1, 10])
+                .filter(function (event) {
+                    if (event.type === 'wheel') {
+                        if (event.ctrlKey) {
+                            event.preventDefault();
+                            return true;
+                        }
+                        return false; // let page scroll normally
+                    }
+                    if (event.type === 'dblclick') {
+                        event.preventDefault();
+                        return false; // block default double-click zoom
+                    }
+                    return true;
+                })
+                .wheelDelta(function (event) {
+                    // IMPORTANT: d3 calls this with the wheel event as the
+                    // ONLY argument. Naming the param anything other than
+                    // the event (e.g. `transform, event`) leaves `event`
+                    // undefined and this throws on every scroll — which is
+                    // why ctrl+scroll previously did nothing.
+                    return -event.deltaY * WHEEL_SENSITIVITY * ZOOM_STEP_IN;
+                })
+                .on('zoom', function (e) {
+                    g.attr('transform', e.transform);
+                    updateMapMarkers();
+                });
+
             svg.call(zoom);
+
+            // ─── Custom double-click handler (same factor as +) ───
+            svg.on('dblclick', function (event) {
+                svg.transition().duration(300).call(zoom.scaleBy, ZOOM_STEP_IN);
+            });
+
+            var hint = container.querySelector('.biw-zoom-hint');
+            if (!hint) {
+                hint = document.createElement('div');
+                hint.className = 'biw-zoom-hint';
+                hint.textContent = 'Ctrl+scroll to zoom · Double-click to zoom in · Drag to pan';
+                container.appendChild(hint);
+                setTimeout(function () { hint.style.opacity = '0'; }, 5000);
+            }
 
             var zoomIn = container.querySelector('.biw-zoom-in');
             var zoomOut = container.querySelector('.biw-zoom-out');
             var zoomReset = container.querySelector('.biw-zoom-reset');
-            if (zoomIn) zoomIn.addEventListener('click', function () { svg.transition().duration(300).call(zoom.scaleBy, 1.4); });
-            if (zoomOut) zoomOut.addEventListener('click', function () { svg.transition().duration(300).call(zoom.scaleBy, 0.7); });
+            if (zoomIn) zoomIn.addEventListener('click', function () { svg.transition().duration(300).call(zoom.scaleBy, ZOOM_STEP_IN); });
+            if (zoomOut) zoomOut.addEventListener('click', function () { svg.transition().duration(300).call(zoom.scaleBy, ZOOM_STEP_OUT); });
             if (zoomReset) zoomReset.addEventListener('click', function () { svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity); });
 
             // ─── Year slider ──────────────────────────────────────────
-            var sliderContainer = container.querySelector('.biw-year-slider-container');
-            if (!sliderContainer) {
-                sliderContainer = document.createElement('div');
-                sliderContainer.className = 'biw-year-slider-container';
-                sliderContainer.innerHTML = `
-                    <label>Year</label>
-                    <input type="range" id="biw-year-slider" min="2021" max="2026" step="1" value="${year || 2026}">
-                    <span class="year-label" id="biw-year-label">${year || 2026}</span>
-                    <button class="play-btn" id="biw-play-btn">▶</button>
-                `;
-                container.appendChild(sliderContainer);
+            var slider = container.querySelector('#biw-year-slider');
+            var label = container.querySelector('#biw-year-label');
+            var playBtn = container.querySelector('#biw-play-btn');
+            if (slider && label) {
+                slider.value = year || 2026;
+                label.textContent = year || 2026;
 
-                var slider = sliderContainer.querySelector('#biw-year-slider');
-                var label = sliderContainer.querySelector('#biw-year-label');
-                var playBtn = sliderContainer.querySelector('#biw-play-btn');
                 var isPlaying = false;
                 var playInterval = null;
 
@@ -964,8 +1102,16 @@
                     var y = parseInt(this.value, 10);
                     label.textContent = y;
                     state.selectedYear = y;
-                    // Update map colors with new year
                     updateMapColors(state.mapLayer, y);
+                    renderDonut();
+                    renderExtremes();
+                    renderHistogram();
+                    renderScatter();
+                    updateSummary();
+                    updateMapMarkers();
+                    if (state.selectedCountry) {
+                        openDrawer(state.selectedCountry, y);
+                    }
                 });
 
                 playBtn.addEventListener('click', function() {
@@ -991,6 +1137,15 @@
                         label.textContent = currentYear;
                         state.selectedYear = currentYear;
                         updateMapColors(state.mapLayer, currentYear);
+                        renderDonut();
+                        renderExtremes();
+                        renderHistogram();
+                        renderScatter();
+                        updateSummary();
+                        updateMapMarkers();
+                        if (state.selectedCountry) {
+                            openDrawer(state.selectedCountry, currentYear);
+                        }
                     }, 800);
                 });
             }
@@ -1001,6 +1156,9 @@
                 .then(function (world) {
                     var countries = topojson.feature(world, world.objects.countries);
                     projection.fitExtent([[20, 20], [width - 20, height - 20]], countries);
+                    state.mapProjection = projection;
+                    state.mapPath = path;
+                    state.mapFeatures = countries.features;
 
                     g.selectAll('path')
                         .data(countries.features)
@@ -1032,7 +1190,7 @@
                             var c = state.all.find(function (i) { return i.iso3 === iso3; });
                             var tt = container.querySelector('.biw-map-tooltip');
                             if (c) {
-                                var score = getScoreForYear(iso3, state.selectedYear) ?? c[scoreKey];
+                                var score = getHistoricalScore(iso3, state.selectedYear) ?? c[scoreKey];
                                 tt.innerHTML = '<div style="font-weight:800;">' + esc(c.name) + '</div>' +
                                     '<div>Rank: ' + rankHtml(c) + '</div>' +
                                     '<div>' + esc(scoreLabel) + ': ' + fmtNum(score) + '</div>' +
@@ -1061,6 +1219,8 @@
                             var c = state.all.find(function (i) { return i.iso3 === iso3; });
                             if (c) selectCountry(c.iso3);
                         });
+
+                    updateMapMarkers();
                 })
                 .catch(function (err) {
                     console.warn('Map data failed to load:', err);
@@ -1091,24 +1251,254 @@
                     var c = state.all.find(function (i) { return i.iso3 === iso3; });
                     return getCountryColor(c, layer, year);
                 });
-            state.mapLayer = layer; // store current layer
+            state.mapLayer = layer;
         }
 
         function getCountryColor(c, layer, year) {
             if (!c) return 'var(--biw-no-data)';
             var val;
             if (layer === 'score') {
-                val = getScoreForYear(c.iso3, year) ?? c[scoreKey];
+                val = getHistoricalScore(c.iso3, year) ?? c[scoreKey];
             } else {
-                val = c[layer];
+                val = getHistoricalPillar(c.iso3, year, layer) ?? c[layer];
             }
             if (val == null) return 'var(--biw-no-data)';
             var b = band(val);
             return ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)'][b] || 'var(--biw-no-data)';
         }
 
-        // ─── Radar ───
-        function renderRadar(c) {
+        // ─── Map markers (purple, offset) ──────────────────────────
+        function updateMapMarkers() {
+            var container = document.getElementById('biw-map');
+            if (!container || !state.d3Ready || typeof d3 === 'undefined' || !state.mapProjection) return;
+            var svg = d3.select(container).select('svg');
+            var g = svg.select('g');
+
+            g.selectAll('.biw-map-marker').remove();
+
+            var scored = state.all.map(function (c) {
+                var score = getHistoricalScore(c.iso3, state.selectedYear) ?? c[scoreKey];
+                var rank = getRecomputedRank(c.iso3, state.selectedYear) || 9999;
+                var prevYear = state.selectedYear - 1;
+                var prevRank = getRecomputedRank(c.iso3, prevYear);
+                var rankChange = (prevRank !== null && prevRank !== undefined) ? Math.abs(prevRank - rank) : 0;
+                return { country: c, score: score, rank: rank, rankChange: rankChange };
+            }).filter(function (d) { return d.score !== null && d.score !== undefined; });
+
+            if (scored.length === 0) return;
+
+            var most = scored.reduce(function (a, b) { return a.score > b.score ? a : b; });
+            var least = scored.reduce(function (a, b) { return a.score < b.score ? a : b; });
+            var mover = scored.reduce(function (a, b) { return a.rankChange > b.rankChange ? a : b; });
+
+            var markers = [
+                { country: most.country, label: 'Most vulnerable', color: '#9B59B6' },
+                { country: least.country, label: 'Least vulnerable', color: '#9B59B6' },
+                { country: mover.country, label: 'Biggest mover', color: '#9B59B6' }
+            ];
+
+            var unique = [];
+            var seen = {};
+            markers.forEach(function (m) {
+                if (!seen[m.country.iso3]) {
+                    seen[m.country.iso3] = true;
+                    unique.push(m);
+                }
+            });
+
+            var projection = state.mapProjection;
+            var features = state.mapFeatures || [];
+            unique.forEach(function (marker) {
+                var iso3 = marker.country.iso3;
+                var feature = features.find(function (f) {
+                    return getIso3(f.id || f.properties?.id) === iso3;
+                });
+                if (!feature) return;
+                var centroid = d3.geoPath().projection(projection).centroid(feature);
+                if (!centroid || isNaN(centroid[0]) || isNaN(centroid[1])) return;
+
+                var offsetX = (Math.random() - 0.5) * 6;
+                var offsetY = (Math.random() - 0.5) * 6;
+
+                var markerGroup = g.append('g')
+                    .attr('class', 'biw-map-marker')
+                    .attr('transform', 'translate(' + (centroid[0] + offsetX) + ',' + (centroid[1] + offsetY) + ')');
+
+                var glow = markerGroup.append('circle')
+                    .attr('r', 10)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#9B59B6')
+                    .attr('stroke-width', 3)
+                    .style('opacity', 0.9)
+                    .style('filter', 'drop-shadow(0 0 8px #8E44AD)');
+
+                markerGroup.append('circle')
+                    .attr('r', 5)
+                    .attr('fill', '#9B59B6')
+                    .style('opacity', 1);
+
+                var pulse = function () {
+                    glow.transition()
+                        .duration(1200)
+                        .attr('r', 18)
+                        .style('opacity', 0)
+                        .transition()
+                        .duration(0)
+                        .attr('r', 10)
+                        .style('opacity', 0.9)
+                        .on('end', pulse);
+                };
+                pulse();
+
+                markerGroup.on('mouseenter', function (e) {
+                    var tt = container.querySelector('.biw-map-tooltip');
+                    if (tt) {
+                        tt.innerHTML = '<strong>' + esc(marker.label) + '</strong><br>' + esc(marker.country.name);
+                        var rect2 = container.getBoundingClientRect();
+                        tt.style.left = (e.clientX - rect2.left + 12) + 'px';
+                        tt.style.top = (e.clientY - rect2.top + 12) + 'px';
+                        tt.style.display = 'block';
+                    }
+                })
+                .on('mouseleave', function () {
+                    var tt = container.querySelector('.biw-map-tooltip');
+                    if (tt) tt.style.display = 'none';
+                })
+                .on('click', function () {
+                    selectCountry(marker.country.iso3);
+                });
+            });
+        }
+
+        // ─── Drawer ──────────────────────────────────────────────────
+        function openDrawer(c, year) {
+            if (!c) return;
+            year = year || state.selectedYear || 2026;
+            state.selectedCountry = c;
+
+            var histEntry = getHistoricalEntry(c.iso3, year);
+            var score, rank, rankDisplay, coverage, pillarsData, dqi, vintage;
+            if (histEntry) {
+                score = histEntry.composite_score !== undefined ? histEntry.composite_score : c[scoreKey];
+                rank = histEntry.rank !== undefined ? histEntry.rank : c.rank;
+                rankDisplay = histEntry.rank_display || c.rank_display;
+                coverage = histEntry.coverage_type || c.coverage;
+                pillarsData = histEntry.pillars || {};
+                dqi = histEntry.composite_dqi !== undefined ? histEntry.composite_dqi : c.composite_dqi;
+                vintage = histEntry.vintage_summary || c.vintage_summary;
+            } else {
+                score = c[scoreKey];
+                rank = c.rank;
+                rankDisplay = c.rank_display;
+                coverage = c.coverage;
+                pillarsData = {};
+                pillars.forEach(function(p) { pillarsData[p.key] = c[p.key]; });
+                dqi = c.composite_dqi;
+                vintage = c.vintage_summary;
+            }
+
+            document.getElementById('drawer-country').textContent = c.name;
+            document.getElementById('drawer-score').textContent = score || '—';
+
+            var rankEl = document.getElementById('drawer-rank');
+            var recomputedRank = getRecomputedRank(c.iso3, year);
+            if (recomputedRank) {
+                rankEl.textContent = '#' + recomputedRank;
+            } else if (rankDisplay && rankDisplay.string_format) {
+                rankEl.innerHTML = rankDisplay.string_format;
+            } else if (rank !== undefined && rank !== null) {
+                rankEl.textContent = '#' + rank;
+            } else {
+                rankEl.textContent = '—';
+            }
+
+            var riskLabel = getRiskLabel(score);
+            var riskClass = getRiskClass(score);
+            var badgeEl = document.getElementById('drawer-risk-badge');
+            badgeEl.innerHTML = ' <span class="biw-risk-badge ' + riskClass.replace('biw-badge-', '') + '">' + riskLabel.toUpperCase() + '</span>';
+
+            var delta = deltaInfo(c);
+            var deltaEl = document.getElementById('drawer-delta');
+            if (delta.type === 'up') deltaEl.innerHTML = '<span class="biw-delta-up">▲ ' + delta.value + '</span>';
+            else if (delta.type === 'down') deltaEl.innerHTML = '<span class="biw-delta-down">▼ ' + delta.value + '</span>';
+            else if (delta.type === 'flat') deltaEl.innerHTML = '<span class="biw-delta-flat">—</span>';
+            else deltaEl.innerHTML = '<span class="biw-delta-new">NEW</span>';
+
+            var dqiContainer = document.getElementById('drawer-dqi-badge');
+            if (dqiContainer) {
+                if (dqi !== null && dqi !== undefined) {
+                    var dqiNum = Math.round(dqi);
+                    var dqiClass = dqiNum >= 70 ? 'high' : (dqiNum >= 40 ? 'medium' : 'low');
+                    dqiContainer.innerHTML = '<span class="biw-dqi-badge ' + dqiClass + '">Data Quality Index (DQI): ' + dqiNum + '%</span>';
+                } else {
+                    dqiContainer.innerHTML = '<span class="biw-dqi-badge none">Data Quality Index (DQI): —</span>';
+                }
+            }
+
+            var cov = document.getElementById('drawer-coverage');
+            var covType = coverage || 'partial';
+            cov.textContent = covType === 'full' ? 'FULL INDEX' : 'PARTIAL INDEX';
+            cov.className = 'drawer-coverage ' + covType;
+
+            var pillarHtml = '';
+            pillars.forEach(function (p) {
+                var v = pillarsData[p.key] !== undefined ? pillarsData[p.key] : c[p.key];
+                var pct = (v !== null && v !== undefined) ? v : 0;
+                var color = p.color || '#60a5fa';
+                pillarHtml += '<div class="pillar-row">' +
+                    '<div class="label">' + esc(p.label) + '</div>' +
+                    '<div class="track"><div class="fill" style="width:' + pct + '%;background:' + esc(color) + ';"></div></div>' +
+                    '<div class="value">' + (v !== null && v !== undefined ? fmtNum(v) : '—') + '</div>' +
+                    '</div>';
+            });
+            document.getElementById('drawer-pillars').innerHTML = pillarHtml;
+
+            var maxPillar = null, maxVal = -1;
+            pillars.forEach(function (p) {
+                var v = pillarsData[p.key] !== undefined ? pillarsData[p.key] : c[p.key];
+                if (v !== null && v !== undefined && v > maxVal) {
+                    maxVal = v;
+                    maxPillar = p.label;
+                }
+            });
+            var whyText = maxPillar
+                ? 'Shows its primary vulnerability in <strong>' + esc(maxPillar) + '</strong> (' + fmtNum(maxVal) + ').'
+                : 'Balanced across pillars.';
+            document.getElementById('drawer-why').innerHTML = '💡 <strong>Why this score?</strong> ' + whyText + ' ' +
+                (coverage === 'partial' ? '<br><em style="color:var(--biw-medium)">Partial coverage – rank is a projected range.</em>' : '');
+
+            renderRadar(c, year);
+            renderHistoryChart(c);
+            renderSensitivity(c);
+            renderProvenance(c);
+
+            var wlBtn = document.getElementById('drawer-watchlist');
+            var isStarred = watchlist.indexOf(c.iso3) !== -1;
+            wlBtn.textContent = isStarred ? '★ Watchlist' : '☆ Watchlist';
+            wlBtn.className = isStarred ? 'active' : '';
+
+            var cmpBtn = document.getElementById('drawer-compare');
+            var inCompare = state.compareList.some(function (item) { return item.iso3 === c.iso3; });
+            cmpBtn.textContent = inCompare ? '⊟ Remove Compare' : '◫ Compare';
+            cmpBtn.className = inCompare ? 'active' : '';
+
+            drawerOverlay.classList.add('open');
+            drawer.classList.add('open');
+        }
+
+        function closeDrawer() {
+            drawerOverlay.classList.remove('open');
+            drawer.classList.remove('open');
+            state.selectedCountry = null;
+        }
+
+        function selectCountry(iso3) {
+            var c = state.all.find(function (d) { return d.iso3 === iso3; });
+            if (c) openDrawer(c, state.selectedYear);
+        }
+
+        // ─── Radar ──────────────────────────────────────────────────
+        function renderRadar(c, year) {
             var container = document.getElementById('drawer-radar');
             if (!container || !state.d3Ready || typeof d3 === 'undefined') return;
             container.innerHTML = '';
@@ -1165,7 +1555,8 @@
 
             var points = [];
             pillars.forEach(function (p, i) {
-                var val = c[p.key] !== undefined && c[p.key] !== null ? c[p.key] : 0;
+                var val = getHistoricalPillar(c.iso3, year, p.key) ?? c[p.key];
+                val = (val !== null && val !== undefined) ? val : 0;
                 var r = (val / maxScore) * radius;
                 var angle = i * angleSlice - Math.PI / 2;
                 points.push([r * Math.cos(angle), r * Math.sin(angle)]);
@@ -1193,7 +1584,7 @@
             });
         }
 
-        // ─── History sparkline ───
+        // ─── History chart (includes latest per year) ──────────────
         function renderHistoryChart(c) {
             var container = document.getElementById('drawer-history-chart');
             if (!container) return;
@@ -1205,15 +1596,54 @@
                 return;
             }
 
-            history.sort(function(a, b) { return a.period.localeCompare(b.period); });
+            var yearMap = {};
+            history.forEach(function (entry) {
+                var period = entry.period || '';
+                var year = parseInt(period.substring(0, 4), 10);
+                if (!isNaN(year)) {
+                    if (!yearMap[year] || period > yearMap[year].period) {
+                        yearMap[year] = entry;
+                    }
+                }
+            });
 
-            var data = history.map(function(h) {
+            var years = Object.keys(yearMap).sort();
+            var data = years.map(function (y) {
+                var entry = yearMap[y];
                 return {
-                    period: h.period,
-                    score: h.composite_score,
-                    rank: h.rank
+                    period: entry.period,
+                    year: parseInt(y, 10),
+                    score: entry.composite_score,
+                    rank: entry.rank,
+                    isForwardFill: false,
+                    sourceYear: null
                 };
             });
+
+            if (data.length < 2) {
+                container.innerHTML = '<div class="no-history">Need more years for trend</div>';
+                return;
+            }
+
+            var last = data[data.length - 1];
+            if (last) {
+                var histEntry = history.find(function (h) { return h.period === last.period; });
+                if (histEntry) {
+                    var energySource = histEntry.data_year_energy;
+                    var hhiSource = histEntry.data_year_hhi;
+                    var maritimeSource = histEntry.data_year_maritime;
+                    if (energySource && energySource < last.year) {
+                        last.isForwardFill = true;
+                        last.sourceYear = energySource;
+                    } else if (hhiSource && hhiSource < last.year) {
+                        last.isForwardFill = true;
+                        last.sourceYear = hhiSource;
+                    } else if (maritimeSource && maritimeSource < last.year) {
+                        last.isForwardFill = true;
+                        last.sourceYear = maritimeSource;
+                    }
+                }
+            }
 
             var width = container.clientWidth || 300;
             var height = 80;
@@ -1249,18 +1679,39 @@
                 .style('stroke-dasharray', '2,2')
                 .style('opacity', 0.5);
 
+            var solidData = data;
+            var dashedData = [];
+            var lastPoint = data[data.length - 1];
+            if (lastPoint.isForwardFill) {
+                solidData = data.slice(0, -1);
+                dashedData = [data[data.length - 2], lastPoint];
+            }
+
             var line = d3.line()
                 .x(function(d) { return xScale(d.period); })
                 .y(function(d) { return yScale(d.score); })
                 .curve(d3.curveMonotoneX);
 
-            svg.append('path')
-                .datum(data)
-                .attr('class', 'history-line')
-                .attr('d', line)
-                .attr('fill', 'none')
-                .attr('stroke', 'var(--biw-champagne)')
-                .attr('stroke-width', 2);
+            if (solidData.length > 1) {
+                svg.append('path')
+                    .datum(solidData)
+                    .attr('class', 'history-line-solid')
+                    .attr('d', line)
+                    .attr('fill', 'none')
+                    .attr('stroke', 'var(--biw-champagne)')
+                    .attr('stroke-width', 2);
+            }
+
+            if (dashedData.length > 1) {
+                svg.append('path')
+                    .datum(dashedData)
+                    .attr('class', 'history-line-dashed')
+                    .attr('d', line)
+                    .attr('fill', 'none')
+                    .attr('stroke', 'var(--biw-champagne)')
+                    .attr('stroke-width', 2)
+                    .attr('stroke-dasharray', '6,4');
+            }
 
             var area = d3.area()
                 .x(function(d) { return xScale(d.period); })
@@ -1268,31 +1719,36 @@
                 .y1(function(d) { return yScale(d.score); })
                 .curve(d3.curveMonotoneX);
 
-            svg.append('path')
-                .datum(data)
-                .attr('class', 'history-area')
-                .attr('d', area)
-                .attr('fill', 'var(--biw-champagne)')
-                .attr('fill-opacity', 0.1);
-
-            svg.selectAll('.history-dot')
-                .data(data)
-                .enter()
-                .append('circle')
-                .attr('class', 'history-dot')
-                .attr('cx', function(d) { return xScale(d.period); })
-                .attr('cy', function(d) { return yScale(d.score); })
-                .attr('r', 3)
-                .attr('fill', 'var(--biw-champagne)');
+            if (solidData.length > 1) {
+                svg.append('path')
+                    .datum(solidData)
+                    .attr('class', 'history-area')
+                    .attr('d', area)
+                    .attr('fill', 'var(--biw-champagne)')
+                    .attr('fill-opacity', 0.1);
+            }
 
             var tooltip = document.createElement('div');
             tooltip.className = 'history-tooltip';
             container.style.position = 'relative';
             container.appendChild(tooltip);
 
-            svg.selectAll('.history-dot')
-                .on('mouseenter', function(event, d) {
-                    tooltip.innerHTML = '<strong>' + d.period + '</strong><br>Score: ' + d.score + '<br>Rank: #' + d.rank;
+            data.forEach(function (d) {
+                var isFilled = !d.isForwardFill;
+                var dot = svg.append('circle')
+                    .attr('cx', xScale(d.period))
+                    .attr('cy', yScale(d.score))
+                    .attr('r', 4)
+                    .attr('fill', isFilled ? 'var(--biw-champagne)' : 'transparent')
+                    .attr('stroke', 'var(--biw-champagne)')
+                    .attr('stroke-width', isFilled ? 0 : 2.5)
+                    .style('cursor', 'pointer');
+
+                dot.on('mouseenter', function(event) {
+                    var label = d.period + (d.isForwardFill ? ' (estimated)' : '');
+                    var sourceInfo = d.isForwardFill ? '· Data from ' + d.sourceYear : '';
+                    tooltip.innerHTML = '<strong>' + label + '</strong><br>Score: ' + fmtNum(d.score) +
+                        '<br>Rank: #' + d.rank + (sourceInfo ? '<br>' + sourceInfo : '');
                     tooltip.classList.add('visible');
                     var rect = container.getBoundingClientRect();
                     var left = event.clientX - rect.left + 10;
@@ -1305,22 +1761,20 @@
                 .on('mouseleave', function() {
                     tooltip.classList.remove('visible');
                 });
+            });
 
             svg.append('g')
                 .attr('transform', 'translate(0,' + innerHeight + ')')
                 .call(d3.axisBottom(xScale).tickValues(xScale.domain()).tickFormat(function(d) {
                     var parts = d.split('-');
-                    if (parts.length === 2) {
-                        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-                        return months[parseInt(parts[1],10)-1] + ' ' + parts[0];
-                    }
+                    if (parts.length === 2) return parts[0];
                     return d;
                 }).tickSize(0))
                 .style('font-size', '8px')
                 .style('fill', 'var(--biw-slate-dim)');
         }
 
-        // ─── Sensitivity ───
+        // ─── Sensitivity ────────────────────────────────────────────
         function renderSensitivity(c) {
             var container = document.getElementById('drawer-sensitivity');
             if (!container) return;
@@ -1349,7 +1803,7 @@
                 '</div>';
         }
 
-        // ─── Provenance ───
+        // ─── Provenance ─────────────────────────────────────────────
         function renderProvenance(c) {
             var container = document.getElementById('drawer-provenance');
             if (!container) return;
@@ -1386,103 +1840,7 @@
             items.innerHTML = html || '<div class="provenance-item" style="color:var(--biw-slate-dim);">No provenance data available</div>';
         }
 
-        // ─── Drawer ───
-        function openDrawer(c) {
-            if (!c) return;
-            state.selectedCountry = c;
-
-            document.getElementById('drawer-country').textContent = c.name;
-            document.getElementById('drawer-score').textContent = c[scoreKey] || '—';
-
-            var rankEl = document.getElementById('drawer-rank');
-            rankEl.innerHTML = rankHtml(c);
-
-            var riskLabel = getRiskLabel(c[scoreKey]);
-            var riskClass = getRiskClass(c[scoreKey]);
-            var badgeEl = document.getElementById('drawer-risk-badge');
-            badgeEl.innerHTML = ' <span class="biw-risk-badge ' + riskClass.replace('biw-badge-', '') + '">' + riskLabel.toUpperCase() + '</span>';
-
-            var delta = deltaInfo(c);
-            var deltaEl = document.getElementById('drawer-delta');
-            if (delta.type === 'up') deltaEl.innerHTML = '<span class="biw-delta-up">▲ ' + delta.value + '</span>';
-            else if (delta.type === 'down') deltaEl.innerHTML = '<span class="biw-delta-down">▼ ' + delta.value + '</span>';
-            else if (delta.type === 'flat') deltaEl.innerHTML = '<span class="biw-delta-flat">—</span>';
-            else deltaEl.innerHTML = '<span class="biw-delta-new">NEW</span>';
-
-            var dqiContainer = document.getElementById('drawer-dqi-badge');
-            if (dqiContainer) {
-                var dqi = c.composite_dqi !== null && c.composite_dqi !== undefined ? Math.round(c.composite_dqi) : null;
-                if (dqi !== null) {
-                    var dqiClass = dqi >= 70 ? 'high' : (dqi >= 40 ? 'medium' : 'low');
-                    dqiContainer.innerHTML = '<span class="biw-dqi-badge ' + dqiClass + '">Data Quality Index (DQI): ' + dqi + '%</span>';
-                } else {
-                    dqiContainer.innerHTML = '<span class="biw-dqi-badge none">Data Quality Index (DQI): —</span>';
-                }
-            }
-
-            var cov = document.getElementById('drawer-coverage');
-            var covType = c[coverageKey] || 'partial';
-            cov.textContent = covType === 'full' ? 'FULL INDEX' : 'PARTIAL INDEX';
-            cov.className = 'drawer-coverage ' + covType;
-
-            var pillarHtml = '';
-            pillars.forEach(function (p) {
-                var v = c[p.key];
-                var pct = (v !== null && v !== undefined) ? v : 0;
-                var color = p.color || '#60a5fa';
-                pillarHtml += '<div class="pillar-row">' +
-                    '<div class="label">' + esc(p.label) + '</div>' +
-                    '<div class="track"><div class="fill" style="width:' + pct + '%;background:' + esc(color) + ';"></div></div>' +
-                    '<div class="value">' + (v !== null && v !== undefined ? fmtNum(v) : '—') + '</div>' +
-                    '</div>';
-            });
-            document.getElementById('drawer-pillars').innerHTML = pillarHtml;
-
-            var maxPillar = null, maxVal = -1;
-            pillars.forEach(function (p) {
-                var v = c[p.key];
-                if (v !== null && v !== undefined && v > maxVal) {
-                    maxVal = v;
-                    maxPillar = p.label;
-                }
-            });
-            var whyText = maxPillar
-                ? 'Shows its primary vulnerability in <strong>' + esc(maxPillar) + '</strong> (' + fmtNum(maxVal) + ').'
-                : 'Balanced across pillars.';
-            document.getElementById('drawer-why').innerHTML = '💡 <strong>Why this score?</strong> ' + whyText + ' ' +
-                (c[coverageKey] === 'partial' ? '<br><em style="color:var(--biw-medium)">Partial coverage – rank is a projected range.</em>' : '');
-
-            renderRadar(c);
-            renderHistoryChart(c);
-            renderSensitivity(c);
-            renderProvenance(c);
-
-            var wlBtn = document.getElementById('drawer-watchlist');
-            var isStarred = watchlist.indexOf(c.iso3) !== -1;
-            wlBtn.textContent = isStarred ? '★ Watchlist' : '☆ Watchlist';
-            wlBtn.className = isStarred ? 'active' : '';
-
-            var cmpBtn = document.getElementById('drawer-compare');
-            var inCompare = state.compareList.some(function (item) { return item.iso3 === c.iso3; });
-            cmpBtn.textContent = inCompare ? '⊟ Remove Compare' : '◫ Compare';
-            cmpBtn.className = inCompare ? 'active' : '';
-
-            drawerOverlay.classList.add('open');
-            drawer.classList.add('open');
-        }
-
-        function closeDrawer() {
-            drawerOverlay.classList.remove('open');
-            drawer.classList.remove('open');
-            state.selectedCountry = null;
-        }
-
-        function selectCountry(iso3) {
-            var c = state.all.find(function (d) { return d.iso3 === iso3; });
-            if (c) openDrawer(c);
-        }
-
-        // ─── Watchlist ───
+        // ─── Watchlist ──────────────────────────────────────────────
         function toggleWatchlist(iso3) {
             var idx = watchlist.indexOf(iso3);
             if (idx === -1) watchlist.push(iso3);
@@ -1490,11 +1848,11 @@
             try { localStorage.setItem(watchlistKey, JSON.stringify(watchlist)); } catch (e) {}
             render();
             if (state.selectedCountry && state.selectedCountry.iso3 === iso3) {
-                openDrawer(state.selectedCountry);
+                openDrawer(state.selectedCountry, state.selectedYear);
             }
         }
 
-        // ─── Compare ───
+        // ─── Compare ────────────────────────────────────────────────
         function toggleCompare(iso3) {
             var idx = state.compareList.findIndex(function (item) { return item.iso3 === iso3; });
             if (idx === -1) {
@@ -1510,7 +1868,7 @@
             updateCompareDock();
             render();
             if (state.selectedCountry && state.selectedCountry.iso3 === iso3) {
-                openDrawer(state.selectedCountry);
+                openDrawer(state.selectedCountry, state.selectedYear);
             }
         }
 
@@ -1592,7 +1950,8 @@
                     countryColors.push(color);
                     var points = [];
                     pillars.forEach(function (p, i) {
-                        var val = c[p.key] !== undefined && c[p.key] !== null ? c[p.key] : 0;
+                        var val = getHistoricalPillar(c.iso3, state.selectedYear, p.key) ?? c[p.key];
+                        val = (val !== null && val !== undefined) ? val : 0;
                         var r = (val / 100) * radius;
                         var angle = i * angleSlice - Math.PI / 2;
                         points.push([r * Math.cos(angle), r * Math.sin(angle)]);
@@ -1627,7 +1986,7 @@
             tableHtml += '</tr></thead><tbody>';
             var rows = [
                 { label: 'Rank', key: 'rank', fn: function(c) { return rankHtml(c); } },
-                { label: scoreLabel, key: scoreKey, fn: function(c) { return fmtNum(c[scoreKey]); } },
+                { label: scoreLabel, key: scoreKey, fn: function(c) { return fmtNum(getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey]); } },
                 {
                     label: 'DQI',
                     key: 'dqi',
@@ -1643,7 +2002,7 @@
                 { label: 'Coverage', key: coverageKey, fn: function(c) { return c[coverageKey] || '—'; } }
             ];
             pillars.forEach(function (p) {
-                rows.push({ label: p.label, key: p.key, fn: function(c) { return c[p.key] !== undefined && c[p.key] !== null ? fmtNum(c[p.key]) : '—'; } });
+                rows.push({ label: p.label, key: p.key, fn: function(c) { return fmtNum(getHistoricalPillar(c.iso3, state.selectedYear, p.key) ?? c[p.key]); } });
             });
             rows.forEach(function (row) {
                 tableHtml += '<tr><td style="font-weight:600;">' + esc(row.label) + '</td>';
@@ -1670,7 +2029,7 @@
             render();
         }
 
-        // ─── Dark mode toggle ───
+        // ─── Dark mode ──────────────────────────────────────────────
         function toggleDark() {
             state.isDark = !state.isDark;
             root.classList.toggle('biw-light', !state.isDark);
@@ -1683,12 +2042,10 @@
             try { localStorage.setItem('biw_dark_mode_' + slug, state.isDark ? 'dark' : 'light'); } catch (e) {}
         }
 
-        // ─── Share (drawer share button) ───
         function openShareModal() {
             alert('Share via the share buttons (𝕏, in, 🔗) in the toolbar.');
         }
 
-        // ─── Methodology popup ───
         function showMethodologyPopup() {
             document.getElementById('biw-method-overlay').classList.add('visible');
             document.getElementById('biw-method-modal').classList.add('visible');
@@ -1698,9 +2055,8 @@
             document.getElementById('biw-method-modal').classList.remove('visible');
         }
 
-        // ─── Events ───
+        // ─── Events ──────────────────────────────────────────────────
         function bindControls() {
-            // Dark mode
             var darkBtn = document.getElementById('biw-dark-toggle');
             if (darkBtn) {
                 try {
@@ -1714,7 +2070,6 @@
                 darkBtn.addEventListener('click', toggleDark);
             }
 
-            // Drawer
             document.getElementById('biw-drawer-close').addEventListener('click', closeDrawer);
             document.getElementById('biw-drawer-overlay').addEventListener('click', closeDrawer);
 
@@ -1726,7 +2081,6 @@
             });
             document.getElementById('drawer-share').addEventListener('click', openShareModal);
 
-            // Compare dock
             document.getElementById('biw-compare-dock-close').addEventListener('click', function () {
                 document.getElementById('biw-compare-dock').classList.remove('visible');
             });
@@ -1742,12 +2096,10 @@
                 }
             });
 
-            // Methodology popup
             document.getElementById('biw-btn-methodology').addEventListener('click', showMethodologyPopup);
             document.getElementById('biw-method-close').addEventListener('click', closeMethodologyPopup);
             document.getElementById('biw-method-overlay').addEventListener('click', closeMethodologyPopup);
 
-            // Search, filters, sort
             var search = q('.biw-search');
             if (search) search.addEventListener('input', render);
 
@@ -1760,7 +2112,6 @@
             var sortSelect = q('.biw-sort-select');
             if (sortSelect) sortSelect.addEventListener('change', render);
 
-            // Watchlist toggle
             var wlToggle = q('.biw-watchlist-toggle');
             if (wlToggle) {
                 if (state.showWatchlistOnly) {
@@ -1825,6 +2176,7 @@
                     this.classList.add('active');
                     state.mapLayer = this.getAttribute('data-layer');
                     updateMapColors(state.mapLayer, state.selectedYear);
+                    updateMapMarkers();
                 });
             });
 
