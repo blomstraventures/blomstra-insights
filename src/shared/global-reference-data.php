@@ -1,12 +1,15 @@
 /**
- * Blomstra Reference Data — Shared Utility & Reference Layer (v2.8.6)
+ * Blomstra Reference Data — Shared Utility & Reference Layer (v2.9.0)
  *
- * - Cache wrapper: only persists non‑empty results (fixes EIA poisoning).
- * - World Bank & IMF counting uses unique ISO3s.
- * - Admin button to purge empty EIA cache entries.
+ * - API Credentials Settings UI (supports multiple auth patterns)
+ * - Fetcher functions read from options with fallback to constants
+ * - Health Check Summary Card added
+ * - Cache wrapper: only persists non‑empty results (fixes EIA poisoning)
+ * - World Bank & IMF counting uses unique ISO3s
+ * - Admin button to purge empty EIA cache entries
  *
  * @package Blomstra
- * @version 2.8.6
+ * @version 2.9.0
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -19,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // ─── USER-AGENT CONSTANT ────────────────────────────────────────────
 
 if ( ! defined( 'BLOMSTRA_USER_AGENT' ) ) {
-    define( 'BLOMSTRA_USER_AGENT', 'BlomstraReferenceData/2.8.6' );
+    define( 'BLOMSTRA_USER_AGENT', 'BlomstraReferenceData/2.9.0' );
 }
 
 // ─── WB INDICATOR LIST ─────────────────────────────────────────────
@@ -53,6 +56,86 @@ if ( ! defined( 'BLOMSTRA_IMF_INDICATORS' ) ) {
         'GGXCNL_NGDP' => 'gov_balance_imf',
         'LUR'         => 'unemployment_imf',
     ) );
+}
+
+// ─── API CREDENTIALS HELPERS ──────────────────────────────────────
+
+/**
+ * Get API credentials for a specific source.
+ *
+ * Checks the stored option first, then falls back to defined constants
+ * for backward compatibility.
+ *
+ * @param string $source Source key (e.g., 'comtrade', 'eia').
+ * @param string $field  Specific field to retrieve (e.g., 'subscription_key', 'api_key').
+ * @return string|null   Credential value or null if not found.
+ */
+function blomstra_get_api_credential( $source, $field ) {
+    $creds = get_option( 'blomstra_api_credentials', array() );
+    
+    // Check option first
+    if ( isset( $creds[ $source ][ $field ] ) && ! empty( $creds[ $source ][ $field ] ) ) {
+        return $creds[ $source ][ $field ];
+    }
+    
+    // Fall back to defined constants for backward compatibility
+    if ( $source === 'comtrade' && $field === 'subscription_key' && defined( 'COMTRADE_PRIMARY_KEY' ) ) {
+        return COMTRADE_PRIMARY_KEY;
+    }
+    
+    if ( $source === 'eia' && $field === 'api_key' && defined( 'EIA_API_KEY' ) ) {
+        return EIA_API_KEY;
+    }
+    
+    return null;
+}
+
+/**
+ * Get all API credentials.
+ *
+ * @return array Array of all credentials (merged from option + constants).
+ */
+function blomstra_get_all_api_credentials() {
+    $option = get_option( 'blomstra_api_credentials', array() );
+    
+    // Add constants for backward compatibility
+    if ( defined( 'COMTRADE_PRIMARY_KEY' ) && COMTRADE_PRIMARY_KEY !== '' ) {
+        if ( ! isset( $option['comtrade'] ) ) {
+            $option['comtrade'] = array();
+        }
+        if ( empty( $option['comtrade']['subscription_key'] ) ) {
+            $option['comtrade']['subscription_key'] = COMTRADE_PRIMARY_KEY;
+        }
+    }
+    
+    if ( defined( 'EIA_API_KEY' ) && EIA_API_KEY !== '' ) {
+        if ( ! isset( $option['eia'] ) ) {
+            $option['eia'] = array();
+        }
+        if ( empty( $option['eia']['api_key'] ) ) {
+            $option['eia']['api_key'] = EIA_API_KEY;
+        }
+    }
+    
+    return $option;
+}
+
+/**
+ * Save API credentials.
+ *
+ * @param array $credentials Array of credentials to save.
+ * @return bool True on success, false on failure.
+ */
+function blomstra_save_api_credentials( $credentials ) {
+    // Sanitize credentials
+    $sanitized = array();
+    foreach ( $credentials as $source => $fields ) {
+        $sanitized[ $source ] = array();
+        foreach ( $fields as $key => $value ) {
+            $sanitized[ $source ][ sanitize_key( $key ) ] = sanitize_text_field( trim( $value ) );
+        }
+    }
+    return update_option( 'blomstra_api_credentials', $sanitized, false );
 }
 
 // ─── GLOBAL COUNTRY LIST (World Bank) ─────────────────────────────
@@ -371,8 +454,10 @@ if ( ! function_exists( 'blomstra_log_comtrade_call' ) ) {
 
 if ( ! function_exists( 'blomstra_comtrade_fetch_partner_imports_batch' ) ) {
     function blomstra_comtrade_fetch_partner_imports_batch( $reporter_codes, $year, $attempt = 1 ) {
-        if ( ! defined( 'COMTRADE_PRIMARY_KEY' ) || COMTRADE_PRIMARY_KEY === '' ) {
-            blomstra_log_comtrade_call( implode( ',', $reporter_codes ), $year, 'network_error', 'COMTRADE_PRIMARY_KEY not defined/empty' );
+        // ─── Get API key (option with fallback to constant) ──────
+        $key = blomstra_get_api_credential( 'comtrade', 'subscription_key' );
+        if ( empty( $key ) ) {
+            blomstra_log_comtrade_call( implode( ',', $reporter_codes ), $year, 'network_error', 'COMTRADE_PRIMARY_KEY not set' );
             return null;
         }
 
@@ -393,7 +478,7 @@ if ( ! function_exists( 'blomstra_comtrade_fetch_partner_imports_batch' ) ) {
                 'motCode'           => 0,
                 'partner2Code'      => 0,
                 'customsCode'       => 'C00',
-                'subscription-key'  => COMTRADE_PRIMARY_KEY,
+                'subscription-key'  => $key,
                 'page'              => $page,
                 'limit'             => 500,
             );
@@ -1094,12 +1179,14 @@ if ( ! function_exists( 'blomstra_log_eia_call' ) ) {
 
 if ( ! function_exists( 'blomstra_eia_fetch_activity_batch' ) ) {
     function blomstra_eia_fetch_activity_batch( $country_codes, $activity_id, $product_id, $attempt = 1 ) {
-        if ( ! defined( 'EIA_API_KEY' ) || EIA_API_KEY === '' ) {
+        // ─── Get API key (option with fallback to constant) ──────
+        $key = blomstra_get_api_credential( 'eia', 'api_key' );
+        if ( empty( $key ) ) {
             return array( 'status' => 'permanent_failure', 'rows' => array(), 'error' => 'API key missing' );
         }
 
         $scalar_args = array(
-            'api_key'              => EIA_API_KEY,
+            'api_key'              => $key,
             'facets[activityId][]' => $activity_id,
             'facets[productId][]'  => $product_id,
             'facets[unit][]'       => BLOMSTRA_EIA_UNIT,
@@ -1504,9 +1591,10 @@ if ( ! function_exists( 'blomstra_stale_cache_fallback' ) ) {
 
 if ( ! function_exists( 'blomstra_check_api_keys_status' ) ) {
     function blomstra_check_api_keys_status() {
+        $creds = blomstra_get_all_api_credentials();
         return array(
-            'comtrade' => defined( 'COMTRADE_PRIMARY_KEY' ) && COMTRADE_PRIMARY_KEY !== '',
-            'eia'      => defined( 'EIA_API_KEY' ) && EIA_API_KEY !== '',
+            'comtrade' => ! empty( $creds['comtrade']['subscription_key'] ),
+            'eia'      => ! empty( $creds['eia']['api_key'] ),
         );
     }
 }
@@ -2564,6 +2652,75 @@ if ( ! function_exists( 'blomstra_ref_handle_early_actions' ) ) {
             return;
         }
 
+        // ─── API CREDENTIALS SAVE ──────────────────────────────────
+        if ( isset( $_POST['blomstra_save_api_credentials'] ) && check_admin_referer( 'blomstra_save_api_credentials_action', 'blomstra_save_api_credentials_nonce' ) ) {
+            $credentials = array();
+            
+            // Comtrade
+            if ( isset( $_POST['blomstra_comtrade_subscription_key'] ) ) {
+                $credentials['comtrade']['subscription_key'] = sanitize_text_field( trim( $_POST['blomstra_comtrade_subscription_key'] ) );
+            }
+            
+            // EIA
+            if ( isset( $_POST['blomstra_eia_api_key'] ) ) {
+                $credentials['eia']['api_key'] = sanitize_text_field( trim( $_POST['blomstra_eia_api_key'] ) );
+            }
+            
+            // UNCTAD (future)
+            if ( isset( $_POST['blomstra_unctad_client_id'] ) || isset( $_POST['blomstra_unctad_client_secret'] ) ) {
+                $credentials['unctad']['client_id'] = isset( $_POST['blomstra_unctad_client_id'] ) ? sanitize_text_field( trim( $_POST['blomstra_unctad_client_id'] ) ) : '';
+                $credentials['unctad']['client_secret'] = isset( $_POST['blomstra_unctad_client_secret'] ) ? sanitize_text_field( trim( $_POST['blomstra_unctad_client_secret'] ) ) : '';
+            }
+            
+            blomstra_save_api_credentials( $credentials );
+            wp_safe_redirect( add_query_arg( array( 'page' => 'blomstra-insights-tools', 'api_saved' => '1' ), admin_url( 'admin.php' ) ) );
+            exit;
+        }
+
+        // ─── API CREDENTIALS TEST ──────────────────────────────────
+        if ( isset( $_POST['blomstra_test_api_credentials'] ) && check_admin_referer( 'blomstra_test_api_credentials_action', 'blomstra_test_api_credentials_nonce' ) ) {
+            $source = sanitize_text_field( $_POST['test_source'] ?? '' );
+            $result = array( 'source' => $source, 'success' => false, 'message' => '' );
+            
+            if ( $source === 'comtrade' ) {
+                $key = blomstra_get_api_credential( 'comtrade', 'subscription_key' );
+                if ( empty( $key ) ) {
+                    $result['message'] = 'No subscription key configured.';
+                } else {
+                    // Try a simple API call (small batch)
+                    $test_codes = array( 842 ); // USA
+                    $rows = blomstra_comtrade_fetch_partner_imports_batch( $test_codes, (int) current_time( 'Y' ) - 1 );
+                    if ( $rows === null || $rows === BLOMSTRA_COMTRADE_QUOTA_EXHAUSTED || $rows === BLOMSTRA_COMTRADE_PERMANENT_FAILURE ) {
+                        $result['message'] = 'API test failed – ' . ( is_string( $rows ) ? $rows : 'no data returned' );
+                    } else {
+                        $result['success'] = true;
+                        $result['message'] = 'API test successful – ' . count( $rows ) . ' rows returned.';
+                    }
+                }
+            } elseif ( $source === 'eia' ) {
+                $key = blomstra_get_api_credential( 'eia', 'api_key' );
+                if ( empty( $key ) ) {
+                    $result['message'] = 'No API key configured.';
+                } else {
+                    // Try a simple API call (USA, petroleum consumption)
+                    $test_countries = array( 'USA' );
+                    $batch = blomstra_eia_fetch_activity_batch( $test_countries, BLOMSTRA_EIA_ACTIVITY_CONS, '4415' );
+                    if ( $batch['status'] === 'ok' || $batch['status'] === 'empty' ) {
+                        $result['success'] = true;
+                        $result['message'] = 'API test successful – ' . count( $batch['rows'] ) . ' rows returned.';
+                    } else {
+                        $result['message'] = 'API test failed – ' . $batch['status'] . ': ' . ( $batch['error'] ?? 'unknown error' );
+                    }
+                }
+            } else {
+                $result['message'] = 'Unknown source: ' . $source;
+            }
+            
+            set_transient( 'blomstra_api_test_result', $result, 30 );
+            wp_safe_redirect( add_query_arg( array( 'page' => 'blomstra-insights-tools', 'api_tested' => '1' ), admin_url( 'admin.php' ) ) );
+            exit;
+        }
+
         if ( isset( $_POST['blomstra_ref_refresh_countries'] ) && check_admin_referer( 'blomstra_ref_refresh_countries_action', 'blomstra_ref_refresh_countries_nonce' ) ) {
             wp_schedule_single_event( time(), 'blomstra_cron_countries_async_event' );
             wp_safe_redirect( add_query_arg( array( 'page' => 'blomstra-insights-tools', 'triggered' => 'countries' ), admin_url( 'admin.php' ) ) );
@@ -2837,6 +2994,23 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
     function blomstra_ref_render_page() {
         nocache_headers();
 
+        // ── Display API test result ──────────────────────────────
+        if ( isset( $_GET['api_tested'] ) ) {
+            $result = get_transient( 'blomstra_api_test_result' );
+            if ( $result ) {
+                if ( $result['success'] ) {
+                    echo '<div class="notice notice-success is-dismissible"><p>✅ <strong>' . esc_html( strtoupper( $result['source'] ) ) . ' API Test:</strong> ' . esc_html( $result['message'] ) . '</p></div>';
+                } else {
+                    echo '<div class="notice notice-error is-dismissible"><p>❌ <strong>' . esc_html( strtoupper( $result['source'] ) ) . ' API Test:</strong> ' . esc_html( $result['message'] ) . '</p></div>';
+                }
+                delete_transient( 'blomstra_api_test_result' );
+            }
+        }
+
+        if ( isset( $_GET['api_saved'] ) ) {
+            echo '<div class="notice notice-success is-dismissible"><p>✅ API credentials saved successfully.</p></div>';
+        }
+
         // ── Single-Target API Sandbox Handler ────────────────────
         $sandbox_result = null;
         if ( isset( $_POST['blomstra_ref_sandbox_test'] ) && check_admin_referer( 'blomstra_ref_sandbox_action', 'blomstra_ref_sandbox_nonce' ) ) {
@@ -2927,7 +3101,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         }
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.8.6', 'blomstra' ) . '</h1>';
+        echo '<h1>' . esc_html__( 'Blomstra Reference Data Architecture v2.9.0', 'blomstra' ) . '</h1>';
         echo '<p style="color:#666;">Centralised reference data layer with shared historical cache for all indices.</p>';
 
         if ( isset( $_GET['triggered'] ) ) {
@@ -2953,7 +3127,164 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
             echo '<div class="notice notice-success is-dismissible"><p>📅 Landlocked verification date updated to today.</p></div>';
         }
 
-        // ─── SECTION 1: SYSTEM & API KEY HEALTH + DATA STORAGE ────
+        // ─── SECTION 1: HEALTH CHECK SUMMARY CARD ──────────────────
+        $cron_statuses = get_option( 'blomstra_cron_status', array() );
+        $all_pillars = array( 'eia', 'hhi', 'maritime', 'wb_indicators', 'imf' );
+        $healthy = 0;
+        $total = count( $all_pillars );
+        $status_messages = array();
+
+        foreach ( $all_pillars as $pillar ) {
+            $st = $cron_statuses[ $pillar ] ?? null;
+            if ( ! $st ) {
+                $status_messages[ $pillar ] = 'never_run';
+                continue;
+            }
+            if ( $st['status'] === 'success' ) {
+                $healthy++;
+                $status_messages[ $pillar ] = 'success';
+            } elseif ( $st['status'] === 'partial' ) {
+                $status_messages[ $pillar ] = 'partial';
+            } elseif ( $st['status'] === 'error' || $st['status'] === 'stuck' ) {
+                $status_messages[ $pillar ] = 'error';
+            } else {
+                $status_messages[ $pillar ] = 'unknown';
+            }
+        }
+
+        $health_score = $total > 0 ? round( ( $healthy / $total ) * 100 ) : 0;
+        $health_color = $health_score >= 80 ? '#2e7d32' : ( $health_score >= 50 ? '#f0ad4e' : '#d63638' );
+
+        $label_map = array(
+            'eia' => 'Energy (EIA)',
+            'hhi' => 'HHI (Comtrade)',
+            'maritime' => 'Maritime (LSCI)',
+            'wb_indicators' => 'WB Indicators',
+            'imf' => 'IMF WEO',
+        );
+
+        $icon_map = array(
+            'success' => '✅',
+            'partial' => '⚠️',
+            'error' => '❌',
+            'never_run' => '⏳',
+            'unknown' => '❓',
+        );
+
+        echo '<div class="postbox" style="border-left:4px solid ' . $health_color . '; background:#fff;">';
+        echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-heart"></span> System Health Overview</h2></div>';
+        echo '<div class="inside" style="display:flex; flex-wrap:wrap; align-items:center; gap:20px;">';
+        echo '<div style="text-align:center; min-width:120px;">';
+        echo '<div style="font-size:48px; font-weight:800; color:' . $health_color . ';">' . $health_score . '%</div>';
+        echo '<div style="color:var(--biw-slate-dim); font-size:14px;">' . $healthy . ' of ' . $total . ' healthy</div>';
+        echo '</div>';
+        echo '<div style="display:flex; flex-wrap:wrap; gap:12px;">';
+        foreach ( $all_pillars as $pillar ) {
+            $status = $status_messages[ $pillar ] ?? 'unknown';
+            $icon = $icon_map[ $status ] ?? '❓';
+            $label = $label_map[ $pillar ] ?? $pillar;
+            $color = '';
+            if ( $status === 'success' ) $color = '#2e7d32';
+            elseif ( $status === 'partial' ) $color = '#f0ad4e';
+            elseif ( $status === 'error' ) $color = '#d63638';
+            else $color = '#999';
+            echo '<span style="display:inline-flex; align-items:center; gap:6px; background:#f5f5f5; padding:6px 14px; border-radius:20px; font-size:13px; border:1px solid ' . $color . ';">';
+            echo $icon . ' ' . esc_html( $label );
+            echo '</span>';
+        }
+        echo '</div>';
+        echo '</div></div>';
+
+// ─── SECTION 2: API CREDENTIALS ──────────────────────────────
+        $api_creds = blomstra_get_all_api_credentials();
+
+        echo '<div class="postbox" style="border-left:4px solid #135e96; background:#fff;">';
+        echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-lock"></span> 🔑 API Credentials</h2></div>';
+        echo '<div class="inside">';
+        echo '<p style="color:#666;">Configure API credentials for each data source. Credentials are stored securely in the database. Fields left blank will use existing <code>wp-config.php</code> constants for backward compatibility.</p>';
+
+        // ─── SAVE FORM ──────────────────────────────────────────────────
+        echo '<form method="post" style="margin-bottom:15px;">';
+        wp_nonce_field( 'blomstra_save_api_credentials_action', 'blomstra_save_api_credentials_nonce' );
+
+        // ── UN Comtrade ──────────────────────────────────────────────
+        $comtrade_key = $api_creds['comtrade']['subscription_key'] ?? '';
+        echo '<div style="background:#f9f9f9; padding:12px 16px; border:1px solid #ddd; border-radius:4px; margin-bottom:12px;">';
+        echo '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">';
+        echo '<div><strong>UN Comtrade (HHI Pillar)</strong> <span style="color:#666; font-weight:normal; font-size:12px;">— Subscription Key required</span></div>';
+        echo '</div>';
+        echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:6px;">';
+        echo '<label style="font-weight:500;">Subscription Key:</label>';
+        echo '<input type="password" name="blomstra_comtrade_subscription_key" value="' . esc_attr( $comtrade_key ) . '" style="flex:1; min-width:200px; padding:6px 10px; border:1px solid #ddd; border-radius:4px;" placeholder="Enter Comtrade subscription key">';
+        echo '</div>';
+		echo '<p style="color:#666; font-size:12px; margin:6px 0 0 0;">ℹ️ Required for Supplier Concentration pillar. <a href="https://comtradedeveloper.un.org/signin" target="_blank">Get a key →</a></p>';
+        echo '</div>';
+
+        // ── EIA ──────────────────────────────────────────────────────
+        $eia_key = $api_creds['eia']['api_key'] ?? '';
+        echo '<div style="background:#f9f9f9; padding:12px 16px; border:1px solid #ddd; border-radius:4px; margin-bottom:12px;">';
+        echo '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">';
+        echo '<div><strong>EIA Energy Data (Energy Pillar)</strong> <span style="color:#666; font-weight:normal; font-size:12px;">— API Key required</span></div>';
+        echo '</div>';
+        echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:6px;">';
+        echo '<label style="font-weight:500;">API Key:</label>';
+        echo '<input type="password" name="blomstra_eia_api_key" value="' . esc_attr( $eia_key ) . '" style="flex:1; min-width:200px; padding:6px 10px; border:1px solid #ddd; border-radius:4px;" placeholder="Enter EIA API key">';
+        echo '</div>';
+        echo '<p style="color:#666; font-size:12px; margin:6px 0 0 0;">ℹ️ Required for Energy Dependency pillar. <a href="https://www.eia.gov/opendata/" target="_blank">Get a key →</a></p>';
+        echo '</div>';
+
+        // ── UNCTADStat (Future) ──────────────────────────────────────
+        $unctad_id = $api_creds['unctad']['client_id'] ?? '';
+        $unctad_secret = $api_creds['unctad']['client_secret'] ?? '';
+        echo '<div style="background:#f9f9f9; padding:12px 16px; border:1px solid #ddd; border-radius:4px; margin-bottom:12px; opacity:0.6;">';
+        echo '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">';
+        echo '<div><strong>UNCTADStat (Future)</strong> <span style="color:#666; font-weight:normal; font-size:12px;">— Client ID + Secret (coming soon)</span></div>';
+        echo '</div>';
+        echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:6px;">';
+        echo '<label style="font-weight:500;">Client ID:</label>';
+        echo '<input type="text" name="blomstra_unctad_client_id" value="' . esc_attr( $unctad_id ) . '" style="flex:1; min-width:150px; padding:6px 10px; border:1px solid #ddd; border-radius:4px;" placeholder="Client ID" disabled>';
+        echo '<label style="font-weight:500;">Client Secret:</label>';
+        echo '<input type="password" name="blomstra_unctad_client_secret" value="' . esc_attr( $unctad_secret ) . '" style="flex:1; min-width:150px; padding:6px 10px; border:1px solid #ddd; border-radius:4px;" placeholder="Client Secret" disabled>';
+        echo '</div>';
+        echo '<p style="color:#666; font-size:12px; margin:6px 0 0 0;">ℹ️ Optional – for future indicators. Not yet implemented.</p>';
+        echo '</div>';
+
+        // ── Public APIs (informational) ──────────────────────────────
+        echo '<div style="background:#f0f6fc; padding:10px 16px; border:1px solid #ccd0d4; border-radius:4px; margin-bottom:12px;">';
+        echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">';
+        echo '<span style="font-weight:500;">🌐 Public APIs – No credentials required:</span>';
+        echo '<span style="color:#666; font-size:13px;">World Bank WDI/WGI, IMF WEO, World Bank Maritime LSCI</span>';
+        echo '</div>';
+        echo '</div>';
+
+        echo '<div style="display:flex; gap:10px; margin-top:10px;">';
+        echo '<input type="submit" name="blomstra_save_api_credentials" class="button button-primary" value="💾 Save All Credentials">';
+        echo '</div>';
+        echo '</form>'; // ─── END SAVE FORM ─────────────────────────────
+
+        // ─── TEST BUTTONS (Separate forms with their own nonces) ──────
+        echo '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; border-top:1px solid #ddd; padding-top:12px; margin-top:5px;">';
+        echo '<span style="font-weight:500; color:#666;">Test Connections:</span>';
+
+        // Comtrade Test
+        echo '<form method="post" style="display:inline-block;">';
+        wp_nonce_field( 'blomstra_test_api_credentials_action', 'blomstra_test_api_credentials_nonce' );
+        echo '<input type="hidden" name="test_source" value="comtrade">';
+        echo '<button type="submit" name="blomstra_test_api_credentials" value="1" class="button button-secondary" style="min-width:80px;">🔍 Test Comtrade</button>';
+        echo '</form>';
+
+        // EIA Test
+        echo '<form method="post" style="display:inline-block;">';
+        wp_nonce_field( 'blomstra_test_api_credentials_action', 'blomstra_test_api_credentials_nonce' );
+        echo '<input type="hidden" name="test_source" value="eia">';
+        echo '<button type="submit" name="blomstra_test_api_credentials" value="1" class="button button-secondary" style="min-width:80px;">🔍 Test EIA</button>';
+        echo '</form>';
+
+        echo '</div>';
+
+        echo '</div></div>'; // ─── END API CREDENTIALS POSTBOX ──────────
+
+        // ─── SECTION 3: SYSTEM & API KEY HEALTH + DATA STORAGE ────
         $api_status = blomstra_check_api_keys_status();
 
         global $wpdb;
@@ -2975,8 +3306,8 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '<div style="min-width:200px;">';
         echo '<h4 style="margin:0 0 8px 0;">🔑 API Keys</h4>';
-        $com_badge = $api_status['comtrade'] ? '<span style="color:#2e7d32;">DEFINED ✓</span>' : '<span style="color:#d63638;">MISSING ✗</span>';
-        $eia_badge = $api_status['eia'] ? '<span style="color:#2e7d32;">DEFINED ✓</span>' : '<span style="color:#d63638;">MISSING ✗</span>';
+        $com_badge = $api_status['comtrade'] ? '<span style="color:#2e7d32;">CONFIGURED ✓</span>' : '<span style="color:#d63638;">MISSING ✗</span>';
+        $eia_badge = $api_status['eia'] ? '<span style="color:#2e7d32;">CONFIGURED ✓</span>' : '<span style="color:#d63638;">MISSING ✗</span>';
         echo '<div><strong>UN Comtrade:</strong> ' . $com_badge . '</div>';
         echo '<div><strong>EIA:</strong> ' . $eia_badge . '</div>';
         echo '<div><strong>PHP Memory:</strong> <code>' . esc_html( ini_get( 'memory_limit' ) ) . '</code></div>';
@@ -2994,8 +3325,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 2: DATA HEALTH DASHBOARD ──────────────────────
-        $cron_statuses = get_option( 'blomstra_cron_status', array() );
+        // ─── SECTION 4: DATA HEALTH DASHBOARD (full table) ──────────
         $expected_countries = count( blomstra_get_global_country_list() );
 
         $get_next_scheduled = function( $hook ) {
@@ -3278,7 +3608,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<p style="color:#666; font-size:12px; margin:5px 0 0 0;"><strong>Legend:</strong> ✅ Success &nbsp;|&nbsp; ⚠️ Partial &nbsp;|&nbsp; ❌ Error &nbsp;|&nbsp; 🔒 Stuck &nbsp;|&nbsp; 🔄 Running &nbsp;|&nbsp; ⏳ Never Run &nbsp;|&nbsp; ⏳ Retryable</p>';
         echo '</div></div>';
 
-        // ─── SECTION 3: DATA LAYERS & GRANULAR CACHE CONTROL ──────
+        // ─── SECTION 5: DATA LAYERS & GRANULAR CACHE CONTROL ──────
         echo '<div class="postbox" style="background:#f9f9f9; border-left:4px solid #2271b1;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-dashboard"></span> Data Layers &amp; Granular Cache Control</h2></div>';
         echo '<div class="inside">';
@@ -3450,7 +3780,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 4: HISTORICAL CACHE STATUS (MATRIX) ──────────
+        // ─── SECTION 6: HISTORICAL CACHE STATUS (MATRIX) ──────────
         echo '<div class="postbox" style="border-left:4px solid #9b51e0;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-database-add"></span> 📦 Historical Cache Status</h2></div>';
         echo '<div class="inside">';
@@ -3580,7 +3910,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<p style="color:#666; font-size:12px; margin-top:10px;">Click a cell to retry that specific job. Hover for details.</p>';
         echo '</div></div>';
 
-        // ─── SECTION 5: HISTORICAL DATA CACHE MANAGER (BULK) ──────
+        // ─── SECTION 7: HISTORICAL DATA CACHE MANAGER (BULK) ──────
         echo '<div class="postbox" style="border-left:4px solid #9b51e0;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-database-add"></span> Historical Data Cache Manager</h2></div>';
         echo '<div class="inside">';
@@ -3649,7 +3979,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         </script>
         <?php
 
-        // ─── SECTION 6: HISTORICAL BACKFILL RANGE (PER INDEX) ──────
+        // ─── SECTION 8: HISTORICAL BACKFILL RANGE (PER INDEX) ──────
         echo '<div class="postbox" style="border-left:4px solid #f56e28;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-settings"></span> ⚙️ Historical Backfill Range (Per Index)</h2></div>';
         echo '<div class="inside">';
@@ -3681,7 +4011,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
         echo '<p style="color:#666; font-size:12px; margin-top:10px;">Note: SIVI is capped at 2004 due to Maritime LSCI data availability.</p>';
         echo '</div></div>';
 
-        // ─── SECTION 7: API DIAGNOSTIC SANDBOX ────────────────────────
+        // ─── SECTION 9: API DIAGNOSTIC SANDBOX ────────────────────────
         echo '<div class="postbox" style="border-left:4px solid #00a0d2; background:#fff;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-testimonial"></span> API Diagnostic Sandbox (Single Target Tester)</h2></div>';
         echo '<div class="inside">';
@@ -3895,7 +4225,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 8: API CALL LOGS ──────────────────────────────────
+        // ─── SECTION 10: API CALL LOGS ──────────────────────────────────
         echo '<div class="postbox" style="border-left:4px solid #f56e28;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-list-view"></span> API Call Logs &amp; Historical Summaries</h2></div>';
         echo '<div class="inside">';
@@ -3977,7 +4307,7 @@ if ( ! function_exists( 'blomstra_ref_render_page' ) ) {
 
         echo '</div></div>';
 
-        // ─── SECTION 9: RAW DEBUG INSPECTOR ───────────────────────────
+        // ─── SECTION 11: RAW DEBUG INSPECTOR ───────────────────────────
         echo '<div class="postbox" style="background:#f4f4f4;">';
         echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-code-standards"></span> Raw Debug &amp; Dump Inspector</h2></div>';
         echo '<div class="inside">';
@@ -4500,7 +4830,8 @@ function blomstra_get_historical_data( $source, $indicator, $fuel, $iso3_list, $
 // ─── YEAR‑SPECIFIC FETCHERS (EIA, HHI, Maritime) ──────────────────
 
 function blomstra_fetch_eia_for_year( $year, $iso3_list = null ) {
-    if ( ! defined( 'EIA_API_KEY' ) || EIA_API_KEY === '' ) {
+    $key = blomstra_get_api_credential( 'eia', 'api_key' );
+    if ( empty( $key ) ) {
         return array( 'consumption' => array(), 'production' => array() );
     }
 
@@ -4607,7 +4938,8 @@ function blomstra_eia_fetch_one_fuel_activity( $iso3_list, $year, $product_id, $
 }
 
 function blomstra_fetch_hhi_for_year( $year, $iso3_list = null ) {
-    if ( ! defined( 'COMTRADE_PRIMARY_KEY' ) || COMTRADE_PRIMARY_KEY === '' ) {
+    $key = blomstra_get_api_credential( 'comtrade', 'subscription_key' );
+    if ( empty( $key ) ) {
         return array();
     }
 
