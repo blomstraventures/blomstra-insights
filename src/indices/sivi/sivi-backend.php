@@ -1,29 +1,18 @@
 /**
- * Sovereign Infrastructure Vulnerability Index (SIVI) — v2.8.3
+ * Sovereign Infrastructure Vulnerability Index (SIVI) — v2.8.5
  *
  * @package     Blomstra\Insights\Indices\SIVI
  * @since       1.0.0
- * @version     2.8.3  – Fixes from code review: alerts, admin names, guards, validation, UTC, constants, dynamic pillar count
+ * @version     2.8.5  – Build lock TTL extended to 30 minutes; dependency checks removed
  * @author      Blomstra Insights Team
  * @license     Proprietary
  *
  * ============================================================================
- * CHANGELOG (v2.8.3)
+ * CHANGELOG (v2.8.5)
  * ============================================================================
- * - Alerts moved after validation and only for published builds (not scenarios)
- * - Admin preview tables now display country names instead of ISO3 codes
- * - All central function calls in auto-refresh are guarded with function_exists
- * - Scenario JSON validation checks for required composite keys
- * - Cron schedule uses UTC timezone
- * - SIVI_BACKFILL_MIN_YEAR constant replaces hardcoded 2004
- * - Magic numbers for pillar count replaced with count($all_pillars)
- * - Default weights in admin now use sivi_get_composite_weights()
- * - Comment added about partial-rank assumption
- * - DQI functions in historical snapshot guarded
- * - Excluded countries now store 'name' for admin display
- * - Added error_log when landlocked function missing
- * - Added Cache-Control header to REST endpoint
- * - Replaced stray json_encode with wp_json_encode
+ * - Build lock TTL increased from 5 to 30 minutes (prevents race conditions)
+ * - Removed top‑level dependency checks (they caused persistent warnings in Code Snippets)
+ *   All necessary fallbacks are already in place.
  * ============================================================================
  */
 
@@ -35,7 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // 1.  CONSTANTS
 // ============================================================================
 
-define( 'SIVI_VERSION', '2.8.3' );
+define( 'SIVI_VERSION', '2.8.5' );
 define( 'SIVI_OPTION_KEY', 'sivi_composite_index' );
 define( 'SIVI_STAGING_KEY', SIVI_OPTION_KEY . '_staging' );
 define( 'SIVI_MIN_PILLARS_REQUIRED', 2 );
@@ -50,7 +39,8 @@ define( 'SIVI_HHI_META_KEY', 'sivi_hhi_meta' );
 define( 'SIVI_MARITIME_META_KEY', 'sivi_maritime_meta' );
 
 if ( ! defined( 'SIVI_LOCK_TTL' ) ) {
-    define( 'SIVI_LOCK_TTL', 5 * MINUTE_IN_SECONDS );
+    // Extended from 5 to 30 minutes to prevent race conditions on slow builds
+    define( 'SIVI_LOCK_TTL', 30 * MINUTE_IN_SECONDS );
 }
 
 // ─── DQI (Data Quality Index) – Phase 5b ────────────────────────────
