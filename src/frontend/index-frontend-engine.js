@@ -1,17 +1,8 @@
 /* =====================================================================
-   Blomstra Index Frontend Engine — v3.9.6 (FIXED)
-   - Delta colours handled by CSS (green ↑, red ↓)
-   - Map zoom unified: +, -, Ctrl+scroll, double-click all use 1.12/0.89
-   - FIX: wheelDelta callback now correctly receives the wheel event
-     (was destructured as `transform, event` — d3 only ever passes the
-     event as the first arg, so `event` was undefined and every
-     ctrl+scroll threw inside the callback and silently did nothing)
-   - Zoom step bumped from 1.08/0.93 to 1.12/0.89 (previous step felt
-     too small per user feedback)
-   - DQI column removed from table
-   - Ranks recomputed among common countries
-   - Markers offset, purple colour
-   - Year slider right-aligned, legend left-aligned
+   Blomstra Index Frontend Engine — v3.9.8
+   - Dynamic year slider (reads min/max from data attributes)
+   - Zoom hint reappears on map re‑entry (IntersectionObserver, 3s fade)
+   - All previous map zoom fixes preserved
    ===================================================================== */
 (function () {
     'use strict';
@@ -91,6 +82,10 @@
         var scoreLabel = root.getAttribute('data-biw-score-label') || 'Vulnerability Score';
         var methodology = root.getAttribute('data-biw-methodology') || '';
 
+        // ─── Dynamic year range from data attributes ──────────────────
+        var minYear = parseInt(root.getAttribute('data-biw-year-min')) || 2004;
+        var maxYear = parseInt(root.getAttribute('data-biw-year-max')) || (new Date().getFullYear());
+
         var watchlistKey = 'biw_watchlist_' + slug;
         var watchlist = [];
         try { watchlist = JSON.parse(localStorage.getItem(watchlistKey) || '[]'); } catch (e) { watchlist = []; }
@@ -109,14 +104,16 @@
             d3Ready: false,
             d3Error: null,
             compareList: [],
-            isDark: true,
+            isDark: false, //default theme bright
             hasRegionData: false,
-            selectedYear: 2026,
+            selectedYear: maxYear,
             mapLayer: 'score',
             mapProjection: null,
             mapPath: null,
             mapFeatures: null,
-            mapMarkers: null
+            mapMarkers: null,
+            mapHintObserver: null,
+            mapHintTimeout: null
         };
 
         root.innerHTML = buildShell();
@@ -337,8 +334,8 @@
                 '    <div class="biw-map-tooltip" id="biw-map-tooltip"></div>' +
                 '    <div class="biw-year-slider-container">' +
                 '      <label>Year</label>' +
-                '      <input type="range" id="biw-year-slider" min="2021" max="2026" step="1" value="2026">' +
-                '      <span class="year-label" id="biw-year-label">2026</span>' +
+                '      <input type="range" id="biw-year-slider" min="' + minYear + '" max="' + maxYear + '" step="1" value="' + maxYear + '">' +
+                '      <span class="year-label" id="biw-year-label">' + maxYear + '</span>' +
                 '      <button class="play-btn" id="biw-play-btn">▶</button>' +
                 '    </div>' +
                 '    <div class="biw-legend-horizontal">' +
@@ -1028,12 +1025,9 @@
             var path = d3.geoPath().projection(projection);
 
             // ─── Zoom handler with unified factors ──────────────────
-            // Buttons / dblclick use scaleBy(1.12 / 0.89). The wheel
-            // handler below is tuned to feel like roughly the same
-            // "notch size" per scroll tick / trackpad pinch step.
             var ZOOM_STEP_IN = 1.12;
             var ZOOM_STEP_OUT = 0.89;
-            var WHEEL_SENSITIVITY = 0.0018; // bump up/down to taste
+            var WHEEL_SENSITIVITY = 0.0018;
 
             var zoom = d3.zoom()
                 .scaleExtent([1, 10])
@@ -1043,20 +1037,16 @@
                             event.preventDefault();
                             return true;
                         }
-                        return false; // let page scroll normally
+                        return false;
                     }
                     if (event.type === 'dblclick') {
                         event.preventDefault();
-                        return false; // block default double-click zoom
+                        return false;
                     }
                     return true;
                 })
                 .wheelDelta(function (event) {
-                    // IMPORTANT: d3 calls this with the wheel event as the
-                    // ONLY argument. Naming the param anything other than
-                    // the event (e.g. `transform, event`) leaves `event`
-                    // undefined and this throws on every scroll — which is
-                    // why ctrl+scroll previously did nothing.
+                    // d3 passes ONLY the wheel event as the first argument
                     return -event.deltaY * WHEEL_SENSITIVITY * ZOOM_STEP_IN;
                 })
                 .on('zoom', function (e) {
@@ -1071,15 +1061,64 @@
                 svg.transition().duration(300).call(zoom.scaleBy, ZOOM_STEP_IN);
             });
 
+            // ─── Zoom hint with IntersectionObserver ────────────────
             var hint = container.querySelector('.biw-zoom-hint');
             if (!hint) {
                 hint = document.createElement('div');
                 hint.className = 'biw-zoom-hint';
                 hint.textContent = 'Ctrl+scroll to zoom · Double-click to zoom in · Drag to pan';
                 container.appendChild(hint);
-                setTimeout(function () { hint.style.opacity = '0'; }, 5000);
             }
 
+            // Function to show the hint and start the 3‑second fade timer
+            function showHint() {
+                if (!hint) return;
+                // Clear any existing timeout
+                if (state.mapHintTimeout) {
+                    clearTimeout(state.mapHintTimeout);
+                    state.mapHintTimeout = null;
+                }
+                // Reset opacity and display
+                hint.style.opacity = '1';
+                hint.style.display = 'block';
+                // Start timer to fade out
+                state.mapHintTimeout = setTimeout(function () {
+                    hint.style.opacity = '0';
+                    // After fade, we can keep it hidden but still in DOM
+                    setTimeout(function () {
+                        hint.style.display = 'none';
+                    }, 300);
+                }, 3000);
+            }
+
+            // If the container is already visible, show the hint immediately
+            // We'll use a small delay to ensure layout is settled
+            setTimeout(function () {
+                var rect2 = container.getBoundingClientRect();
+                if (rect2.width > 0 && rect2.height > 0 &&
+                    rect2.top < window.innerHeight && rect2.bottom > 0) {
+                    showHint();
+                }
+            }, 100);
+
+            // Set up IntersectionObserver to re‑show when the map comes into view
+            if (window.IntersectionObserver) {
+                // Disconnect previous observer if any
+                if (state.mapHintObserver) {
+                    state.mapHintObserver.disconnect();
+                }
+                state.mapHintObserver = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) {
+                            // Map became visible – show hint again
+                            showHint();
+                        }
+                    });
+                }, { threshold: 0.1 });
+                state.mapHintObserver.observe(container);
+            }
+
+            // ─── Zoom buttons ──────────────────────────────────────
             var zoomIn = container.querySelector('.biw-zoom-in');
             var zoomOut = container.querySelector('.biw-zoom-out');
             var zoomReset = container.querySelector('.biw-zoom-reset');
@@ -1092,8 +1131,8 @@
             var label = container.querySelector('#biw-year-label');
             var playBtn = container.querySelector('#biw-play-btn');
             if (slider && label) {
-                slider.value = year || 2026;
-                label.textContent = year || 2026;
+                slider.value = year || maxYear;
+                label.textContent = year || maxYear;
 
                 var isPlaying = false;
                 var playInterval = null;
@@ -1124,9 +1163,9 @@
                     isPlaying = true;
                     playBtn.textContent = '⏸';
                     var currentYear = parseInt(slider.value, 10);
-                    var maxYear = parseInt(slider.max, 10);
+                    var maxYearAttr = parseInt(slider.max, 10);
                     playInterval = setInterval(function() {
-                        if (currentYear >= maxYear) {
+                        if (currentYear >= maxYearAttr) {
                             clearInterval(playInterval);
                             isPlaying = false;
                             playBtn.textContent = '▶';
@@ -1373,7 +1412,7 @@
         // ─── Drawer ──────────────────────────────────────────────────
         function openDrawer(c, year) {
             if (!c) return;
-            year = year || state.selectedYear || 2026;
+            year = year || state.selectedYear || maxYear;
             state.selectedCountry = c;
 
             var histEntry = getHistoricalEntry(c.iso3, year);
@@ -2225,7 +2264,7 @@
 
         function renderDashboard() {
             if (view !== 'dashboard') return;
-            renderMap('score', 2026);
+            renderMap('score', maxYear);
             renderDonut();
             renderExtremes();
             renderHistogram();
