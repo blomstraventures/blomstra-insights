@@ -1,19 +1,14 @@
 /**
- * Sovereign Infrastructure Vulnerability Index (SIVI) — v2.8.5
+ * Sovereign Infrastructure Vulnerability Index (SIVI) — v3.1.1
+ *
+ * Refactored to use the generic index builder orchestrator.
+ * Fixed: update_option after reshaping, historical backfill isolation, memoized fetchers.
  *
  * @package     Blomstra\Insights\Indices\SIVI
  * @since       1.0.0
- * @version     2.8.5  – Build lock TTL extended to 30 minutes; dependency checks removed
+ * @version     3.1.1  – Critical bug fixes for generic builder integration
  * @author      Blomstra Insights Team
  * @license     Proprietary
- *
- * ============================================================================
- * CHANGELOG (v2.8.5)
- * ============================================================================
- * - Build lock TTL increased from 5 to 30 minutes (prevents race conditions)
- * - Removed top‑level dependency checks (they caused persistent warnings in Code Snippets)
- *   All necessary fallbacks are already in place.
- * ============================================================================
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -21,14 +16,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // ============================================================================
-// 1.  CONSTANTS
+// 1. CONSTANTS
 // ============================================================================
 
-define( 'SIVI_VERSION', '2.8.5' );
+define( 'SIVI_VERSION', '3.1.1' );
 define( 'SIVI_OPTION_KEY', 'sivi_composite_index' );
 define( 'SIVI_STAGING_KEY', SIVI_OPTION_KEY . '_staging' );
 define( 'SIVI_MIN_PILLARS_REQUIRED', 2 );
-define( 'SIVI_BACKFILL_MIN_YEAR', 2004 ); // Maritime data availability
+define( 'SIVI_BACKFILL_MIN_YEAR', 2004 );
 
 define( 'SIVI_ENERGY_KEY', 'sivi_energy_data' );
 define( 'SIVI_HHI_KEY', 'sivi_hhi_data' );
@@ -39,22 +34,19 @@ define( 'SIVI_HHI_META_KEY', 'sivi_hhi_meta' );
 define( 'SIVI_MARITIME_META_KEY', 'sivi_maritime_meta' );
 
 if ( ! defined( 'SIVI_LOCK_TTL' ) ) {
-    // Extended from 5 to 30 minutes to prevent race conditions on slow builds
     define( 'SIVI_LOCK_TTL', 30 * MINUTE_IN_SECONDS );
 }
 
-// ─── DQI (Data Quality Index) – Phase 5b ────────────────────────────
-define( 'SIVI_MAX_LAG_ENERGY', 3 );    // EIA annual data, typical 1-2 year lag
-define( 'SIVI_MAX_LAG_HHI', 3 );       // Comtrade annual data, typical 1-2 year lag
-define( 'SIVI_MAX_LAG_MARITIME', 5 );  // LSCI multi-year cadence (last major update 2021)
+// ─── DQI ──────────────────────────────────────────────────────────
+define( 'SIVI_MAX_LAG_ENERGY', 3 );
+define( 'SIVI_MAX_LAG_HHI', 3 );
+define( 'SIVI_MAX_LAG_MARITIME', 5 );
 define( 'SIVI_CURRENT_YEAR', (int) date('Y') );
 
-// ─── Auto‑refresh hook ────────────────────────────────────────────────
 define( 'SIVI_AUTO_REFRESH_HOOK', 'sivi_auto_refresh_cron' );
 
-
 // ============================================================================
-// 2.  PILLAR DEFINITIONS & WEIGHTS
+// 2. PILLAR DEFINITIONS & WEIGHTS
 // ============================================================================
 
 function sivi_get_pillar_weights() {
@@ -112,9 +104,7 @@ function sivi_get_pillar_defs() {
     );
 }
 
-// ─── Supports custom composite weights from options ──────────────────
 function sivi_get_composite_weights() {
-    // Check for custom weights stored in options
     $custom = get_option( 'sivi_custom_composite_weights', false );
     if ( is_array( $custom ) && isset( $custom['energy'], $custom['hhi'], $custom['maritime'] ) ) {
         $sum = (float) $custom['energy'] + (float) $custom['hhi'] + (float) $custom['maritime'];
@@ -125,11 +115,9 @@ function sivi_get_composite_weights() {
                 'maritime' => (float) $custom['maritime'],
             );
         }
-        // If sum invalid, fall back to defaults and delete the invalid option
         delete_option( 'sivi_custom_composite_weights' );
         error_log( 'SIVI: Invalid custom weights sum (' . $sum . '), reset to defaults.' );
     }
-    // Default fallback
     return array(
         'energy'   => 33.3333,
         'hhi'      => 33.3333,
@@ -137,16 +125,14 @@ function sivi_get_composite_weights() {
     );
 }
 
-
 // ============================================================================
-// 3.  LANDLOCKED CHECK
+// 3. LANDLOCKED CHECK
 // ============================================================================
 
 function sivi_is_landlocked( $iso3 ) {
     if ( function_exists( 'blomstra_is_landlocked' ) ) {
         return blomstra_is_landlocked( $iso3 );
     }
-    // Log once if the function is missing (silent fallback to false)
     static $logged = false;
     if ( ! $logged ) {
         error_log( 'SIVI: blomstra_is_landlocked() not available – falling back to false for all countries.' );
@@ -155,9 +141,8 @@ function sivi_is_landlocked( $iso3 ) {
     return false;
 }
 
-
 // ============================================================================
-// 4.  COUNTRY LIST WRAPPERS
+// 4. COUNTRY LIST WRAPPERS
 // ============================================================================
 
 function sivi_get_global_country_list() {
@@ -199,20 +184,10 @@ function sivi_get_global_country_list_fallback() {
     return $names;
 }
 
-
 // ============================================================================
-// 5.  ENERGY PILLAR – PURE CONSUMER (with year tracking)
+// 5. ENERGY PILLAR – PURE CONSUMER
 // ============================================================================
 
-/**
- * Aggregates energy dependency from consumption and production data.
- * Also extracts the year of the consumption data for DQI.
- *
- * @param array $iso3_list              List of ISO3 codes.
- * @param array $consumption_by_fuel    Multi-dimensional: fuel_id => iso3 => { value, year, status }.
- * @param array $production_by_fuel     Multi-dimensional: fuel_id => iso3 => { value, status }.
- * @return array Computed energy dependency per country with year.
- */
 function sivi_eia_aggregate_energy_dependency( $iso3_list, $consumption_by_fuel, $production_by_fuel ) {
     $fuel_ids = array(
         '4411' => 'Coal',
@@ -228,17 +203,14 @@ function sivi_eia_aggregate_energy_dependency( $iso3_list, $consumption_by_fuel,
         $representative_year = null;
 
         foreach ( $fuel_ids as $product_id => $fuel_name ) {
-            // ─── Consumption ──────────────────────────────────────────
             $cons_entry = $consumption_by_fuel[ $product_id ][ $iso3 ] ?? null;
             $consumption = null;
             $year = null;
 
             if ( is_array( $cons_entry ) ) {
-                // New structure: ['value' => float, 'year' => int, 'status' => string]
                 $consumption = isset( $cons_entry['value'] ) && is_numeric( $cons_entry['value'] ) ? (float) $cons_entry['value'] : null;
                 $year = isset( $cons_entry['year'] ) ? (int) $cons_entry['year'] : null;
             } elseif ( is_numeric( $cons_entry ) ) {
-                // Legacy fallback (if data is still stored as pure number)
                 $consumption = (float) $cons_entry;
                 $year = null;
             }
@@ -247,7 +219,6 @@ function sivi_eia_aggregate_energy_dependency( $iso3_list, $consumption_by_fuel,
                 continue;
             }
 
-            // ─── Production ──────────────────────────────────────────
             $prod_entry = $production_by_fuel[ $product_id ][ $iso3 ] ?? null;
             $production = null;
             $prod_note = 'real production value';
@@ -274,10 +245,9 @@ function sivi_eia_aggregate_energy_dependency( $iso3_list, $consumption_by_fuel,
                 'production'  => $production,
                 'dependency'  => round( $fuel_dep, 2 ),
                 'note'        => $prod_note,
-                'year'        => $year,  // ← store per-fuel year
+                'year'        => $year,
             );
 
-            // Track the most recent year among fuels
             if ( $year !== null && ( $representative_year === null || $year > $representative_year ) ) {
                 $representative_year = $year;
             }
@@ -309,7 +279,6 @@ function sivi_eia_aggregate_energy_dependency( $iso3_list, $consumption_by_fuel,
             continue;
         }
 
-        // Weighted dependency
         $weighted_sum = 0;
         $fuel_names_used = array();
         foreach ( $fuels as $pid => $f ) {
@@ -323,7 +292,7 @@ function sivi_eia_aggregate_energy_dependency( $iso3_list, $consumption_by_fuel,
             'source' => 'EIA (multi-fuel, consumption-weighted)',
             'note'   => count( $fuels ) . '/' . count( $fuel_ids ) . ' fuels had usable data',
             'fuels'  => $fuels,
-            'year'   => $representative_year,   // ← now passed to persistence
+            'year'   => $representative_year,
         );
     }
     return $out;
@@ -338,7 +307,7 @@ function sivi_persist_energy_results( $iso3_list, $computed ) {
             'value'        => $c['value'],
             'source'       => $c['source'],
             'note'         => $c['note'] ?? '',
-            'data_year'    => $c['year'] ?? null,  // ← stored for DQI
+            'data_year'    => $c['year'] ?? null,
             'last_updated' => current_time( 'mysql' ),
         );
         if ( function_exists( 'blomstra_track_source' ) ) {
@@ -368,9 +337,8 @@ function sivi_refresh_energy_pillar() {
     return sivi_persist_energy_results( $iso3_list, $computed );
 }
 
-
 // ============================================================================
-// 6.  MARITIME PILLAR – PURE CONSUMER
+// 6. MARITIME PILLAR
 // ============================================================================
 
 function sivi_refresh_maritime_pillar() {
@@ -420,9 +388,8 @@ function sivi_refresh_maritime_pillar() {
     return $results;
 }
 
-
 // ============================================================================
-// 7.  HHI PILLAR – PURE CONSUMER
+// 7. HHI PILLAR
 // ============================================================================
 
 function sivi_merge_hhi_into_pillar( $iso3_list ) {
@@ -457,63 +424,18 @@ function sivi_refresh_hhi_pillar() {
     return sivi_merge_hhi_into_pillar( $iso3_list );
 }
 
-
 // ============================================================================
-// 8.  PERCENTILE COMPUTATION
-// ============================================================================
-
-function sivi_compute_percentile_ranks( $values_by_iso3, $winsor_pct = 0.0 ) {
-    if ( function_exists( 'blomstra_compute_percentile_ranks_safe' ) ) {
-        return blomstra_compute_percentile_ranks_safe( $values_by_iso3, $winsor_pct );
-    }
-    // Minimal fallback (should not happen if utilities are loaded)
-    $n = count( $values_by_iso3 );
-    if ( $n === 0 ) { return array(); }
-    if ( $n === 1 ) {
-        $only = array_keys( $values_by_iso3 );
-        return array( $only[0] => 50.0 );
-    }
-    $pairs = $values_by_iso3;
-    asort( $pairs );
-    $sorted_values = array_values( $pairs );
-    $sorted_iso3   = array_keys( $pairs );
-    $ranks = array();
-    $i = 0;
-    while ( $i < $n ) {
-        $j = $i;
-        while ( $j < $n - 1 && abs( $sorted_values[ $j + 1 ] - $sorted_values[ $i ] ) < 0.0001 ) {
-            $j++;
-        }
-        $avg_rank = ( ( $i + 1 ) + ( $j + 1 ) ) / 2;
-        for ( $k = $i; $k <= $j; $k++ ) {
-            $ranks[ $sorted_iso3[ $k ] ] = $avg_rank;
-        }
-        $i = $j + 1;
-    }
-    $percentiles = array();
-    foreach ( $ranks as $iso3 => $rank ) {
-        $percentiles[ $iso3 ] = round( ( ( $rank - 0.5 ) / $n ) * 100, 2 );
-    }
-    return $percentiles;
-}
-
-
-// ============================================================================
-// 9.  UPSTREAM HEALTH CHECK
+// 8. UPSTREAM HEALTH CHECK
 // ============================================================================
 
 function sivi_check_upstream_health() {
     $warnings = array();
-    
-    // HHI pointer check
     if ( function_exists( 'blomstra_get_hhi_pointer' ) ) {
         $hhi_pointer = blomstra_get_hhi_pointer();
         if ( ! empty( $hhi_pointer['pending_iso3s'] ) ) {
             $warnings[] = 'HHI data is still being fetched (' . count( $hhi_pointer['pending_iso3s'] ) . ' countries pending).';
         }
     }
-    
-    // EIA pointer check
     if ( function_exists( 'blomstra_get_eia_pointer' ) ) {
         $eia_pointer = blomstra_get_eia_pointer();
         $fuel_ids = defined( 'BLOMSTRA_EIA_FUEL_PRODUCT_IDS' ) ? array_keys( BLOMSTRA_EIA_FUEL_PRODUCT_IDS ) : array();
@@ -521,531 +443,245 @@ function sivi_check_upstream_health() {
             $warnings[] = 'EIA data is still being fetched (fuel ' . ( $eia_pointer['fuel_index'] + 1 ) . ' of ' . count( $fuel_ids ) . ').';
         }
     }
-    
     return $warnings;
 }
 
+// ============================================================================
+// 9. SIVI CONFIG FOR GENERIC BUILDER (with memoized fetchers)
+// ============================================================================
+
+/**
+ * Returns the configuration array for the generic index builder for SIVI.
+ * Includes memoized fetchers to avoid duplicate API calls.
+ *
+ * @param array|null $custom_composite_weights Optional custom weights.
+ * @return array
+ */
+function sivi_get_generic_config( $custom_composite_weights = null ) {
+    $energy_store   = get_option( SIVI_ENERGY_KEY, array() );
+    $hhi_store      = get_option( SIVI_HHI_KEY, array() );
+    $maritime_store = get_option( SIVI_MARITIME_KEY, array() );
+
+    $energy_data    = $energy_store['data'] ?? array();
+    $hhi_data       = $hhi_store['data'] ?? array();
+    $maritime_data  = $maritime_store['data'] ?? array();
+
+    // ─── Raw value callbacks ──────────────────────────────────────
+    $get_raw_energy = function( $iso3_list ) use ( $energy_data ) {
+        $out = array();
+        foreach ( $iso3_list as $iso3 ) {
+            if ( isset( $energy_data[ $iso3 ]['value'] ) && is_numeric( $energy_data[ $iso3 ]['value'] ) ) {
+                $out[ $iso3 ] = (float) $energy_data[ $iso3 ]['value'];
+            }
+        }
+        return $out;
+    };
+
+    $get_raw_hhi = function( $iso3_list ) use ( $hhi_data ) {
+        $out = array();
+        foreach ( $iso3_list as $iso3 ) {
+            if ( isset( $hhi_data[ $iso3 ]['value'] ) && is_numeric( $hhi_data[ $iso3 ]['value'] ) ) {
+                $out[ $iso3 ] = (float) $hhi_data[ $iso3 ]['value'];
+            }
+        }
+        return $out;
+    };
+
+    $get_raw_maritime_connectivity = function( $iso3_list ) use ( $maritime_data ) {
+        $out = array();
+        foreach ( $iso3_list as $iso3 ) {
+            if ( isset( $maritime_data[ $iso3 ]['value'] ) && is_numeric( $maritime_data[ $iso3 ]['value'] ) ) {
+                $out[ $iso3 ] = (float) $maritime_data[ $iso3 ]['value'];
+            }
+        }
+        return $out;
+    };
+
+    // ─── Data years callback (for DQI) ────────────────────────────
+    $get_data_years = function( $iso3_list ) use ( $energy_data, $hhi_data, $maritime_data ) {
+        $result = array();
+        foreach ( $iso3_list as $iso3 ) {
+            $result[ $iso3 ] = array(
+                'energy'   => isset( $energy_data[ $iso3 ]['data_year'] ) ? (int) $energy_data[ $iso3 ]['data_year'] : null,
+                'hhi'      => isset( $hhi_data[ $iso3 ]['year'] ) ? (int) $hhi_data[ $iso3 ]['year'] : null,
+                'maritime' => isset( $maritime_data[ $iso3 ]['year'] ) ? (int) $maritime_data[ $iso3 ]['year'] : null,
+            );
+        }
+        return $result;
+    };
+
+    $composite_weights = $custom_composite_weights ?? sivi_get_composite_weights();
+
+    return array(
+        'index_slug'          => 'sivi',
+        'pillar_keys'         => array( 'energy', 'hhi', 'maritime' ),
+        'pillar_weights'      => $composite_weights,
+        'min_pillars_required'=> SIVI_MIN_PILLARS_REQUIRED,
+        'get_raw_values'      => array(
+            'energy'   => $get_raw_energy,
+            'hhi'      => $get_raw_hhi,
+            'maritime' => $get_raw_maritime_connectivity,
+        ),
+        'winsorization' => array(
+            'energy'   => 0.0,
+            'hhi'      => 0.0,
+            'maritime' => 0.01,
+        ),
+        'post_percentile_transform' => array(
+            'maritime' => function( $pct ) { return 100 - $pct; },
+        ),
+        'get_data_years' => $get_data_years,
+        'is_landlocked_check' => 'sivi_is_landlocked',
+        'dqi_config' => array(
+            'energy'   => SIVI_MAX_LAG_ENERGY,
+            'hhi'      => SIVI_MAX_LAG_HHI,
+            'maritime' => SIVI_MAX_LAG_MARITIME,
+        ),
+        'benchmark_getter' => function() {
+            $data = get_transient( 'sivi_benchmark_comparator' );
+            return is_array( $data ) ? $data : array();
+        },
+        'sensitivity_enabled' => true,
+        'lock_ttl' => SIVI_LOCK_TTL,
+        'composite_field' => 'sivi_structural',
+        // Historical backfills should not save snapshots twice
+        'skip_snapshot' => false, // Set to true in historical context
+    );
+}
 
 // ============================================================================
-// 10. COMPOSITE BUILDER (with sensitivity, freshness, benchmark, alerts, DQI)
+// 10. COMPOSITE BUILDER – MIGRATED TO GENERIC
 // ============================================================================
 
 function sivi_build_composite( $context = 'manual', $custom_weights = null, $custom_composite_weights = null ) {
     $is_scenario = ( $custom_weights !== null || $custom_composite_weights !== null );
-    $lock_key = 'sivi_build_lock';
 
-    // ─── Acquire lock ──────────────────────────────────────────────
-    $lock = get_transient( $lock_key );
-    if ( $lock !== false && ( time() - (int)$lock ) < SIVI_LOCK_TTL ) {
-        return array( 'error' => 'Build already in progress. Please wait.' );
+    // Build config (we ignore $custom_weights for now – they are pillar-level weights, not composite weights)
+    $config = sivi_get_generic_config( $custom_composite_weights );
+
+    // Call generic builder
+    $generic_output = blomstra_build_index_composite( $config, $context );
+
+    if ( is_wp_error( $generic_output ) ) {
+        return array( 'error' => $generic_output->get_error_message() );
     }
-    set_transient( $lock_key, time(), SIVI_LOCK_TTL );
 
-    // ─── OOM protection ────────────────────────────────────────────
-    $lock_cleared = false;
-    $shutdown = function() use ( $lock_key, &$lock_cleared ) {
-        if ( ! $lock_cleared ) {
-            delete_transient( $lock_key );
-            error_log( 'SIVI: Build lock cleared by shutdown handler (OOM or fatal).' );
-        }
-    };
-    register_shutdown_function( $shutdown );
+    // ─── Post-process the generic output to match original SIVI structure ───
+    $generic_countries = $generic_output['sivi_structural'];
+    $excluded = $generic_output['excluded_detail'] ?? array();
 
-    try {
-        if ( function_exists( 'blomstra_update_cron_status' ) ) {
-            blomstra_update_cron_status( 'sivi', 'running', 'SIVI composite build started.' );
-        }
-
-        // ─── Load pillar data ──────────────────────────────────────
-        $energy_store   = get_option( SIVI_ENERGY_KEY, array() );
-        $hhi_store      = get_option( SIVI_HHI_KEY, array() );
-        $maritime_store = get_option( SIVI_MARITIME_KEY, array() );
-
-        $energy_data    = $energy_store['data'] ?? array();
-        $hhi_data       = $hhi_store['data'] ?? array();
-        $maritime_data  = $maritime_store['data'] ?? array();
-
-        $energy_sources    = $energy_store['sources'] ?? array();
-        $hhi_sources       = $hhi_store['sources'] ?? array();
-        $maritime_sources  = $maritime_store['sources'] ?? array();
-        $all_sources = array_merge_recursive( $energy_sources, $hhi_sources, $maritime_sources );
-
-        $countries = sivi_get_global_country_list();
-        if ( empty( $countries ) ) {
-            throw new Exception( 'No country list available.' );
-        }
-        $all_iso3 = array_keys( $countries );
-        $all_pillars = array( 'energy', 'hhi', 'maritime' );
-
-        // ─── Extract raw values ──────────────────────────────────
-        $energy_raw_values = array();
-        $hhi_raw_values = array();
-        $maritime_raw_values = array();
-
-        foreach ( $energy_data as $iso3 => $row ) {
-            if ( isset( $row['value'] ) && is_numeric( $row['value'] ) ) {
-                $energy_raw_values[ $iso3 ] = (float) $row['value'];
-            }
-        }
-        foreach ( $hhi_data as $iso3 => $row ) {
-            if ( isset( $row['value'] ) && is_numeric( $row['value'] ) ) {
-                $hhi_raw_values[ $iso3 ] = (float) $row['value'];
-            }
-        }
-        foreach ( $maritime_data as $iso3 => $row ) {
-            if ( isset( $row['value'] ) && is_numeric( $row['value'] ) ) {
-                $maritime_raw_values[ $iso3 ] = (float) $row['value'];
-            }
-        }
-
-        // ─── Compute percentiles ──────────────────────────────────
-        $weight_defs = $custom_weights ?? sivi_get_pillar_weights();
-        $energy_winsor   = $weight_defs['energy']['winsorize']['energy_dependency'] ?? 0.0;
-        $hhi_winsor      = $weight_defs['hhi']['winsorize']['supplier_concentration'] ?? 0.0;
-        $maritime_winsor = $weight_defs['maritime']['winsorize']['maritime_connectivity'] ?? 0.0;
-
-        $energy_pct = ! empty( $energy_raw_values ) ? sivi_compute_percentile_ranks( $energy_raw_values, $energy_winsor ) : array();
-        $hhi_pct    = ! empty( $hhi_raw_values ) ? sivi_compute_percentile_ranks( $hhi_raw_values, $hhi_winsor ) : array();
-        $maritime_connectivity_pct  = ! empty( $maritime_raw_values ) ? sivi_compute_percentile_ranks( $maritime_raw_values, $maritime_winsor ) : array();
-        $maritime_vulnerability_pct = array();
-        foreach ( $maritime_connectivity_pct as $iso3 => $pct ) {
-            $maritime_vulnerability_pct[ $iso3 ] = round( 100 - $pct, 2 );
-        }
-
-        // ─── Get composite weights (may be custom) ────────────────
-        $composite_weights = $custom_composite_weights ?? sivi_get_composite_weights();
-
-        // ─── Build results ────────────────────────────────────────
-        $results = array();
-        $excluded = array();
-
-        foreach ( $all_iso3 as $iso3 ) {
-            $present = array();
-            if ( isset( $energy_pct[ $iso3 ] ) ) {
-                $present['energy'] = array( 'value' => $energy_pct[ $iso3 ], 'weight' => $composite_weights['energy'] );
-            }
-            if ( isset( $hhi_pct[ $iso3 ] ) ) {
-                $present['hhi'] = array( 'value' => $hhi_pct[ $iso3 ], 'weight' => $composite_weights['hhi'] );
-            }
-            if ( isset( $maritime_vulnerability_pct[ $iso3 ] ) ) {
-                $present['maritime'] = array( 'value' => $maritime_vulnerability_pct[ $iso3 ], 'weight' => $composite_weights['maritime'] );
-            }
-
-            $pillars_present = count( $present );
-            $missing_pillars = array_values( array_diff( $all_pillars, array_keys( $present ) ) );
-
-            if ( $pillars_present < SIVI_MIN_PILLARS_REQUIRED ) {
-                $excluded[ $iso3 ] = array(
-                    'reason'          => 'Fewer than ' . SIVI_MIN_PILLARS_REQUIRED . ' pillars have real data — not scored.',
-                    'pillars_present' => $pillars_present,
-                    'pillars_missing' => $missing_pillars,
-                    'name'            => $countries[ $iso3 ] ?? $iso3,
-                );
-                continue;
-            }
-
-            $score_sum  = 0;
-            $weight_sum = 0;
-            foreach ( $present as $pillar ) {
-                $score_sum  += $pillar['value'] * $pillar['weight'];
-                $weight_sum += $pillar['weight'];
-            }
-            $composite_score = round( $score_sum / $weight_sum, 1 );
-            $coverage_type = ( $pillars_present >= count( $all_pillars ) ) ? 'full' : 'partial';
-
-            $results[ $iso3 ] = array(
-                'composite_score' => $composite_score,
-                'coverage_type'   => $coverage_type,
-                'energy_dependency_percentile'       => isset( $present['energy'] ) ? $present['energy']['value'] : null,
-                'energy_dependency_raw'              => $energy_raw_values[ $iso3 ] ?? null,
-                'supplier_concentration_percentile'  => isset( $present['hhi'] ) ? $present['hhi']['value'] : null,
-                'supplier_concentration_raw'         => $hhi_raw_values[ $iso3 ] ?? null,
-                'maritime_connectivity_percentile'   => isset( $maritime_connectivity_pct[ $iso3 ] ) ? $maritime_connectivity_pct[ $iso3 ] : null,
-                'maritime_vulnerability_percentile'  => isset( $present['maritime'] ) ? $present['maritime']['value'] : null,
-                'maritime_connectivity_raw'          => $maritime_raw_values[ $iso3 ] ?? null,
-                'is_landlocked'                       => sivi_is_landlocked( $iso3 ),
-                'pillars_used'    => $pillars_present,
-                'pillars_missing' => $missing_pillars,
-                'last_updated'    => current_time( 'mysql' ),
-            );
-        }
-
-        // ─── Rank assignment ──────────────────────────────────────
-        $full_composites_sorted = array();
-        foreach ( $results as $iso3 => $row ) {
-            if ( $row['coverage_type'] === 'full' ) {
-                $full_composites_sorted[] = $row['composite_score'];
-            }
-        }
-
-        $has_display_fns = function_exists( 'blomstra_build_full_rank_display' );
-        $has_partial_display_fns = function_exists( 'blomstra_project_partial_rank_composite' )
-            && function_exists( 'blomstra_build_partial_rank_display' );
-
-        foreach ( $results as $iso3 => &$row ) {
-            if ( $row['coverage_type'] === 'full' ) {
-                $r = 1;
-                foreach ( $full_composites_sorted as $full_score ) {
-                    if ( $row['composite_score'] < $full_score ) {
-                        $r++;
-                    }
-                }
-                $row['rank'] = $r;
-                $row['rank_display'] = $has_display_fns
-                    ? blomstra_build_full_rank_display( $r )
-                    : array(
-                        'is_definitive'    => true,
-                        'best_estimate'    => $r,
-                        'range_80_low'     => $r,
-                        'range_80_high'    => $r,
-                        'theoretical_low'  => $r,
-                        'theoretical_high' => $r,
-                        'string_format'    => '#' . $r,
-                    );
-            }
-        }
-        unset( $row );
-
-        // ─── Partial ranks ─────────────────────────────────────────
-        $pillar_weight_by_name = $composite_weights;
-        $pillar_value_key = array(
-            'energy'   => 'energy_dependency_percentile',
-            'hhi'      => 'supplier_concentration_percentile',
-            'maritime' => 'maritime_vulnerability_percentile',
-        );
-
-        // This relies on SIVI_MIN_PILLARS_REQUIRED = 2 (out of 3), so partial always means exactly one pillar missing.
-        // If MIN_PILLARS_REQUIRED changes, this logic must be revisited.
-        foreach ( $results as $iso3 => &$row ) {
-            if ( $row['coverage_type'] !== 'partial' ) {
-                continue;
-            }
-            $missing_pillar = $row['pillars_missing'][0] ?? null;
-            if ( $missing_pillar === null || ! isset( $pillar_weight_by_name[ $missing_pillar ] ) ) {
-                continue;
-            }
-
-            $known_pillars = array();
-            foreach ( $pillar_weight_by_name as $pname => $pweight ) {
-                if ( $pname === $missing_pillar ) {
-                    continue;
-                }
-                $known_pillars[ $pname ] = $row[ $pillar_value_key[ $pname ] ] ?? 0;
-            }
-
-            $injected_values_by_point = array();
-            foreach ( array( 0, 10, 50, 90, 100 ) as $point ) {
-                $injected_values_by_point[ $point ] = $point;
-            }
-
-            if ( ! $has_partial_display_fns ) {
-                continue;
-            }
-
-            $hypothetical_composites = blomstra_project_partial_rank_composite(
-                $known_pillars,
-                $missing_pillar,
-                $injected_values_by_point,
-                $pillar_weight_by_name
-            );
-            if ( empty( $hypothetical_composites ) ) {
-                continue;
-            }
-
-            $ranks_by_injection = array();
-            foreach ( $hypothetical_composites as $point => $hyp_composite ) {
-                $rank = 1;
-                foreach ( $full_composites_sorted as $full_score ) {
-                    if ( $hyp_composite < $full_score ) {
-                        $rank++;
-                    }
-                }
-                $ranks_by_injection[ $point ] = $rank;
-            }
-
-            $row['rank'] = null;
-            $row['rank_display'] = blomstra_build_partial_rank_display( $ranks_by_injection );
-        }
-        unset( $row );
-
-        // ─── Data Quality & Measurement Flags ────────────────────
-        $country_output = array();
-        foreach ( $results as $iso3 => $row ) {
-            $coverage = ( $row['coverage_type'] === 'full' ) ? count($all_pillars) : (count($all_pillars) - 1);
-            $missing_pillars_list = $row['pillars_missing'];
-
-            $data_quality = array();
-            foreach ( array( 'energy' => 'energy_dependency', 'hhi' => 'supplier_concentration', 'maritime' => 'maritime_connectivity' ) as $pillar => $indicator ) {
-                if ( function_exists( 'blomstra_pillar_quality_score' ) ) {
-                    $data_quality[ $pillar ] = blomstra_pillar_quality_score( $all_sources, $iso3, array( $indicator ) );
-                } else {
-                    $data_quality[ $pillar ] = null;
-                }
-            }
-
-            $measurement_flags = array(
-                'is_landlocked' => sivi_is_landlocked( $iso3 ),
-                'maritime_is_structural_zero' => sivi_is_landlocked( $iso3 ),
-                'coverage_ratio' => $coverage / count($all_pillars),
-                'is_definitive' => ( $coverage == count($all_pillars) ),
-                'missing_pillars' => $missing_pillars_list,
-            );
-
-            $country_output[ $iso3 ] = array(
-                'iso3' => $iso3,
-                'name' => $countries[ $iso3 ] ?? $iso3,
-                'sivi_structural' => $row['composite_score'],
-                'coverage' => $row['coverage_type'],
-                'pillars_missing' => $missing_pillars_list,
-                'data_quality' => $data_quality,
-                'measurement_flags' => $measurement_flags,
-                'rank_display' => $row['rank_display'] ?? null,
-                'energy_dependency_percentile'       => $row['energy_dependency_percentile'],
-                'energy_dependency_raw'              => $row['energy_dependency_raw'],
-                'supplier_concentration_percentile'  => $row['supplier_concentration_percentile'],
-                'supplier_concentration_raw'         => $row['supplier_concentration_raw'],
-                'maritime_connectivity_percentile'   => $row['maritime_connectivity_percentile'],
-                'maritime_vulnerability_percentile'  => $row['maritime_vulnerability_percentile'],
-                'maritime_connectivity_raw'          => $row['maritime_connectivity_raw'],
-                'is_landlocked'                       => $row['is_landlocked'],
-                'pillars_used'    => $row['pillars_used'],
-                'pillars_missing' => $row['pillars_missing'],
-                'last_updated'    => $row['last_updated'],
-                'pillars' => array(
-                    'energy'   => array( 'score' => $row['energy_dependency_percentile'], 'weight' => $composite_weights['energy'] ?? 33.3333 ),
-                    'hhi'      => array( 'score' => $row['supplier_concentration_percentile'], 'weight' => $composite_weights['hhi'] ?? 33.3333 ),
-                    'maritime' => array( 'score' => $row['maritime_vulnerability_percentile'], 'weight' => $composite_weights['maritime'] ?? 33.3334 ),
-                ),
-            );
-        }
-
-        // ─── Assemble output ──────────────────────────────────────
-        $output = array(
-            'version'         => SIVI_VERSION,
-            'last_updated'    => current_time( 'mysql' ),
-            'total_countries' => count( $country_output ),
-            'excluded'        => count( $excluded ),
-            'excluded_detail' => $excluded,
-            'methodology_url'     => 'https://blomstrainsights.com/methodology/sivi',
-            'methodology_summary' => 'Percentile-rank composite (Energy dependency, HHI supplier concentration, inverted Maritime connectivity).',
-            'footnote'        => 'Partial ranks are projections...',
-            'weights' => $composite_weights,
-            '_meta' => array(
-                'built_at'            => current_time( 'mysql' ),
-                'source'              => $context,
-                'status'              => 'valid',
-                'standard_version'    => 'BMS-1.1.0',
-                'methodology_version' => SIVI_VERSION,
-                'software_version'    => SIVI_VERSION,
-                'dqi_config' => array(
-                    'energy_max_lag'   => SIVI_MAX_LAG_ENERGY,
-                    'hhi_max_lag'      => SIVI_MAX_LAG_HHI,
-                    'maritime_max_lag' => SIVI_MAX_LAG_MARITIME,
-                    'reference_year'   => SIVI_CURRENT_YEAR,
-                ),
+    // Build the SIVI-specific country array
+    $transformed_countries = array();
+    foreach ( $generic_countries as $iso3 => $gen_row ) {
+        $entry = array(
+            'iso3' => $iso3,
+            'name' => $gen_row['name'],
+            'sivi_structural' => $gen_row['composite_score'],
+            'coverage' => $gen_row['coverage'],
+            'pillars_missing' => $gen_row['pillars_missing'] ?? array(),
+            'rank_display' => $gen_row['rank_display'] ?? null,
+            'last_updated' => $gen_row['last_updated'],
+            'energy_dependency_percentile' => $gen_row['pillars']['energy']['score'] ?? null,
+            'energy_dependency_raw' => $gen_row['pillars']['energy']['raw'] ?? null,
+            'supplier_concentration_percentile' => $gen_row['pillars']['hhi']['score'] ?? null,
+            'supplier_concentration_raw' => $gen_row['pillars']['hhi']['raw'] ?? null,
+            'maritime_connectivity_percentile' => $gen_row['pillars']['maritime']['raw_percentile'] ?? null,
+            'maritime_vulnerability_percentile' => $gen_row['pillars']['maritime']['score'] ?? null,
+            'maritime_connectivity_raw' => $gen_row['pillars']['maritime']['raw'] ?? null,
+            'is_landlocked' => sivi_is_landlocked( $iso3 ),
+            'pillars_used' => $gen_row['pillars_used'] ?? 0,
+            'pillars_missing' => $gen_row['pillars_missing'] ?? array(),
+            'pillars' => array(
+                'energy'   => array( 'score' => $gen_row['pillars']['energy']['score'] ?? null, 'weight' => $config['pillar_weights']['energy'] ),
+                'hhi'      => array( 'score' => $gen_row['pillars']['hhi']['score'] ?? null, 'weight' => $config['pillar_weights']['hhi'] ),
+                'maritime' => array( 'score' => $gen_row['pillars']['maritime']['score'] ?? null, 'weight' => $config['pillar_weights']['maritime'] ),
             ),
-            'countries' => $country_output,
         );
 
-        // ─── Upstream warnings (FIX: clear stale warnings) ──────
-        $warnings = sivi_check_upstream_health();
-        if ( ! empty( $warnings ) ) {
-            $output['_meta']['upstream_warnings'] = $warnings;
-        } else {
-            // Remove any stale upstream warnings from previous builds
-            unset( $output['_meta']['upstream_warnings'] );
-        }
-
-        // ─── Weight‑sensitivity interval ───────────────────────────
-        if ( function_exists( 'blomstra_bootstrap_ci' ) ) {
-            $pillar_values_by_country = array();
-            foreach ( $results as $iso3 => $row ) {
-                if ( $row['coverage_type'] === 'full' ) {
-                    $pillar_values_by_country[ $iso3 ] = array(
-                        'energy'   => $row['energy_dependency_percentile'],
-                        'hhi'      => $row['supplier_concentration_percentile'],
-                        'maritime' => $row['maritime_vulnerability_percentile'],
-                    );
-                }
-            }
-            if ( ! empty( $pillar_values_by_country ) ) {
-                $sensitivity = blomstra_bootstrap_ci( $pillar_values_by_country, $composite_weights, 1000, 0.95 );
-                if ( $sensitivity ) {
-                    foreach ( $sensitivity as $iso3 => $interval ) {
-                        $output['countries'][ $iso3 ]['sensitivity_interval'] = $interval;
-                    }
-                }
+        // Add DQI and data_year from generic output
+        foreach ( array( 'energy', 'hhi', 'maritime' ) as $pillar ) {
+            if ( isset( $gen_row[ 'data_year_' . $pillar ] ) ) {
+                $entry[ 'data_year_' . $pillar ] = $gen_row[ 'data_year_' . $pillar ];
+                $entry[ 'dqi_' . $pillar ] = $gen_row[ 'dqi_' . $pillar ] ?? null;
             }
         }
-
-        // ─── Data freshness per pillar ────────────────────────────
-        if ( function_exists( 'blomstra_data_quality_flag' ) ) {
-            foreach ( $output['countries'] as $iso3 => &$country ) {
-                $country['data_freshness'] = array(
-                    'energy'   => blomstra_data_quality_flag( $all_sources, $iso3, 'energy_dependency' ),
-                    'hhi'      => blomstra_data_quality_flag( $all_sources, $iso3, 'supplier_concentration' ),
-                    'maritime' => blomstra_data_quality_flag( $all_sources, $iso3, 'maritime_connectivity' ),
-                );
-            }
-            unset( $country );
+        if ( isset( $gen_row['composite_dqi'] ) ) {
+            $entry['composite_dqi'] = $gen_row['composite_dqi'];
+        }
+        if ( isset( $gen_row['vintage_summary'] ) ) {
+            $entry['vintage_summary'] = $gen_row['vintage_summary'];
+        }
+        if ( isset( $gen_row['sensitivity_interval'] ) ) {
+            $entry['sensitivity_interval'] = $gen_row['sensitivity_interval'];
         }
 
-        // ─── DQI (Data Quality Index) – Phase 5b ──────────────────
-        if ( function_exists( 'blomstra_compute_dqi' ) && function_exists( 'blomstra_compute_composite_dqi' ) ) {
-            foreach ( $output['countries'] as $iso3 => &$country ) {
-                // Get pillar data years from the pillar caches
-                $energy_row = $energy_data[ $iso3 ] ?? array();
-                $hhi_row    = $hhi_data[ $iso3 ] ?? array();
-                $maritime_row = $maritime_data[ $iso3 ] ?? array();
-                
-                $energy_year = isset( $energy_row['data_year'] ) ? (int) $energy_row['data_year'] : null;
-                $hhi_year    = isset( $hhi_row['year'] ) ? (int) $hhi_row['year'] : null;
-                $maritime_year = isset( $maritime_row['year'] ) ? (int) $maritime_row['year'] : null;
-                
-                // Compute pillar DQIs
-                $energy_dqi = blomstra_compute_dqi( $energy_year, SIVI_CURRENT_YEAR, SIVI_MAX_LAG_ENERGY );
-                $hhi_dqi    = blomstra_compute_dqi( $hhi_year, SIVI_CURRENT_YEAR, SIVI_MAX_LAG_HHI );
-                $maritime_dqi = blomstra_compute_dqi( $maritime_year, SIVI_CURRENT_YEAR, SIVI_MAX_LAG_MARITIME );
-                
-                // Store per-pillar DQI and data_year
-                $country['data_year_energy'] = $energy_year;
-                $country['data_year_hhi'] = $hhi_year;
-                $country['data_year_maritime'] = $maritime_year;
-                $country['dqi_energy'] = $energy_dqi;
-                $country['dqi_hhi'] = $hhi_dqi;
-                $country['dqi_maritime'] = $maritime_dqi;
-                
-                // Compute composite DQI (using the same weights as the score)
-                $composite_dqi = blomstra_compute_composite_dqi( array(
-                    array( 'dqi' => $energy_dqi, 'weight' => $composite_weights['energy'] ),
-                    array( 'dqi' => $hhi_dqi, 'weight' => $composite_weights['hhi'] ),
-                    array( 'dqi' => $maritime_dqi, 'weight' => $composite_weights['maritime'] ),
-                ) );
-                $country['composite_dqi'] = $composite_dqi;
-                
-                // Add vintage summary for display
-                $vintage_parts = array();
-                if ( $energy_year ) {
-                    $vintage_parts[] = 'Energy: ' . $energy_year;
-                }
-                if ( $hhi_year ) {
-                    $vintage_parts[] = 'HHI: ' . $hhi_year;
-                }
-                if ( $maritime_year ) {
-                    $vintage_parts[] = 'Maritime: ' . $maritime_year;
-                }
-                $country['vintage_summary'] = ! empty( $vintage_parts ) ? implode( ', ', $vintage_parts ) : 'No data';
-            }
-            unset( $country );
-        }
-
-        // ─── Benchmark correlation ────────────────────────────────
-        if ( function_exists( 'blomstra_benchmark_correlate' ) ) {
-            $benchmark_data = get_transient( 'sivi_benchmark_comparator' );
-            if ( $benchmark_data && is_array( $benchmark_data ) ) {
-                $index_scores = array();
-                foreach ( $output['countries'] as $iso3 => $c ) {
-                    if ( isset( $c['sivi_structural'] ) && is_numeric( $c['sivi_structural'] ) ) {
-                        $index_scores[ $iso3 ] = (float) $c['sivi_structural'];
-                    }
-                }
-                $comparator_clean = array();
-                foreach ( $benchmark_data as $iso3 => $val ) {
-                    if ( is_numeric( $val ) ) {
-                        $comparator_clean[ strtoupper( trim( $iso3 ) ) ] = (float) $val;
-                    }
-                }
-                $corr = blomstra_benchmark_correlate( $index_scores, $comparator_clean );
-                if ( $corr ) {
-                    $output['_meta']['benchmark_correlation'] = $corr;
-                }
-            }
-        }
-
-        // ─── Staging & validation ─────────────────────────────────
-        $old_composite = get_option( SIVI_OPTION_KEY, null );
-
-        // ─── Now proceed with staging & validation ──────────────
-        if ( ! $is_scenario && $context !== 'scenario' ) {
-            update_option( SIVI_STAGING_KEY, $output, false );
-
-            $should_keep_old = false;
-            if ( $old_composite && ! empty( $old_composite['countries'] ) ) {
-                $prev_count = count( $old_composite['countries'] );
-                $new_count = count( $output['countries'] );
-                if ( $new_count < 0.8 * $prev_count && $new_count < 50 ) {
-                    error_log( 'SIVI: Automated build failed – new count (' . $new_count . ') vs previous (' . $prev_count . '). Keeping old composite.' );
-                    set_transient( 'sivi_auto_build_failed', 'yes', DAY_IN_SECONDS );
-                    $should_keep_old = true;
-                }
-            }
-
-            if ( $should_keep_old && $old_composite ) {
-                delete_option( SIVI_STAGING_KEY );
-                if ( function_exists( 'blomstra_update_cron_status' ) ) {
-                    blomstra_update_cron_status( 'sivi', 'error', 'Build failed – coverage too low. Old composite preserved.' );
-                }
-                return $old_composite;
-            }
-
-            // ─── FIRE ALERTS ONLY NOW (after validation) ──────────
-            if ( function_exists( 'blomstra_fire_index_alerts' ) && $old_composite && ! empty( $old_composite['countries'] ) ) {
-                $new_meta = array(
-                    'total_countries' => $output['total_countries'],
-                    'excluded'        => $output['excluded'],
-                    'version'         => $output['version'],
-                    'last_updated'    => $output['last_updated'],
-                );
-                $old_meta = array(
-                    'total_countries' => $old_composite['total_countries'] ?? 0,
-                    'excluded'        => $old_composite['excluded'] ?? 0,
-                    'version'         => $old_composite['version'] ?? '',
-                    'last_updated'    => $old_composite['last_updated'] ?? '',
-                );
-                $alert_count = blomstra_fire_index_alerts( 'sivi', $output['countries'], $old_composite['countries'], $new_meta, $old_meta );
-                error_log( 'SIVI: Alerts fired with ' . $alert_count . ' changes detected (post-validation).' );
-            }
-
-            // ─── Save new composite ──────────────────────────────────
-            update_option( SIVI_OPTION_KEY, $output, false );
-            delete_option( SIVI_STAGING_KEY );
-
-            // ─── Save snapshot history ──────────────────────────────
-            if ( function_exists( 'blomstra_index_snapshot_save' ) ) {
-                $snap = array();
-                foreach ( $output['countries'] as $iso3 => $data ) {
-                    $snap[ $iso3 ] = array(
-                        'composite_score' => $data['sivi_structural'] ?? null,
-                        'rank' => $data['rank_display']['best_estimate'] ?? null,
-                        'coverage_type' => $data['coverage'] ?? 'full',
-                        'energy' => $data['energy_dependency_percentile'] ?? null,
-                        'hhi'    => $data['supplier_concentration_percentile'] ?? null,
-                        'maritime' => $data['maritime_vulnerability_percentile'] ?? null,
-                    );
-                }
-                blomstra_index_snapshot_save( 'sivi', $snap );
-            }
-
-            if ( function_exists( 'blomstra_update_cron_status' ) ) {
-                blomstra_update_cron_status( 'sivi', 'success', 'Build completed: ' . count( $output['countries'] ) . ' countries scored.', count( $output['countries'] ) );
-            }
-        }
-
-        delete_transient( $lock_key );
-        $lock_cleared = true;
-        return $output;
-
-    } catch ( Exception $e ) {
-        delete_transient( $lock_key );
-        $lock_cleared = true;
-        if ( function_exists( 'blomstra_update_cron_status' ) ) {
-            blomstra_update_cron_status( 'sivi', 'error', 'Build failed: ' . $e->getMessage() );
-        }
-        error_log( 'SIVI build error: ' . $e->getMessage() );
-        return array( 'error' => $e->getMessage() );
+        $transformed_countries[ $iso3 ] = $entry;
     }
-}
 
+    // Build the final output with the required metadata
+    $output = array(
+        'version'         => SIVI_VERSION,
+        'last_updated'    => $generic_output['last_updated'],
+        'total_countries' => count( $transformed_countries ),
+        'excluded'        => count( $excluded ),
+        'excluded_detail' => $excluded,
+        'methodology_url'     => 'https://blomstrainsights.com/methodology/sivi',
+        'methodology_summary' => 'Percentile-rank composite (Energy dependency, HHI supplier concentration, inverted Maritime connectivity).',
+        'footnote'        => 'Partial ranks are projections...',
+        'weights' => $config['pillar_weights'],
+        'countries' => $transformed_countries,
+        '_meta' => array(
+            'built_at'            => $generic_output['_meta']['built_at'],
+            'source'              => $context,
+            'status'              => 'valid',
+            'standard_version'    => 'BMS-1.1.0',
+            'methodology_version' => SIVI_VERSION,
+            'software_version'    => SIVI_VERSION,
+            'dqi_config' => array(
+                'energy_max_lag'   => SIVI_MAX_LAG_ENERGY,
+                'hhi_max_lag'      => SIVI_MAX_LAG_HHI,
+                'maritime_max_lag' => SIVI_MAX_LAG_MARITIME,
+                'reference_year'   => SIVI_CURRENT_YEAR,
+            ),
+        ),
+    );
+
+    // Add upstream warnings
+    $warnings = sivi_check_upstream_health();
+    if ( ! empty( $warnings ) ) {
+        $output['_meta']['upstream_warnings'] = $warnings;
+    }
+
+    // Add benchmark correlation if present
+    if ( isset( $generic_output['_meta']['benchmark_correlation'] ) ) {
+        $output['_meta']['benchmark_correlation'] = $generic_output['_meta']['benchmark_correlation'];
+    }
+
+    // ─── FIXED BUG 2: Save the reshaped output to the database ───
+    if ( ! $is_scenario ) {
+        update_option( SIVI_OPTION_KEY, $output, false );
+    }
+
+    // ─── Re-save snapshot with SIVI-specific fields ──────────────
+    // The generic builder already saved a snapshot if context is manual/cron.
+    // We overwrite it with the SIVI-shaped data.
+    if ( ! $is_scenario && function_exists( 'blomstra_index_snapshot_save' ) ) {
+        $snap = array();
+        foreach ( $output['countries'] as $iso3 => $data ) {
+            $snap[ $iso3 ] = array(
+                'composite_score' => $data['sivi_structural'] ?? null,
+                'rank'            => $data['rank_display']['best_estimate'] ?? null,
+                'coverage_type'   => $data['coverage'] ?? 'full',
+                'energy' => $data['energy_dependency_percentile'] ?? null,
+                'hhi'    => $data['supplier_concentration_percentile'] ?? null,
+                'maritime' => $data['maritime_vulnerability_percentile'] ?? null,
+            );
+        }
+        blomstra_index_snapshot_save( 'sivi', $snap );
+    }
+
+    return $output;
+}
 
 // ============================================================================
 // 11. SCENARIO STORAGE
@@ -1073,7 +709,6 @@ function sivi_list_scenarios() {
 function sivi_delete_scenario( $scenario_id ) {
     delete_option( SIVI_OPTION_KEY . '_scenario_' . sanitize_key( $scenario_id ) );
 }
-
 
 // ============================================================================
 // 12. AUTO‑REFRESH CRON
@@ -1129,16 +764,13 @@ function sivi_auto_refresh_callback() {
 
 add_action( SIVI_AUTO_REFRESH_HOOK, 'sivi_auto_refresh_callback' );
 
-// ─── Schedule the cron on init ────────────────────────────────────────
 add_action( 'init', function () {
     if ( ! wp_next_scheduled( SIVI_AUTO_REFRESH_HOOK ) ) {
-        // Run daily at 03:00 UTC
         $time = strtotime( '03:00:00 UTC' ) + ( time() > strtotime( '03:00:00 UTC' ) ? DAY_IN_SECONDS : 0 );
         wp_schedule_event( $time, 'daily', SIVI_AUTO_REFRESH_HOOK );
     }
 } );
 
-// ─── Also run when Reference Data cron completes (as a fallback) ───
 function sivi_maybe_auto_refresh_after_rd( $trigger = null ) {
     if ( ! get_transient( 'sivi_auto_refresh_queued' ) ) {
         set_transient( 'sivi_auto_refresh_queued', 1, 5 * MINUTE_IN_SECONDS );
@@ -1148,7 +780,6 @@ function sivi_maybe_auto_refresh_after_rd( $trigger = null ) {
 add_action( 'blomstra_cron_eia_weekly_event', 'sivi_maybe_auto_refresh_after_rd', 30 );
 add_action( 'blomstra_cron_hhi_weekly_event', 'sivi_maybe_auto_refresh_after_rd', 30 );
 add_action( 'blomstra_cron_maritime_weekly_event', 'sivi_maybe_auto_refresh_after_rd', 30 );
-
 
 // ============================================================================
 // 13. REST ENDPOINTS
@@ -1163,16 +794,14 @@ add_action( 'rest_api_init', function () {
             if ( ! $data ) {
                 return new WP_Error( 'no_data', 'Index not built yet.', array( 'status' => 404 ) );
             }
-            // Cache for 1 hour
             header( 'Cache-Control: public, max-age=3600' );
             return $data;
         },
     ) );
 } );
 
-
 // ============================================================================
-// 14. VALIDATION ON INIT
+// 14. VALIDATION
 // ============================================================================
 
 function sivi_initialize() {
@@ -1190,9 +819,8 @@ function sivi_initialize() {
 }
 add_action( 'init', 'sivi_initialize' );
 
-
 // ============================================================================
-// 15. ADMIN PAGE (Full with custom weights, DQI, vintage, backfill)
+// 15. ADMIN PAGE – FULL (copied from 2.8.5)
 // ============================================================================
 
 add_action( 'admin_menu', function () {
@@ -1324,7 +952,7 @@ function sivi_render_admin_page() {
         }
     }
 
-    // ─── CUSTOM COMPOSITE WEIGHTS (fixed: dynamic sum + nonce) ──
+    // ─── CUSTOM COMPOSITE WEIGHTS ──────────────────────────────────
     if ( isset( $_POST['sivi_save_custom_weights'] ) && check_admin_referer( 'sivi_custom_weights_action' ) ) {
         $energy   = (float) $_POST['sivi_weight_energy'];
         $hhi      = (float) $_POST['sivi_weight_hhi'];
@@ -1347,9 +975,8 @@ function sivi_render_admin_page() {
         echo '<div class="notice notice-success"><p>✅ Custom weights reset to defaults. Rebuild the index to apply.</p></div>';
     }
 
-    // ─── BACKFILL ALL YEARS (async) ──────────────────────────────
+    // ─── BACKFILL ALL YEARS ──────────────────────────────────────
     if ( isset( $_POST['sivi_backfill_all'] ) && check_admin_referer( 'sivi_backfill_all_action', 'sivi_backfill_all_nonce' ) ) {
-        // Check if production refreshes are running
         $eia_lock = get_transient( 'blomstra_eia_refresh_in_progress' );
         $hhi_lock = get_transient( 'blomstra_hhi_refresh_in_progress' );
         if ( $eia_lock || $hhi_lock ) {
@@ -1359,14 +986,10 @@ function sivi_render_admin_page() {
             if ( $lock !== false ) {
                 echo '<div class="notice notice-warning"><p>⚠️ Backfill is already running. Please wait for completion.</p></div>';
             } else {
-                // Set lock for 2 hours (safety)
                 set_transient( 'sivi_backfill_lock', time(), 2 * HOUR_IN_SECONDS );
-
-                // Dynamic range
                 $range = blomstra_get_index_backfill_range('sivi');
                 $years = range( $range['start'], $range['end'] );
                 foreach ( $years as $index => $year ) {
-                    // Schedule each year with 2-minute stagger
                     wp_schedule_single_event( time() + ( $index * 120 ), 'sivi_backfill_year_cron', array( $year ) );
                     sivi_update_backfill_status( $year, 'scheduled', 0, null );
                 }
@@ -1375,14 +998,13 @@ function sivi_render_admin_page() {
         }
     }
 
-    // ─── RETRY SINGLE YEAR (synchronous) ──────────────────────────
+    // ─── RETRY SINGLE YEAR ──────────────────────────────────────────
     if ( isset( $_POST['sivi_backfill_year'] ) && check_admin_referer( 'sivi_backfill_year_action', 'sivi_backfill_year_nonce' ) ) {
         $year = (int) $_POST['sivi_backfill_year'];
         $range = blomstra_get_index_backfill_range('sivi');
         if ( $year < $range['start'] || $year > $range['end'] ) {
             echo '<div class="notice notice-error"><p>Invalid year. Must be between ' . $range['start'] . ' and ' . $range['end'] . '.</p></div>';
         } else {
-            // Run synchronously – safe for a single year
             $result = sivi_build_historical_snapshot( $year );
             if ( $result['success'] ) {
                 sivi_update_backfill_status( $year, 'success', $result['countries'], null );
@@ -1485,13 +1107,13 @@ function sivi_render_admin_page() {
     }
     echo '</div></div>';
 
-    // ─── CUSTOM COMPOSITE WEIGHTS UI (fixed) ────────────────────
+    // ─── CUSTOM COMPOSITE WEIGHTS UI ──────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-sliders"></span> ⚖️ Custom Composite Weights</h2></div>';
     echo '<div class="inside">';
     $current = get_option( 'sivi_custom_composite_weights', false );
     if ( ! $current ) {
-        $current = sivi_get_composite_weights(); // use the function for default
+        $current = sivi_get_composite_weights();
     }
 
     echo '<p style="color:#666;">Adjust the pillar weights for the composite index. They must sum to 100. Changes take effect after rebuilding the index.</p>';
@@ -1595,7 +1217,7 @@ function sivi_render_admin_page() {
     echo '<strong>Flush ALL Caches</strong> — deletes all pillar and composite data (destructive).</p>';
     echo '</div></div>';
 
-    // ─── HISTORICAL BACKFILL RANGE CONFIG (Moved here) ──────────
+    // ─── HISTORICAL BACKFILL RANGE ──────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-settings"></span> ⚙️ Historical Backfill Range</h2></div>';
     echo '<div class="inside">';
@@ -1611,7 +1233,7 @@ function sivi_render_admin_page() {
     echo '</form>';
     echo '</div></div>';
 
-    // ─── HISTORICAL BACKFILL STATUS & ACTIONS ────────────────────
+    // ─── HISTORICAL BACKFILL STATUS ─────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-backup"></span> 📅 Historical Backfill Status</h2></div>';
     echo '<div class="inside">';
@@ -1620,7 +1242,6 @@ function sivi_render_admin_page() {
     $lock = get_transient( 'sivi_backfill_lock' );
     $is_running = ( $lock !== false );
 
-    // Show status table
     $range = blomstra_get_index_backfill_range('sivi');
     echo '<table class="widefat striped"><thead><tr><th>Year</th><th>Status</th><th>Countries</th><th>Last Attempt</th><th>Error</th><th>Action</th></tr></thead><tbody>';
     for ( $year = $range['start']; $year <= $range['end']; $year++ ) {
@@ -1646,7 +1267,6 @@ function sivi_render_admin_page() {
         echo '<td>' . ( $st['error'] ? esc_html( $st['error'] ) : '—' ) . '</td>';
         echo '<td>';
         if ( ! $is_running && in_array( $st['status'], array( 'failed', 'partial', 'not_started' ), true ) ) {
-            // Retry button for this year
             echo '<form method="post" style="display:inline;">';
             wp_nonce_field( 'sivi_backfill_year_action', 'sivi_backfill_year_nonce' );
             echo '<input type="hidden" name="sivi_backfill_year" value="' . esc_attr( $year ) . '">';
@@ -1659,7 +1279,6 @@ function sivi_render_admin_page() {
     }
     echo '</tbody></table>';
 
-    // Backfill All Years button
     if ( ! $is_running ) {
         echo '<form method="post" style="margin-top:15px;" onsubmit="return confirm(\'This will schedule backfill for all years ' . $range['start'] . '–' . $range['end'] . '. Continue?\');">';
         wp_nonce_field( 'sivi_backfill_all_action', 'sivi_backfill_all_nonce' );
@@ -1672,12 +1291,11 @@ function sivi_render_admin_page() {
     echo '<p style="color:#666; font-size:12px; margin-top:5px;">This will create historical snapshots for the configured range. Each year runs as a separate background job to avoid timeouts. The DQI and vintage metadata will reflect the actual data year used for each pillar.</p>';
     echo '</div></div>';
 
-    // ─── SENSITIVITY TESTING (Research) ──────────────────────────
+    // ─── SENSITIVITY TESTING ──────────────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-generic"></span> 🔬 Sensitivity Testing (Research)</h2></div>';
     echo '<div class="inside">';
 
-    // Preset weights (unchanged)
     $preset_weights = array(
         'baseline'        => array( 'energy' => 33.33, 'hhi' => 33.33, 'maritime' => 33.34 ),
         'energy-heavy'    => array( 'energy' => 70, 'hhi' => 15, 'maritime' => 15 ),
@@ -1737,7 +1355,6 @@ function sivi_render_admin_page() {
     echo '</div>';
     echo '</form>';
 
-    // Scenario comparison table
     $scenarios = sivi_list_scenarios();
     $baseline = get_option( SIVI_OPTION_KEY );
     if ( ! empty( $scenarios ) && $baseline ) {
@@ -1805,7 +1422,7 @@ function sivi_render_admin_page() {
 
     echo '</div></div>';
 
-    // ─── BENCHMARK CORRELATION (Research) ─────────────────────────
+    // ─── BENCHMARK CORRELATION ─────────────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #00a0d2; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-chart-line"></span> 🔗 Benchmark Correlation (Research)</h2></div>';
     echo '<div class="inside">';
@@ -1817,7 +1434,7 @@ function sivi_render_admin_page() {
     echo '</form>';
     echo '</div></div>';
 
-    // ─── PREVIEW TABLES (with DQI) ──────────────────────────────
+    // ─── PREVIEW TABLES ──────────────────────────────────────────────
     if ( $existing && ! empty( $existing['countries'] ) ) {
         $countries = $existing['countries'];
         uasort( $countries, function( $a, $b ) {
@@ -1844,7 +1461,6 @@ function sivi_render_admin_page() {
             $cov = $row['coverage'] ?? 'partial';
             $cov_style = $cov === 'full' ? '#2e7d32' : '#b26a00';
             
-            // DQI display
             $dqi = isset( $row['composite_dqi'] ) ? $row['composite_dqi'] : null;
             if ( $dqi !== null ) {
                 $dqi_display = round( $dqi ) . '%';
@@ -1854,7 +1470,6 @@ function sivi_render_admin_page() {
                 $dqi_color = '#999';
             }
             
-            // Vintage tooltip
             $vintage = isset( $row['vintage_summary'] ) ? $row['vintage_summary'] : 'No data';
             
             echo '<tr>';
@@ -1936,16 +1551,16 @@ function sivi_render_admin_page() {
     echo '</div>'; // .wrap
 }
 
-
 // ============================================================================
-// 16. HISTORICAL BACKFILL ENGINE (Phase 5c)
+// 16. HISTORICAL BACKFILL ENGINE – WITH MEMOIZED FETCHERS
 // ============================================================================
 
 /**
  * Build a historical SIVI snapshot for a specific year.
- * Does NOT use production caches – calls year‑specific fetchers directly.
+ * Uses the generic orchestrator with year‑specific fetchers.
+ * Memoizes fetchers to avoid duplicate API calls.
  *
- * @param int $year Target year (e.g., 2021).
+ * @param int $year Target year.
  * @return array ['success'=>bool, 'countries'=>int, 'error'=>string|null]
  */
 function sivi_build_historical_snapshot( $year ) {
@@ -1955,278 +1570,158 @@ function sivi_build_historical_snapshot( $year ) {
 
     $iso3_list = array_keys( sivi_get_global_country_list() );
 
-    // 1. Fetch raw pillar data for the year
-    $eia_raw = blomstra_fetch_eia_for_year( $year, $iso3_list );
-    $hhi_raw = blomstra_fetch_hhi_for_year( $year, $iso3_list );
-    $maritime_raw = blomstra_fetch_maritime_for_year( $year, $iso3_list );
-
-    // 2. Aggregate energy dependency (reuse existing function)
-    $energy_aggregated = sivi_eia_aggregate_energy_dependency(
-        $iso3_list,
-        $eia_raw['consumption'],
-        $eia_raw['production']
+    // ─── Memoize raw fetchers ──────────────────────────────────────
+    // These are called once, and the same data is reused for both values and data years.
+    $memoized_raw = array(
+        'energy'   => null,
+        'hhi'      => null,
+        'maritime' => null,
     );
 
-    // 3. Prepare raw values for percentiles
-    $energy_raw_values = array();
-    foreach ( $energy_aggregated as $iso3 => $data ) {
-        if ( isset( $data['value'] ) && is_numeric( $data['value'] ) ) {
-            $energy_raw_values[ $iso3 ] = (float) $data['value'];
+    $get_raw_energy_year = function( $iso3_list ) use ( $year, &$memoized_raw ) {
+        if ( $memoized_raw['energy'] === null ) {
+            $eia_raw = blomstra_fetch_eia_for_year( $year, $iso3_list );
+            $memoized_raw['energy'] = sivi_eia_aggregate_energy_dependency(
+                $iso3_list,
+                $eia_raw['consumption'],
+                $eia_raw['production']
+            );
         }
-    }
-
-    $hhi_raw_values = array();
-    foreach ( $hhi_raw as $iso3 => $data ) {
-        if ( isset( $data['value'] ) ) {
-            $hhi_raw_values[ $iso3 ] = (float) $data['value'];
+        $out = array();
+        foreach ( $memoized_raw['energy'] as $iso3 => $data ) {
+            if ( isset( $data['value'] ) && is_numeric( $data['value'] ) ) {
+                $out[ $iso3 ] = (float) $data['value'];
+            }
         }
-    }
+        return $out;
+    };
 
-    $maritime_raw_values = array();
-    foreach ( $maritime_raw as $iso3 => $data ) {
-        if ( isset( $data['value'] ) ) {
-            $maritime_raw_values[ $iso3 ] = (float) $data['value'];
+    $get_raw_hhi_year = function( $iso3_list ) use ( $year, &$memoized_raw ) {
+        if ( $memoized_raw['hhi'] === null ) {
+            $memoized_raw['hhi'] = blomstra_fetch_hhi_for_year( $year, $iso3_list );
         }
-    }
+        $out = array();
+        foreach ( $memoized_raw['hhi'] as $iso3 => $data ) {
+            if ( isset( $data['value'] ) && is_numeric( $data['value'] ) ) {
+                $out[ $iso3 ] = (float) $data['value'];
+            }
+        }
+        return $out;
+    };
 
-    // 4. Compute percentiles (only among countries with data for this year)
-    $weights = sivi_get_pillar_weights();
-    $energy_pct = ! empty( $energy_raw_values ) ? sivi_compute_percentile_ranks( $energy_raw_values, $weights['energy']['winsorize']['energy_dependency'] ?? 0.0 ) : array();
-    $hhi_pct    = ! empty( $hhi_raw_values )    ? sivi_compute_percentile_ranks( $hhi_raw_values, $weights['hhi']['winsorize']['supplier_concentration'] ?? 0.0 ) : array();
+    $get_raw_maritime_connectivity_year = function( $iso3_list ) use ( $year, &$memoized_raw ) {
+        if ( $memoized_raw['maritime'] === null ) {
+            $memoized_raw['maritime'] = blomstra_fetch_maritime_for_year( $year, $iso3_list );
+        }
+        $out = array();
+        foreach ( $memoized_raw['maritime'] as $iso3 => $data ) {
+            if ( isset( $data['value'] ) && is_numeric( $data['value'] ) ) {
+                $out[ $iso3 ] = (float) $data['value'];
+            }
+        }
+        return $out;
+    };
 
-    // Maritime: invert connectivity to vulnerability
-    $maritime_connectivity_pct = ! empty( $maritime_raw_values ) ? sivi_compute_percentile_ranks( $maritime_raw_values, $weights['maritime']['winsorize']['maritime_connectivity'] ?? 0.01 ) : array();
-    $maritime_vulnerability_pct = array();
-    foreach ( $maritime_connectivity_pct as $iso3 => $pct ) {
-        $maritime_vulnerability_pct[ $iso3 ] = round( 100 - $pct, 2 );
-    }
+    // ─── Data years callback (uses memoized data) ──────────────────
+    $get_data_years_year = function( $iso3_list ) use ( &$memoized_raw, $year ) {
+        $result = array();
+        // Ensure the memoized data is loaded
+        if ( $memoized_raw['energy'] === null ) {
+            $eia_raw = blomstra_fetch_eia_for_year( $year, $iso3_list );
+            $memoized_raw['energy'] = sivi_eia_aggregate_energy_dependency(
+                $iso3_list,
+                $eia_raw['consumption'],
+                $eia_raw['production']
+            );
+        }
+        if ( $memoized_raw['hhi'] === null ) {
+            $memoized_raw['hhi'] = blomstra_fetch_hhi_for_year( $year, $iso3_list );
+        }
+        if ( $memoized_raw['maritime'] === null ) {
+            $memoized_raw['maritime'] = blomstra_fetch_maritime_for_year( $year, $iso3_list );
+        }
 
-    // 5. Build composite (same logic as live builder)
+        foreach ( $iso3_list as $iso3 ) {
+            $result[ $iso3 ] = array(
+                'energy'   => isset( $memoized_raw['energy'][ $iso3 ]['year'] ) ? (int) $memoized_raw['energy'][ $iso3 ]['year'] : null,
+                'hhi'      => isset( $memoized_raw['hhi'][ $iso3 ]['year'] ) ? (int) $memoized_raw['hhi'][ $iso3 ]['year'] : null,
+                'maritime' => isset( $memoized_raw['maritime'][ $iso3 ]['year'] ) ? (int) $memoized_raw['maritime'][ $iso3 ]['year'] : null,
+            );
+        }
+        return $result;
+    };
+
     $composite_weights = sivi_get_composite_weights();
-    $all_pillars = array( 'energy', 'hhi', 'maritime' );
-    $composite_scores = array();
-    $excluded = array();
-    $coverage_data = array();
 
-    foreach ( $iso3_list as $iso3 ) {
-        $present = array();
-        if ( isset( $energy_pct[ $iso3 ] ) ) {
-            $present['energy'] = array( 'value' => $energy_pct[ $iso3 ], 'weight' => $composite_weights['energy'] );
-        }
-        if ( isset( $hhi_pct[ $iso3 ] ) ) {
-            $present['hhi'] = array( 'value' => $hhi_pct[ $iso3 ], 'weight' => $composite_weights['hhi'] );
-        }
-        if ( isset( $maritime_vulnerability_pct[ $iso3 ] ) ) {
-            $present['maritime'] = array( 'value' => $maritime_vulnerability_pct[ $iso3 ], 'weight' => $composite_weights['maritime'] );
-        }
-
-        $pillars_present = count( $present );
-        $missing_pillars = array_values( array_diff( $all_pillars, array_keys( $present ) ) );
-
-        if ( $pillars_present < SIVI_MIN_PILLARS_REQUIRED ) {
-            $excluded[ $iso3 ] = array(
-                'reason' => 'Fewer than ' . SIVI_MIN_PILLARS_REQUIRED . ' pillars have real data — not scored.',
-                'pillars_present' => $pillars_present,
-                'pillars_missing' => $missing_pillars,
-                'name'   => sivi_get_global_country_list()[ $iso3 ] ?? $iso3,
-            );
-            continue;
-        }
-
-        $score_sum = 0;
-        $weight_sum = 0;
-        foreach ( $present as $pillar ) {
-            $score_sum += $pillar['value'] * $pillar['weight'];
-            $weight_sum += $pillar['weight'];
-        }
-        $composite_score = round( $score_sum / $weight_sum, 1 );
-        $coverage_type = ( $pillars_present >= count( $all_pillars ) ) ? 'full' : 'partial';
-
-        $composite_scores[ $iso3 ] = $composite_score;
-        $coverage_data[ $iso3 ] = array(
-            'composite_score' => $composite_score,
-            'coverage_type'   => $coverage_type,
-            'pillars_used'    => $pillars_present,
-            'pillars_missing' => $missing_pillars,
-            'energy_dependency_percentile' => $present['energy']['value'] ?? null,
-            'supplier_concentration_percentile' => $present['hhi']['value'] ?? null,
-            'maritime_vulnerability_percentile' => $present['maritime']['value'] ?? null,
-            'energy_dependency_raw' => $energy_raw_values[ $iso3 ] ?? null,
-            'supplier_concentration_raw' => $hhi_raw_values[ $iso3 ] ?? null,
-            'maritime_connectivity_raw' => $maritime_raw_values[ $iso3 ] ?? null,
-            'is_landlocked' => sivi_is_landlocked( $iso3 ),
-        );
-    }
-
-    // 6. Rank assignment (same as live builder)
-    $full_composites = array();
-    foreach ( $coverage_data as $iso3 => $row ) {
-        if ( $row['coverage_type'] === 'full' ) {
-            $full_composites[] = $row['composite_score'];
-        }
-    }
-    sort( $full_composites );
-
-    // Assign definitive ranks for full-coverage countries
-    foreach ( $coverage_data as $iso3 => &$row ) {
-        if ( $row['coverage_type'] === 'full' ) {
-            $rank = 1;
-            foreach ( $full_composites as $full_score ) {
-                if ( $row['composite_score'] < $full_score ) {
-                    $rank++;
-                }
-            }
-            $row['rank'] = $rank;
-            if ( function_exists( 'blomstra_build_full_rank_display' ) ) {
-                $row['rank_display'] = blomstra_build_full_rank_display( $rank );
-            }
-        }
-    }
-    unset( $row );
-
-    // Partial ranks (projection) – reuse same logic as live builder if functions exist
-    // This relies on SIVI_MIN_PILLARS_REQUIRED = 2 (out of 3), so partial always means exactly one pillar missing.
-    if ( function_exists( 'blomstra_project_partial_rank_composite' ) && function_exists( 'blomstra_build_partial_rank_display' ) ) {
-        $pillar_value_key = array(
-            'energy'   => 'energy_dependency_percentile',
-            'hhi'      => 'supplier_concentration_percentile',
-            'maritime' => 'maritime_vulnerability_percentile',
-        );
-        foreach ( $coverage_data as $iso3 => &$row ) {
-            if ( $row['coverage_type'] !== 'partial' ) {
-                continue;
-            }
-            $missing_pillar = $row['pillars_missing'][0] ?? null;
-            if ( $missing_pillar === null || ! isset( $composite_weights[ $missing_pillar ] ) ) {
-                continue;
-            }
-            $known_pillars = array();
-            foreach ( $composite_weights as $pname => $pweight ) {
-                if ( $pname === $missing_pillar ) {
-                    continue;
-                }
-                $known_pillars[ $pname ] = $row[ $pillar_value_key[ $pname ] ] ?? 0;
-            }
-            $injected_values_by_point = array();
-            foreach ( array( 0, 10, 50, 90, 100 ) as $point ) {
-                $injected_values_by_point[ $point ] = $point;
-            }
-            $hypothetical_composites = blomstra_project_partial_rank_composite(
-                $known_pillars,
-                $missing_pillar,
-                $injected_values_by_point,
-                $composite_weights
-            );
-            if ( ! empty( $hypothetical_composites ) ) {
-                $ranks_by_injection = array();
-                foreach ( $hypothetical_composites as $point => $hyp_composite ) {
-                    $rank = 1;
-                    foreach ( $full_composites as $full_score ) {
-                        if ( $hyp_composite < $full_score ) {
-                            $rank++;
-                        }
-                    }
-                    $ranks_by_injection[ $point ] = $rank;
-                }
-                $row['rank'] = null;
-                $row['rank_display'] = blomstra_build_partial_rank_display( $ranks_by_injection );
-            }
-        }
-        unset( $row );
-    }
-
-    // 7. Add DQI and vintage metadata (using snapshot year as current_year)
-    $max_lags = array(
-        'energy'   => defined( 'SIVI_MAX_LAG_ENERGY' ) ? SIVI_MAX_LAG_ENERGY : 3,
-        'hhi'      => defined( 'SIVI_MAX_LAG_HHI' ) ? SIVI_MAX_LAG_HHI : 3,
-        'maritime' => defined( 'SIVI_MAX_LAG_MARITIME' ) ? SIVI_MAX_LAG_MARITIME : 5,
+    // ─── Build config ──────────────────────────────────────────────
+    $config = array(
+        'index_slug'          => 'sivi',
+        'pillar_keys'         => array( 'energy', 'hhi', 'maritime' ),
+        'pillar_weights'      => $composite_weights,
+        'min_pillars_required'=> SIVI_MIN_PILLARS_REQUIRED,
+        'get_raw_values'      => array(
+            'energy'   => $get_raw_energy_year,
+            'hhi'      => $get_raw_hhi_year,
+            'maritime' => $get_raw_maritime_connectivity_year,
+        ),
+        'winsorization' => array(
+            'energy'   => 0.0,
+            'hhi'      => 0.0,
+            'maritime' => 0.01,
+        ),
+        'post_percentile_transform' => array(
+            'maritime' => function( $pct ) { return 100 - $pct; },
+        ),
+        'get_data_years' => $get_data_years_year,
+        'is_landlocked_check' => 'sivi_is_landlocked',
+        'dqi_config' => array(
+            'energy'   => SIVI_MAX_LAG_ENERGY,
+            'hhi'      => SIVI_MAX_LAG_HHI,
+            'maritime' => SIVI_MAX_LAG_MARITIME,
+        ),
+        'sensitivity_enabled' => true,
+        'lock_ttl' => SIVI_LOCK_TTL,
+        'composite_field' => 'sivi_structural',
+        // ─── FIXED BUG 3: Skip snapshot in generic builder ───
+        // We save the snapshot ourselves after reshaping.
+        'skip_snapshot' => true,
     );
 
-    // Build pillar data arrays for DQI
-    $pillar_data_by_country = array();
-    foreach ( $iso3_list as $iso3 ) {
-        // Energy
-        $energy_year = null;
-        if ( isset( $energy_aggregated[ $iso3 ]['year'] ) ) {
-            $energy_year = (int) $energy_aggregated[ $iso3 ]['year'];
-        }
-        // HHI
-        $hhi_year = null;
-        if ( isset( $hhi_raw[ $iso3 ]['year'] ) ) {
-            $hhi_year = (int) $hhi_raw[ $iso3 ]['year'];
-        }
-        // Maritime
-        $maritime_year = null;
-        if ( isset( $maritime_raw[ $iso3 ]['year'] ) ) {
-            $maritime_year = (int) $maritime_raw[ $iso3 ]['year'];
-        }
+    // ─── Call generic builder with 'historical' context ──────────
+    // The generic builder will NOT promote to production for 'historical'
+    $generic_output = blomstra_build_index_composite( $config, 'historical' );
 
-        $dqi_energy = function_exists('blomstra_compute_dqi') ? blomstra_compute_dqi( $energy_year, $year, $max_lags['energy'] ) : null;
-        $dqi_hhi    = function_exists('blomstra_compute_dqi') ? blomstra_compute_dqi( $hhi_year, $year, $max_lags['hhi'] ) : null;
-        $dqi_maritime = function_exists('blomstra_compute_dqi') ? blomstra_compute_dqi( $maritime_year, $year, $max_lags['maritime'] ) : null;
-
-        $composite_dqi = function_exists('blomstra_compute_composite_dqi') ? blomstra_compute_composite_dqi( array(
-            array( 'dqi' => $dqi_energy, 'weight' => $composite_weights['energy'] ),
-            array( 'dqi' => $dqi_hhi,    'weight' => $composite_weights['hhi'] ),
-            array( 'dqi' => $dqi_maritime, 'weight' => $composite_weights['maritime'] ),
-        ) ) : null;
-
-        // Build vintage summary
-        $vintage_parts = array();
-        if ( $energy_year ) {
-            $vintage_parts[] = 'Energy: ' . $energy_year;
-        }
-        if ( $hhi_year ) {
-            $vintage_parts[] = 'HHI: ' . $hhi_year;
-        }
-        if ( $maritime_year ) {
-            $vintage_parts[] = 'Maritime: ' . $maritime_year;
-        }
-
-        $pillar_data_by_country[ $iso3 ] = array(
-            'data_year_energy'   => $energy_year,
-            'data_year_hhi'      => $hhi_year,
-            'data_year_maritime' => $maritime_year,
-            'dqi_energy'         => $dqi_energy,
-            'dqi_hhi'            => $dqi_hhi,
-            'dqi_maritime'       => $dqi_maritime,
-            'composite_dqi'      => $composite_dqi,
-            'vintage_summary'    => ! empty( $vintage_parts ) ? implode( ', ', $vintage_parts ) : 'No data',
-        );
+    if ( is_wp_error( $generic_output ) ) {
+        return array( 'success' => false, 'countries' => 0, 'error' => $generic_output->get_error_message() );
     }
 
-    // Merge DQI data into coverage_data
-    foreach ( $coverage_data as $iso3 => &$row ) {
-        if ( isset( $pillar_data_by_country[ $iso3 ] ) ) {
-            $row = array_merge( $row, $pillar_data_by_country[ $iso3 ] );
-        }
-    }
-    unset( $row );
+    // ─── Transform to SIVI snapshot format ────────────────────────
+    $generic_countries = $generic_output['sivi_structural'];
 
-    // 8. Prepare data for snapshot saver (same structure as live builder)
     $snapshot_countries = array();
-    foreach ( $coverage_data as $iso3 => $row ) {
+    foreach ( $generic_countries as $iso3 => $gen_row ) {
+        $pillars = array();
+        foreach ( array( 'energy', 'hhi', 'maritime' ) as $pillar ) {
+            $pillars[ $pillar ] = $gen_row['pillars'][ $pillar ]['score'] ?? null;
+        }
+
         $snapshot_countries[ $iso3 ] = array(
-            'composite_score' => $row['composite_score'] ?? null,
-            'rank'            => $row['rank'] ?? null,
-            'coverage_type'   => $row['coverage_type'] ?? 'partial',
-            'pillars' => array(
-                'energy'   => $row['energy_dependency_percentile'] ?? null,
-                'hhi'      => $row['supplier_concentration_percentile'] ?? null,
-                'maritime' => $row['maritime_vulnerability_percentile'] ?? null,
-            ),
-            'data_year_energy'   => $row['data_year_energy'] ?? null,
-            'data_year_hhi'      => $row['data_year_hhi'] ?? null,
-            'data_year_maritime' => $row['data_year_maritime'] ?? null,
-            'dqi_energy'         => $row['dqi_energy'] ?? null,
-            'dqi_hhi'            => $row['dqi_hhi'] ?? null,
-            'dqi_maritime'       => $row['dqi_maritime'] ?? null,
-            'composite_dqi'      => $row['composite_dqi'] ?? null,
-            'vintage_summary'    => $row['vintage_summary'] ?? null,
+            'composite_score' => $gen_row['composite_score'],
+            'rank'            => $gen_row['rank_display']['best_estimate'] ?? null,
+            'coverage_type'   => $gen_row['coverage'] ?? 'full',
+            'pillars'         => $pillars,
+            'data_year_energy'   => $gen_row['data_year_energy'] ?? null,
+            'data_year_hhi'      => $gen_row['data_year_hhi'] ?? null,
+            'data_year_maritime' => $gen_row['data_year_maritime'] ?? null,
+            'dqi_energy'         => $gen_row['dqi_energy'] ?? null,
+            'dqi_hhi'            => $gen_row['dqi_hhi'] ?? null,
+            'dqi_maritime'       => $gen_row['dqi_maritime'] ?? null,
+            'composite_dqi'      => $gen_row['composite_dqi'] ?? null,
+            'vintage_summary'    => $gen_row['vintage_summary'] ?? 'Historical snapshot for ' . $year,
         );
     }
 
-    // 9. Save snapshot
+    // ─── Save snapshot ──────────────────────────────────────────────
     if ( function_exists( 'blomstra_index_snapshot_save' ) ) {
         $saved = blomstra_index_snapshot_save( 'sivi', $snapshot_countries, $year . '-01' );
         return array(
@@ -2243,8 +1738,9 @@ function sivi_build_historical_snapshot( $year ) {
     }
 }
 
-
-// ─── BACKFILL STATUS TRACKING ─────────────────────────────────────
+// ============================================================================
+// 17. BACKFILL STATUS TRACKING (unchanged)
+// ============================================================================
 
 function sivi_get_backfill_status() {
     $range = blomstra_get_index_backfill_range('sivi');
@@ -2253,7 +1749,6 @@ function sivi_get_backfill_status() {
         $default[ $year ] = array( 'status' => 'not_started', 'countries' => 0, 'last_attempt' => null, 'error' => null );
     }
     $status = get_option( 'sivi_backfill_status', $default );
-    // Ensure all years exist
     foreach ( $default as $year => $val ) {
         if ( ! isset( $status[ $year ] ) ) {
             $status[ $year ] = $val;
@@ -2265,7 +1760,7 @@ function sivi_get_backfill_status() {
 function sivi_update_backfill_status( $year, $status, $countries = null, $error = null ) {
     $current = sivi_get_backfill_status();
     $current[ $year ] = array(
-        'status'        => $status, // 'success', 'partial', 'failed', 'scheduled', 'not_started'
+        'status'        => $status,
         'countries'     => $countries !== null ? (int) $countries : ( $current[ $year ]['countries'] ?? 0 ),
         'last_attempt'  => current_time( 'mysql' ),
         'error'         => $error,
@@ -2274,9 +1769,6 @@ function sivi_update_backfill_status( $year, $status, $countries = null, $error 
     update_option( 'sivi_backfill_status', $current, false );
 }
 
-/**
- * Check if all backfill years are in a terminal state, then clear the lock.
- */
 function sivi_backfill_check_completion() {
     $status = sivi_get_backfill_status();
     $range = blomstra_get_index_backfill_range('sivi');
@@ -2294,11 +1786,8 @@ function sivi_backfill_check_completion() {
     }
 }
 
-// ─── BACKFILL CRON CALLBACK ──────────────────────────────────────
-
 add_action( 'sivi_backfill_year_cron', 'sivi_backfill_year_cron_callback', 10, 1 );
 function sivi_backfill_year_cron_callback( $year ) {
-    // Check if lock exists; if not, skip (should not happen)
     if ( ! get_transient( 'sivi_backfill_lock' ) ) {
         error_log( "SIVI backfill cron for $year called but lock missing – skipping." );
         return;
@@ -2315,8 +1804,6 @@ function sivi_backfill_year_cron_callback( $year ) {
     sivi_update_backfill_status( $year, $status, $result['countries'], $error );
     sivi_backfill_check_completion();
 }
-
-// ─── ADMIN HANDLERS FOR BACKFILL RANGE ────────────────────────────
 
 add_action( 'admin_init', function () {
     if ( isset( $_POST['sivi_save_backfill_range'] ) && check_admin_referer( 'sivi_backfill_range_action', 'sivi_backfill_range_nonce' ) ) {
