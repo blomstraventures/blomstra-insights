@@ -3,7 +3,7 @@
  *
  * @package Blomstra\Insights\Alerts
  * @since   1.0.0
- * @version 2.0.3  – Removed unnecessary scroll-on-filter
+ * @version 2.1.0  – Background delivery via cron (offloads notifications)
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // 1. CONSTANTS & DEFAULTS
 // ============================================================
 
-define( 'BLOMSTRA_ALERT_VERSION', '2.0.3' );
+define( 'BLOMSTRA_ALERT_VERSION', '2.1.0' );
 define( 'BLOMSTRA_ALERT_COOLDOWN_DEFAULT', 5 * MINUTE_IN_SECONDS );
 define( 'BLOMSTRA_ALERT_TABLE', 'blomstra_alerts' );
 define( 'BLOMSTRA_ALERT_PER_PAGE', 100 );
@@ -254,12 +254,13 @@ function blomstra_alert_detect_changes( $new_data, $old_data, $index_slug ) {
 }
 
 // ============================================================
-// 6. STORAGE
+// 6. STORAGE (returns inserted IDs)
 // ============================================================
 
 function blomstra_alert_store_records( $index_slug, $changes ) {
     global $wpdb;
     $table = $wpdb->prefix . BLOMSTRA_ALERT_TABLE;
+    $inserted_ids = array();
 
     foreach ( $changes as $change ) {
         $wpdb->insert( $table, array(
@@ -277,12 +278,19 @@ function blomstra_alert_store_records( $index_slug, $changes ) {
             'alert_reason'     => $change['alert_reason'],
             'log_type'         => 'alert',
             'triggered_at'     => current_time( 'mysql' ),
+            'sent_at'          => null,
         ) );
+        
+        if ( $wpdb->insert_id ) {
+            $inserted_ids[] = $wpdb->insert_id;
+        }
     }
+    
+    return $inserted_ids;
 }
 
 // ============================================================
-// 7. NOTIFICATIONS
+// 7. NOTIFICATIONS (synchronous send functions – kept for cron)
 // ============================================================
 
 function blomstra_alert_send_email( $index_slug, $changes, $config ) {
@@ -447,42 +455,10 @@ function blomstra_alert_send_slack( $index_slug, $changes, $config ) {
 }
 
 // ============================================================
-// 8. ORCHESTRATOR
+// 8. PAYLOAD BUILDER (extracted for reusability)
 // ============================================================
 
-function blomstra_fire_index_alerts( $index_slug, $new_data, $old_data, $new_meta, $old_meta ) {
-    $config = blomstra_get_alert_config();
-    if ( empty( $config['enabled'] ) ) {
-        blomstra_alert_log( 'info', 'Alerts disabled, skipping.', $index_slug );
-        return 0;
-    }
-
-    $cooldown = apply_filters( 'blomstra_alert_cooldown', BLOMSTRA_ALERT_COOLDOWN_DEFAULT, $index_slug );
-    $cooldown_key = 'blomstra_alert_cooldown_' . $index_slug;
-    $last_run = get_transient( $cooldown_key );
-
-    $changes = blomstra_alert_detect_changes( $new_data, $old_data, $index_slug );
-
-    if ( empty( $changes ) ) {
-        blomstra_alert_log( 'info', 'No changes detected, no alert fired.', $index_slug );
-        return 0;
-    }
-
-    $change_hash = md5( wp_json_encode( $changes ) );
-    if ( $last_run && isset( $last_run['hash'] ) && $last_run['hash'] === $change_hash ) {
-        blomstra_alert_log( 'warning', 'Duplicate alert skipped (cooldown).', $index_slug );
-        return 0;
-    }
-
-    set_transient( $cooldown_key, array(
-        'hash' => $change_hash,
-        'time' => time(),
-    ), $cooldown );
-
-    if ( $config['store_alerts'] ) {
-        blomstra_alert_store_records( $index_slug, $changes );
-    }
-
+function blomstra_build_alert_payload( $index_slug, $changes, $new_meta, $old_meta, $change_hash ) {
     $payload = array(
         'payload_version' => '2',
         'alert_id'        => $change_hash,
@@ -527,17 +503,155 @@ function blomstra_fire_index_alerts( $index_slug, $new_data, $old_data, $new_met
             } ) ),
         )
     );
+    
+    return $payload;
+}
 
-    blomstra_alert_send_email( $index_slug, $changes, $config );
-    blomstra_alert_send_webhook( $payload, $config );
-    blomstra_alert_send_slack( $index_slug, $changes, $config );
+// ============================================================
+// 9. ORCHESTRATOR (queues notifications for background delivery)
+// ============================================================
 
-    blomstra_alert_log( 'info', 'Alert fired: ' . count( $changes ) . ' changes detected.', $index_slug );
+function blomstra_fire_index_alerts( $index_slug, $new_data, $old_data, $new_meta, $old_meta ) {
+    $config = blomstra_get_alert_config();
+    if ( empty( $config['enabled'] ) ) {
+        blomstra_alert_log( 'info', 'Alerts disabled, skipping.', $index_slug );
+        return 0;
+    }
+
+    $cooldown = apply_filters( 'blomstra_alert_cooldown', BLOMSTRA_ALERT_COOLDOWN_DEFAULT, $index_slug );
+    $cooldown_key = 'blomstra_alert_cooldown_' . $index_slug;
+    $last_run = get_transient( $cooldown_key );
+
+    $changes = blomstra_alert_detect_changes( $new_data, $old_data, $index_slug );
+
+    if ( empty( $changes ) ) {
+        blomstra_alert_log( 'info', 'No changes detected, no alert fired.', $index_slug );
+        return 0;
+    }
+
+    $change_hash = md5( wp_json_encode( $changes ) );
+    if ( $last_run && isset( $last_run['hash'] ) && $last_run['hash'] === $change_hash ) {
+        blomstra_alert_log( 'warning', 'Duplicate alert skipped (cooldown).', $index_slug );
+        return 0;
+    }
+
+    set_transient( $cooldown_key, array(
+        'hash' => $change_hash,
+        'time' => time(),
+    ), $cooldown );
+
+    // ─── Store alerts and collect IDs ──────────────────────────────
+    $alert_ids = array();
+    if ( $config['store_alerts'] ) {
+        $alert_ids = blomstra_alert_store_records( $index_slug, $changes );
+    }
+
+    // ─── Queue notifications for background delivery ──────────────
+    if ( ! empty( $alert_ids ) ) {
+        $pending_key = 'blomstra_pending_alert_ids_' . $index_slug;
+        set_transient( $pending_key, $alert_ids, 5 * MINUTE_IN_SECONDS );
+
+        if ( ! wp_next_scheduled( 'blomstra_deliver_alerts', array( $index_slug ) ) ) {
+            wp_schedule_single_event( time() + 10, 'blomstra_deliver_alerts', array( $index_slug ) );
+        }
+
+        blomstra_alert_log( 'info', 'Alert queued for background delivery: ' . count( $alert_ids ) . ' alerts stored.', $index_slug );
+    } else {
+        // Fallback: if storing is disabled, send synchronously
+        blomstra_alert_log( 'warning', 'Alerts not stored – sending synchronously (store_alerts disabled).', $index_slug );
+        $payload = blomstra_build_alert_payload( $index_slug, $changes, $new_meta, $old_meta, $change_hash );
+        blomstra_alert_send_email( $index_slug, $changes, $config );
+        blomstra_alert_send_webhook( $payload, $config );
+        blomstra_alert_send_slack( $index_slug, $changes, $config );
+    }
+
+    blomstra_alert_log( 'info', 'Alert fired: ' . count( $changes ) . ' changes detected (queued for delivery).', $index_slug );
     return count( $changes );
 }
 
 // ============================================================
-// 9. RETENTION & CLEANUP
+// 10. CRON: BACKGROUND NOTIFICATION DELIVERY
+// ============================================================
+
+function blomstra_deliver_pending_alerts( $index_slug ) {
+    $pending_key = 'blomstra_pending_alert_ids_' . $index_slug;
+    $alert_ids = get_transient( $pending_key );
+    
+    if ( empty( $alert_ids ) || ! is_array( $alert_ids ) ) {
+        blomstra_alert_log( 'info', 'No pending alerts to deliver for ' . $index_slug, $index_slug );
+        return;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . BLOMSTRA_ALERT_TABLE;
+    $ids_string = implode( ',', array_map( 'intval', $alert_ids ) );
+    
+    $alerts = $wpdb->get_results( "SELECT * FROM $table WHERE id IN ($ids_string) AND sent_at IS NULL" );
+    
+    if ( empty( $alerts ) ) {
+        delete_transient( $pending_key );
+        blomstra_alert_log( 'info', 'No unsent alerts found for IDs: ' . $ids_string, $index_slug );
+        return;
+    }
+
+    // ─── Build changes array from database rows ────────────────────
+    $changes = array();
+    foreach ( $alerts as $row ) {
+        $change = array(
+            'iso3'             => $row->iso3,
+            'country'          => $row->country_name,
+            'type'             => 'change',
+            'current_rank'     => $row->current_rank,
+            'current_score'    => $row->current_score,
+            'previous_rank'    => $row->previous_rank,
+            'previous_score'   => $row->previous_score,
+            'rank_delta'       => $row->rank_delta,
+            'score_delta'      => $row->score_delta,
+            'previous_pillars' => $row->previous_pillars ? json_decode( $row->previous_pillars, true ) : array(),
+            'current_pillars'  => $row->current_pillars ? json_decode( $row->current_pillars, true ) : array(),
+            'pillar_deltas'    => array(),
+            'alert_reason'     => $row->alert_reason,
+        );
+        
+        // Extract pillar deltas from reason if needed
+        if ( strpos( $row->alert_reason, 'pillar_change_' ) !== false ) {
+            $prev = $change['previous_pillars'];
+            $curr = $change['current_pillars'];
+            foreach ( $curr as $pname => $val ) {
+                if ( isset( $prev[ $pname ] ) && is_numeric( $val ) && is_numeric( $prev[ $pname ] ) ) {
+                    $delta = round( $val - $prev[ $pname ], 2 );
+                    if ( abs( $delta ) >= 0.01 ) {
+                        $change['pillar_deltas'][ $pname ] = $delta;
+                    }
+                }
+            }
+        }
+        
+        $changes[] = $change;
+    }
+
+    // ─── Send notifications ────────────────────────────────────────
+    $config = blomstra_get_alert_config();
+    $change_hash = md5( wp_json_encode( $changes ) );
+    
+    $payload = blomstra_build_alert_payload( $index_slug, $changes, array(), array(), $change_hash );
+    
+    blomstra_alert_send_email( $index_slug, $changes, $config );
+    blomstra_alert_send_webhook( $payload, $config );
+    blomstra_alert_send_slack( $index_slug, $changes, $config );
+
+    // ─── Update sent_at for delivered alerts ──────────────────────
+    $wpdb->query( "UPDATE $table SET sent_at = NOW() WHERE id IN ($ids_string)" );
+    
+    delete_transient( $pending_key );
+    
+    blomstra_alert_log( 'info', 'Delivered ' . count( $alerts ) . ' pending alerts for ' . $index_slug, $index_slug );
+}
+
+add_action( 'blomstra_deliver_alerts', 'blomstra_deliver_pending_alerts', 10, 1 );
+
+// ============================================================
+// 11. RETENTION & CLEANUP
 // ============================================================
 
 function blomstra_alert_cleanup() {
@@ -587,7 +701,7 @@ add_action( 'init', 'blomstra_alert_cleanup_cron' );
 add_action( 'blomstra_alert_cleanup_daily', 'blomstra_alert_cleanup' );
 
 // ============================================================
-// 10. ADMIN UI
+// 12. ADMIN UI
 // ============================================================
 
 add_action( 'admin_menu', function () {
@@ -1170,6 +1284,7 @@ function blomstra_alerts_render_page() {
                     <li><strong>Delivery:</strong> Email (mandatory), optional webhook (JSON payload), and optional Slack integration.</li>
                     <li><strong>Cooldown:</strong> Prevents duplicate alerts for the same change set within 5 minutes (configurable via filter).</li>
                     <li><strong>Retention:</strong> Alerts are automatically cleaned up after the configured number of days, and each index is trimmed to the max number of alerts.</li>
+                    <li><strong>Background delivery:</strong> Notifications are sent asynchronously via cron – builds are not delayed by email/API calls.</li>
                 </ul>
             </div>
         </div>
