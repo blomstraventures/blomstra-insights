@@ -5,6 +5,7 @@ Audit Date: 2026-09-08\
 Auditor: AI-Assisted Code Review\
 Repository: `blomstraventures/insights-wp
 `Branch: `main`
+Version: `Phase 6b`
 
 Audit Legend:
 
@@ -77,21 +78,6 @@ Audit Legend:
 | 10 | Every indicator must have provenance via `blomstra_track_source`        | `sivi-backend.php`, `global-reference-data.php` | ✅      | SIVI: `blomstra_track_source($sources, $iso3, 'energy_dependency', 'EIA', 'national', $c['year']);` L1: `blomstra_track_source($sources, $iso3, 'maritime_connectivity', 'WB_WDI', 'national', $raw[$iso3]['year']);`                             |
 
 \
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-
 
 
 ## **Section 8 – Reference Data Layer (L1)**
@@ -247,9 +233,6 @@ Audit Legend:
 | TOTAL                              | 80 | 3  | 0 | 15  | 98    |
 
 \
-\
-\
-
 
 
 ### **Issues to Resolve**
