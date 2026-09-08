@@ -1,12 +1,22 @@
 /**
- * Sovereign Infrastructure Vulnerability Index (SIVI) — v3.1.1
- *
- * Refactored to use the generic index builder orchestrator.
- * Fixed: update_option after reshaping, historical backfill isolation, memoized fetchers.
+ * Sovereign Infrastructure Vulnerability Index (SIVI) — v3.3.0
  *
  * @package     Blomstra\Insights\Indices\SIVI
  * @since       1.0.0
- * @version     3.1.1  – Critical bug fixes for generic builder integration
+ * @version     3.3.0  – Companion fix to blomstra-index-utilities.php v1.6.0.
+ *                       sivi_build_historical_snapshot() now builds its
+ *                       snapshot row via the shared blomstra_build_flat_snapshot_row()
+ *                       helper instead of a hand-written nested shape —
+ *                       this is the same function the live build (via the
+ *                       generic builder) uses, so both paths are now
+ *                       structurally guaranteed to produce identical
+ *                       shapes, including DQI-per-pillar, composite DQI,
+ *                       and vintage_summary as flat sibling fields. Before
+ *                       this fix every backfilled year silently rendered
+ *                       as blank in the frontend's score-trend chart while
+ *                       live-built months worked fine, because the two
+ *                       paths wrote genuinely different JSON shapes into
+ *                       the same history table.
  * @author      Blomstra Insights Team
  * @license     Proprietary
  */
@@ -19,7 +29,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // 1. CONSTANTS
 // ============================================================================
 
-define( 'SIVI_VERSION', '3.1.1' );
+define( 'SIVI_VERSION', '3.3.0' );
 define( 'SIVI_OPTION_KEY', 'sivi_composite_index' );
 define( 'SIVI_STAGING_KEY', SIVI_OPTION_KEY . '_staging' );
 define( 'SIVI_MIN_PILLARS_REQUIRED', 2 );
@@ -450,13 +460,6 @@ function sivi_check_upstream_health() {
 // 9. SIVI CONFIG FOR GENERIC BUILDER (with memoized fetchers)
 // ============================================================================
 
-/**
- * Returns the configuration array for the generic index builder for SIVI.
- * Includes memoized fetchers to avoid duplicate API calls.
- *
- * @param array|null $custom_composite_weights Optional custom weights.
- * @return array
- */
 function sivi_get_generic_config( $custom_composite_weights = null ) {
     $energy_store   = get_option( SIVI_ENERGY_KEY, array() );
     $hhi_store      = get_option( SIVI_HHI_KEY, array() );
@@ -466,7 +469,6 @@ function sivi_get_generic_config( $custom_composite_weights = null ) {
     $hhi_data       = $hhi_store['data'] ?? array();
     $maritime_data  = $maritime_store['data'] ?? array();
 
-    // ─── Raw value callbacks ──────────────────────────────────────
     $get_raw_energy = function( $iso3_list ) use ( $energy_data ) {
         $out = array();
         foreach ( $iso3_list as $iso3 ) {
@@ -497,7 +499,6 @@ function sivi_get_generic_config( $custom_composite_weights = null ) {
         return $out;
     };
 
-    // ─── Data years callback (for DQI) ────────────────────────────
     $get_data_years = function( $iso3_list ) use ( $energy_data, $hhi_data, $maritime_data ) {
         $result = array();
         foreach ( $iso3_list as $iso3 ) {
@@ -544,8 +545,7 @@ function sivi_get_generic_config( $custom_composite_weights = null ) {
         'sensitivity_enabled' => true,
         'lock_ttl' => SIVI_LOCK_TTL,
         'composite_field' => 'sivi_structural',
-        // Historical backfills should not save snapshots twice
-        'skip_snapshot' => false, // Set to true in historical context
+        'skip_snapshot' => false,
     );
 }
 
@@ -556,21 +556,17 @@ function sivi_get_generic_config( $custom_composite_weights = null ) {
 function sivi_build_composite( $context = 'manual', $custom_weights = null, $custom_composite_weights = null ) {
     $is_scenario = ( $custom_weights !== null || $custom_composite_weights !== null );
 
-    // Build config (we ignore $custom_weights for now – they are pillar-level weights, not composite weights)
     $config = sivi_get_generic_config( $custom_composite_weights );
 
-    // Call generic builder
     $generic_output = blomstra_build_index_composite( $config, $context );
 
     if ( is_wp_error( $generic_output ) ) {
         return array( 'error' => $generic_output->get_error_message() );
     }
 
-    // ─── Post-process the generic output to match original SIVI structure ───
     $generic_countries = $generic_output['sivi_structural'];
     $excluded = $generic_output['excluded_detail'] ?? array();
 
-    // Build the SIVI-specific country array
     $transformed_countries = array();
     foreach ( $generic_countries as $iso3 => $gen_row ) {
         $entry = array(
@@ -598,7 +594,6 @@ function sivi_build_composite( $context = 'manual', $custom_weights = null, $cus
             ),
         );
 
-        // Add DQI and data_year from generic output
         foreach ( array( 'energy', 'hhi', 'maritime' ) as $pillar ) {
             if ( isset( $gen_row[ 'data_year_' . $pillar ] ) ) {
                 $entry[ 'data_year_' . $pillar ] = $gen_row[ 'data_year_' . $pillar ];
@@ -618,7 +613,6 @@ function sivi_build_composite( $context = 'manual', $custom_weights = null, $cus
         $transformed_countries[ $iso3 ] = $entry;
     }
 
-    // Build the final output with the required metadata
     $output = array(
         'version'         => SIVI_VERSION,
         'last_updated'    => $generic_output['last_updated'],
@@ -646,39 +640,25 @@ function sivi_build_composite( $context = 'manual', $custom_weights = null, $cus
         ),
     );
 
-    // Add upstream warnings
     $warnings = sivi_check_upstream_health();
     if ( ! empty( $warnings ) ) {
         $output['_meta']['upstream_warnings'] = $warnings;
     }
 
-    // Add benchmark correlation if present
     if ( isset( $generic_output['_meta']['benchmark_correlation'] ) ) {
         $output['_meta']['benchmark_correlation'] = $generic_output['_meta']['benchmark_correlation'];
     }
 
-    // ─── FIXED BUG 2: Save the reshaped output to the database ───
+    // Save the reshaped, public-facing output. This is the ONLY place
+    // SIVI_OPTION_KEY is written — the generic builder never touches it.
     if ( ! $is_scenario ) {
         update_option( SIVI_OPTION_KEY, $output, false );
     }
 
-    // ─── Re-save snapshot with SIVI-specific fields ──────────────
-    // The generic builder already saved a snapshot if context is manual/cron.
-    // We overwrite it with the SIVI-shaped data.
-    if ( ! $is_scenario && function_exists( 'blomstra_index_snapshot_save' ) ) {
-        $snap = array();
-        foreach ( $output['countries'] as $iso3 => $data ) {
-            $snap[ $iso3 ] = array(
-                'composite_score' => $data['sivi_structural'] ?? null,
-                'rank'            => $data['rank_display']['best_estimate'] ?? null,
-                'coverage_type'   => $data['coverage'] ?? 'full',
-                'energy' => $data['energy_dependency_percentile'] ?? null,
-                'hhi'    => $data['supplier_concentration_percentile'] ?? null,
-                'maritime' => $data['maritime_vulnerability_percentile'] ?? null,
-            );
-        }
-        blomstra_index_snapshot_save( 'sivi', $snap );
-    }
+    // No manual snapshot re-save here (v3.2.0+): the generic builder
+    // (blomstra_build_index_composite, called above) already saved a
+    // canonical flat snapshot for this build, including DQI, via
+    // blomstra_build_flat_snapshot_row().
 
     return $output;
 }
@@ -820,7 +800,7 @@ function sivi_initialize() {
 add_action( 'init', 'sivi_initialize' );
 
 // ============================================================================
-// 15. ADMIN PAGE – FULL (copied from 2.8.5)
+// 15. ADMIN PAGE – FULL
 // ============================================================================
 
 add_action( 'admin_menu', function () {
@@ -842,7 +822,6 @@ add_action( 'admin_init', function () {
 } );
 
 function sivi_render_admin_page() {
-    // ── Handle actions ────────────────────────────────────────────
     if ( isset( $_POST['sivi_fetch_energy'] ) && check_admin_referer( 'sivi_fetch_energy_action' ) ) {
         $result = sivi_refresh_energy_pillar();
         if ( isset( $result['error'] ) ) {
@@ -902,10 +881,11 @@ function sivi_render_admin_page() {
         delete_option( SIVI_MARITIME_META_KEY );
         delete_option( SIVI_OPTION_KEY );
         delete_option( SIVI_STAGING_KEY );
+        delete_option( 'sivi_composite_internal' );
+        delete_option( 'sivi_composite_internal_staging' );
         echo '<div class="notice notice-warning"><p>🗑️ All SIVI pillar caches and composite have been flushed.</p></div>';
     }
 
-    // ─── SENSITIVITY TESTING ──────────────────────────────────────
     if ( isset( $_POST['sivi_build_scenario'] ) && check_admin_referer( 'sivi_build_scenario_action' ) ) {
         $scenario_name = sanitize_key( $_POST['sivi_scenario_name'] );
         $raw_json = wp_unslash( $_POST['sivi_custom_weights'] );
@@ -938,7 +918,6 @@ function sivi_render_admin_page() {
         echo '<div class="notice notice-warning"><p>🗑️ Scenario <strong>' . esc_html( $scenario_id ) . '</strong> deleted.</p></div>';
     }
 
-    // ─── BENCHMARK CORRELATION ────────────────────────────────────
     if ( isset( $_POST['sivi_benchmark_correlate'] ) && check_admin_referer( 'sivi_benchmark_correlate_action' ) ) {
         $raw_bench_json = wp_unslash( $_POST['sivi_benchmark_json'] ?? '' );
         $comparator = json_decode( $raw_bench_json, true );
@@ -952,7 +931,6 @@ function sivi_render_admin_page() {
         }
     }
 
-    // ─── CUSTOM COMPOSITE WEIGHTS ──────────────────────────────────
     if ( isset( $_POST['sivi_save_custom_weights'] ) && check_admin_referer( 'sivi_custom_weights_action' ) ) {
         $energy   = (float) $_POST['sivi_weight_energy'];
         $hhi      = (float) $_POST['sivi_weight_hhi'];
@@ -975,7 +953,6 @@ function sivi_render_admin_page() {
         echo '<div class="notice notice-success"><p>✅ Custom weights reset to defaults. Rebuild the index to apply.</p></div>';
     }
 
-    // ─── BACKFILL ALL YEARS ──────────────────────────────────────
     if ( isset( $_POST['sivi_backfill_all'] ) && check_admin_referer( 'sivi_backfill_all_action', 'sivi_backfill_all_nonce' ) ) {
         $eia_lock = get_transient( 'blomstra_eia_refresh_in_progress' );
         $hhi_lock = get_transient( 'blomstra_hhi_refresh_in_progress' );
@@ -998,7 +975,6 @@ function sivi_render_admin_page() {
         }
     }
 
-    // ─── RETRY SINGLE YEAR ──────────────────────────────────────────
     if ( isset( $_POST['sivi_backfill_year'] ) && check_admin_referer( 'sivi_backfill_year_action', 'sivi_backfill_year_nonce' ) ) {
         $year = (int) $_POST['sivi_backfill_year'];
         $range = blomstra_get_index_backfill_range('sivi');
@@ -1016,7 +992,6 @@ function sivi_render_admin_page() {
         }
     }
 
-    // ─── Display current status ────────────────────────────────────
     $existing = get_option( SIVI_OPTION_KEY, null );
     $next_cron = wp_next_scheduled( SIVI_AUTO_REFRESH_HOOK );
     $auto_refresh_time = $next_cron ? date_i18n( 'Y-m-d H:i', $next_cron ) : 'Not scheduled';
@@ -1046,7 +1021,6 @@ function sivi_render_admin_page() {
 
     echo '<div class="wrap"><h1>SIVI — Sovereign Infrastructure Vulnerability Index</h1>';
 
-    // ─── DASHBOARD CARDS ──────────────────────────────────────────
     echo '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:15px; margin:15px 0;">';
     echo '<div class="postbox" style="border-left:4px solid #2271b1; margin:0; min-height:100px;">';
     echo '<div class="postbox-header"><h3 class="hndle" style="font-size:14px; margin:0; padding:8px 12px;">Energy Pillar</h3></div>';
@@ -1065,7 +1039,6 @@ function sivi_render_admin_page() {
     echo '<div class="inside" style="padding:8px 12px;"><p style="font-size:18px; margin:0; font-weight:bold;">' . ( $existing ? 'Scored ✓ (' . $existing['total_countries'] . ')' : 'Not Scored' ) . '</p></div></div>';
     echo '</div>';
 
-    // ─── Coverage Breakdown ──────────────────────────────────────
     if ( $existing && ! empty( $existing['countries'] ) ) {
         $full_count = 0; $partial_count = 0;
         foreach ( $existing['countries'] as $country ) {
@@ -1086,13 +1059,11 @@ function sivi_render_admin_page() {
         echo '</div></div>';
     }
 
-    // ─── Upstream warnings ──────────────────────────────────────
     $warnings = sivi_check_upstream_health();
     if ( ! empty( $warnings ) ) {
         echo '<div class="notice notice-warning"><p>⚠️ ' . implode( ' ', $warnings ) . '</p></div>';
     }
 
-    // ─── STATUS SECTION ──────────────────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #2271b1; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-clock"></span> Data Source &amp; Auto‑Refresh Status</h2></div>';
     echo '<div class="inside">';
@@ -1107,7 +1078,6 @@ function sivi_render_admin_page() {
     }
     echo '</div></div>';
 
-    // ─── CUSTOM COMPOSITE WEIGHTS UI ──────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-sliders"></span> ⚖️ Custom Composite Weights</h2></div>';
     echo '<div class="inside">';
@@ -1166,7 +1136,6 @@ function sivi_render_admin_page() {
     echo '<p style="font-size:12px; color:#666; margin-top:10px;">Current weights will be used in all future builds unless overridden by scenario JSON.</p>';
     echo '</div></div>';
 
-    // ─── PILLAR DATA LAYER ──────────────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #135e96; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-database"></span> Pillar Data Layer</h2></div>';
     echo '<div class="inside">';
@@ -1191,7 +1160,6 @@ function sivi_render_admin_page() {
     echo '</tbody></table>';
     echo '</div></div>';
 
-    // ─── COMPOSITE & BUILD ──────────────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #f56e28; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-chart-area"></span> Composite &amp; Build</h2></div>';
     echo '<div class="inside">';
@@ -1217,7 +1185,6 @@ function sivi_render_admin_page() {
     echo '<strong>Flush ALL Caches</strong> — deletes all pillar and composite data (destructive).</p>';
     echo '</div></div>';
 
-    // ─── HISTORICAL BACKFILL RANGE ──────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-settings"></span> ⚙️ Historical Backfill Range</h2></div>';
     echo '<div class="inside">';
@@ -1233,7 +1200,6 @@ function sivi_render_admin_page() {
     echo '</form>';
     echo '</div></div>';
 
-    // ─── HISTORICAL BACKFILL STATUS ─────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-backup"></span> 📅 Historical Backfill Status</h2></div>';
     echo '<div class="inside">';
@@ -1291,7 +1257,6 @@ function sivi_render_admin_page() {
     echo '<p style="color:#666; font-size:12px; margin-top:5px;">This will create historical snapshots for the configured range. Each year runs as a separate background job to avoid timeouts. The DQI and vintage metadata will reflect the actual data year used for each pillar.</p>';
     echo '</div></div>';
 
-    // ─── SENSITIVITY TESTING ──────────────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #9b51e0; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-admin-generic"></span> 🔬 Sensitivity Testing (Research)</h2></div>';
     echo '<div class="inside">';
@@ -1422,7 +1387,6 @@ function sivi_render_admin_page() {
 
     echo '</div></div>';
 
-    // ─── BENCHMARK CORRELATION ─────────────────────────────────────
     echo '<div class="postbox" style="border-left:4px solid #00a0d2; background:#fff;">';
     echo '<div class="postbox-header"><h2 class="hndle"><span class="dashicons dashicons-chart-line"></span> 🔗 Benchmark Correlation (Research)</h2></div>';
     echo '<div class="inside">';
@@ -1434,7 +1398,6 @@ function sivi_render_admin_page() {
     echo '</form>';
     echo '</div></div>';
 
-    // ─── PREVIEW TABLES ──────────────────────────────────────────────
     if ( $existing && ! empty( $existing['countries'] ) ) {
         $countries = $existing['countries'];
         uasort( $countries, function( $a, $b ) {
@@ -1446,7 +1409,6 @@ function sivi_render_admin_page() {
 
         echo '<div style="margin-top:20px;">';
 
-        // Top 10 Vulnerable
         echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0;">';
         echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📊 10 Most Vulnerable Countries</summary>';
         echo '<div style="padding:15px; background:#fff;">';
@@ -1486,7 +1448,6 @@ function sivi_render_admin_page() {
         echo '</tbody></table>';
         echo '</div></details>';
 
-        // Least Vulnerable
         echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0; margin-top:10px;">';
         echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📊 10 Least Vulnerable Countries</summary>';
         echo '<div style="padding:15px; background:#fff;">';
@@ -1526,7 +1487,6 @@ function sivi_render_admin_page() {
         echo '</tbody></table>';
         echo '</div></details>';
 
-        // Excluded
         if ( ! empty( $existing['excluded_detail'] ) ) {
             echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0; margin-top:10px;">';
             echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">🚫 Excluded — Insufficient Data (' . count( $existing['excluded_detail'] ) . ')</summary>';
@@ -1539,7 +1499,6 @@ function sivi_render_admin_page() {
             echo '</div></details>';
         }
 
-        // Raw JSON
         echo '<details style="background:#f0f6fc; border:1px solid #ccd0d4; border-radius:4px; padding:0; margin-top:10px;">';
         echo '<summary style="cursor:pointer; font-weight:bold; padding:10px 15px; background:#e8f0fe; border-bottom:1px solid #ccd0d4; border-radius:4px 4px 0 0;">📄 Raw JSON Output</summary>';
         echo '<div style="padding:15px; background:#fff;">';
@@ -1557,8 +1516,14 @@ function sivi_render_admin_page() {
 
 /**
  * Build a historical SIVI snapshot for a specific year.
- * Uses the generic orchestrator with year‑specific fetchers.
- * Memoizes fetchers to avoid duplicate API calls.
+ *
+ * v3.3.0: the snapshot row is now built with blomstra_build_flat_snapshot_row()
+ * — the SAME helper the live build uses via the generic builder — including
+ * DQI-per-pillar, composite DQI, and vintage_summary as flat sibling fields.
+ * Before this fix, this function built its own hand-written NESTED shape
+ * (pillars: {...}, dqi_energy, ...) which the frontend's history chart never
+ * unwrapped, so every backfilled year rendered as blank while live-built
+ * months worked fine.
  *
  * @param int $year Target year.
  * @return array ['success'=>bool, 'countries'=>int, 'error'=>string|null]
@@ -1570,8 +1535,6 @@ function sivi_build_historical_snapshot( $year ) {
 
     $iso3_list = array_keys( sivi_get_global_country_list() );
 
-    // ─── Memoize raw fetchers ──────────────────────────────────────
-    // These are called once, and the same data is reused for both values and data years.
     $memoized_raw = array(
         'energy'   => null,
         'hhi'      => null,
@@ -1622,10 +1585,8 @@ function sivi_build_historical_snapshot( $year ) {
         return $out;
     };
 
-    // ─── Data years callback (uses memoized data) ──────────────────
     $get_data_years_year = function( $iso3_list ) use ( &$memoized_raw, $year ) {
         $result = array();
-        // Ensure the memoized data is loaded
         if ( $memoized_raw['energy'] === null ) {
             $eia_raw = blomstra_fetch_eia_for_year( $year, $iso3_list );
             $memoized_raw['energy'] = sivi_eia_aggregate_energy_dependency(
@@ -1653,7 +1614,6 @@ function sivi_build_historical_snapshot( $year ) {
 
     $composite_weights = sivi_get_composite_weights();
 
-    // ─── Build config ──────────────────────────────────────────────
     $config = array(
         'index_slug'          => 'sivi',
         'pillar_keys'         => array( 'energy', 'hhi', 'maritime' ),
@@ -1682,46 +1642,40 @@ function sivi_build_historical_snapshot( $year ) {
         'sensitivity_enabled' => true,
         'lock_ttl' => SIVI_LOCK_TTL,
         'composite_field' => 'sivi_structural',
-        // ─── FIXED BUG 3: Skip snapshot in generic builder ───
-        // We save the snapshot ourselves after reshaping.
-        'skip_snapshot' => true,
+        'skip_snapshot' => true, // we build + save the row ourselves below,
+                                 // with the correct per-year period key.
     );
 
-    // ─── Call generic builder with 'historical' context ──────────
-    // The generic builder will NOT promote to production for 'historical'
     $generic_output = blomstra_build_index_composite( $config, 'historical' );
 
     if ( is_wp_error( $generic_output ) ) {
         return array( 'success' => false, 'countries' => 0, 'error' => $generic_output->get_error_message() );
     }
 
-    // ─── Transform to SIVI snapshot format ────────────────────────
     $generic_countries = $generic_output['sivi_structural'];
 
+    // v3.3.0 FIX: build every row through the same canonical flat helper
+    // the live build uses, so live and historical rows can never diverge
+    // in shape again.
     $snapshot_countries = array();
     foreach ( $generic_countries as $iso3 => $gen_row ) {
-        $pillars = array();
+        $pillar_scores = array();
+        $pillar_dqi    = array();
         foreach ( array( 'energy', 'hhi', 'maritime' ) as $pillar ) {
-            $pillars[ $pillar ] = $gen_row['pillars'][ $pillar ]['score'] ?? null;
+            $pillar_scores[ $pillar ] = $gen_row['pillars'][ $pillar ]['score'] ?? null;
+            $pillar_dqi[ $pillar ]    = $gen_row[ 'dqi_' . $pillar ] ?? null;
         }
-
-        $snapshot_countries[ $iso3 ] = array(
-            'composite_score' => $gen_row['composite_score'],
-            'rank'            => $gen_row['rank_display']['best_estimate'] ?? null,
-            'coverage_type'   => $gen_row['coverage'] ?? 'full',
-            'pillars'         => $pillars,
-            'data_year_energy'   => $gen_row['data_year_energy'] ?? null,
-            'data_year_hhi'      => $gen_row['data_year_hhi'] ?? null,
-            'data_year_maritime' => $gen_row['data_year_maritime'] ?? null,
-            'dqi_energy'         => $gen_row['dqi_energy'] ?? null,
-            'dqi_hhi'            => $gen_row['dqi_hhi'] ?? null,
-            'dqi_maritime'       => $gen_row['dqi_maritime'] ?? null,
-            'composite_dqi'      => $gen_row['composite_dqi'] ?? null,
-            'vintage_summary'    => $gen_row['vintage_summary'] ?? 'Historical snapshot for ' . $year,
+        $snapshot_countries[ $iso3 ] = blomstra_build_flat_snapshot_row(
+            $gen_row['composite_score'] ?? null,
+            $gen_row['rank_display']['best_estimate'] ?? null,
+            $gen_row['coverage'] ?? 'full',
+            $pillar_scores,
+            $pillar_dqi,
+            $gen_row['composite_dqi'] ?? null,
+            $gen_row['vintage_summary'] ?? ( 'Historical snapshot for ' . $year )
         );
     }
 
-    // ─── Save snapshot ──────────────────────────────────────────────
     if ( function_exists( 'blomstra_index_snapshot_save' ) ) {
         $saved = blomstra_index_snapshot_save( 'sivi', $snapshot_countries, $year . '-01' );
         return array(
