@@ -7,6 +7,8 @@ Purpose: Single source of truth for architecture, data, indices, frontend, opera
 
 ***
 **Audit Status:** ✅ Verified against current codebase. See `AUDIT.md` for detailed verification.
+`Branch: `main`
+Version: `Phase 6b`
 
 ## **Table of Contents**
 
