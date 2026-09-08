@@ -1,4 +1,4 @@
-# **SIVI.md – Sovereign Infrastructure Vulnerability Index** {#h.ysh38rdbalww}
+# **SIVI.md – Sovereign Infrastructure Vulnerability Index**
 
 Document version: 1.0.0\
 Status: CANONICAL\
@@ -10,7 +10,7 @@ Source files: `sivi-backend.php` (SIVI\_VERSION 3.3.0), `sivi-shortcode.php`, `b
 ***
 
 
-## **Document Control** {#h.jydrrb7p1c7j}
+## **Document Control**
 
 |                         |                                                                                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -26,7 +26,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **Table of Contents** {#h.yoc0x6zarzlx}
+## **Table of Contents** 
 
 1. Overview
 
@@ -65,14 +65,14 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **1. Overview** {#h.bzr1cx64i98u}
+## **1. Overview** 
 
 \[D] SIVI (`sivi_*` functions, `SIVI_OPTION_KEY = 'sivi_composite_index'`) is a three-pillar composite score per country. SIVI\_VERSION = '3.3.0', standard version BMS-1.1.0. Higher score = higher vulnerability; rank #1 is the _most_ vulnerable country (stated verbatim in the shortcode's methodology text).
 
 \[D] Purpose (from the shortcode's public methodology string): "A country-level assessment of exposure, dependency, and systemic weakness," combining Energy Dependency, Supplier Concentration, and Maritime Exposure.
 
 
-### **1.1 The Three Pillars** {#h.kigollp3arr}
+### **1.1 The Three Pillars**
 
 |          |          |                                                                                    |
 | -------- | -------- | ---------------------------------------------------------------------------------- |
@@ -88,9 +88,9 @@ File location: `src/indices/sivi/sivi-backend.php`
 ***
 
 
-## **2. Conceptual Framework** {#h.c1qtjns0oqcu}
+## **2. Conceptual Framework** 
 
-### **2.1 The Vulnerability Construct** {#h.uui4t9tjvqbg}
+### **2.1 The Vulnerability Construct**
 
 SIVI measures exposure to disruption across infrastructure systems that are essential for economic and social functioning:
 
@@ -110,7 +110,7 @@ SIVI does not measure:
 - Absolute infrastructure quality – that's a different construct
 
 
-### **2.2 Directionality** {#h.mdilpiezhtg5}
+### **2.2 Directionality** 
 
 All pillars are oriented so that higher score = higher vulnerability:
 
@@ -122,7 +122,7 @@ All pillars are oriented so that higher score = higher vulnerability:
 | Maritime connectivity        | Higher connectivity = less vulnerable  | Inverted (100 - percentile) |
 
 
-### **2.3 Why Percentile Ranks** {#h.c1aq2k1iucv8}
+### **2.3 Why Percentile Ranks** 
 
 SIVI uses percentile ranks rather than absolute thresholds because:
 
@@ -135,9 +135,9 @@ SIVI uses percentile ranks rather than absolute thresholds because:
 ***
 
 
-## **3. Pillar Specifications** {#h.1094vdzg8hvw}
+## **3. Pillar Specifications**
 
-### **3.1 Pillar Definitions** {#h.5pqltb7g3iay}
+### **3.1 Pillar Definitions** 
 
 \[D] Defined in `sivi_get_pillar_weights()` and `sivi_get_pillar_defs()`:
 
@@ -151,21 +151,20 @@ SIVI uses percentile ranks rather than absolute thresholds because:
 \[D] Each pillar currently has exactly one indicator carrying its full internal weight — the multi-indicator-per-pillar machinery in the generic builder exists but isn't exercised by SIVI today.
 
 
-### **3.2 Composite (Cross-Pillar) Weights** {#h.m24qyalbjojx}
+### **3.2 Composite (Cross-Pillar) Weights** 
 
 \[D] Default: `energy = 33.3333`, `hhi = 33.3333`, `maritime = 33.3334` (`sivi_get_composite_weights()`).
 
 \[D] Overridable via option `sivi_custom_composite_weights` — accepted only if the three weights sum to 100 within 0.01 tolerance; an invalid custom set is discarded (`delete_option`) and silently falls back to defaults, with an `error_log` entry.
 
 
-### **3.3 Energy Pillar** {#h.2eqko2vasu35}
-
+### **3.3 Energy Pillar** 
 Weight: 33.3333%\
 Source: U.S. Energy Information Administration (EIA)\
 Indicator: Consumption‑weighted energy dependency
 
 
-#### Data Source {#h.5eo2hceo67ks}
+#### Data Source 
 
 API Endpoint: `https://api.eia.gov/v2/international/data/
 `Product IDs: 4411 (Coal), 4413 (Natural Gas), 4415 (Petroleum), 4417 (Nuclear), 4418 (Renewables)\
@@ -173,7 +172,7 @@ Activity IDs: 2 (Consumption), 1 (Production)\
 Unit: QBTU (Quadrillion British Thermal Units)
 
 
-#### Calculation {#h.pprx5lshme6j}
+#### Calculation 
 
 \[D] `sivi_eia_aggregate_energy_dependency()` computes, per country, a consumption-share-weighted average of per-fuel dependency across five EIA fuel categories:
 
@@ -184,12 +183,12 @@ Unit: QBTU (Quadrillion British Thermal Units)
 \[D] A fuel is included only if both consumption is present and non-zero, and production is present (including explicit `confirmed_zero`, distinguished in output via a `note` field). A country with no usable fuel data or zero total consumption gets `value: null`, not zero.
 
 
-#### Winsorization {#h.5pzcaql8mf1}
+#### Winsorization 
 
 \[D] Energy pillar uses 0% winsorization – no capping of extreme values.
 
 
-#### Notes {#h.6r0qrmewcpjb}
+#### Notes 
 
 - Countries with no EIA data for any fuel are excluded from the energy pillar (pillar is null for that country)
 
@@ -198,14 +197,14 @@ Unit: QBTU (Quadrillion British Thermal Units)
 ***
 
 
-### **3.4 HHI Pillar (Supplier Concentration)** {#h.ek2t5gld9bx1}
+### **3.4 HHI Pillar (Supplier Concentration)** 
 
 Weight: 33.3333%\
 Source: UN Comtrade\
 Indicator: Herfindahl‑Hirschman Index (HHI) of import partner concentration
 
 
-#### Data Source {#h.ja44dmh4g275}
+#### Data Source 
 
 API Endpoint: `https://comtradeapi.un.org/data/v1/get/C/A/HS
 `Flow Code: M (Imports)\
@@ -213,7 +212,7 @@ Cmd Code: TOTAL\
 Partner Code: All partners (0 = world total, 1-9 = regional aggregates)
 
 
-#### Reporter Codes {#h.4isndkjy5qvh}
+#### Reporter Codes 
 
 SIVI uses the UN Comtrade reporter map (`blomstra_get_comtrade_reporter_map`) to convert ISO3 country codes to numeric reporter codes:
 
@@ -222,19 +221,19 @@ SIVI uses the UN Comtrade reporter map (`blomstra_get_comtrade_reporter_map`) to
 Lookback: If data for the target year is unavailable, the system looks back up to 4 years (`BLOMSTRA_HHI_LOOKBACK = 4`).
 
 
-#### Calculation {#h.lu35yyq34knj}
+#### Calculation 
 
 \[D] Not computed inside SIVI at all — SIVI only _reads_ the already-computed HHI from the shared L1 cache (`blomstra_get_comtrade_hhi_data()`), populated by `global-reference-data.php`'s `blomstra_refresh_comtrade_hhi_data()`), via `sivi_merge_hhi_into_pillar()`.
 
 \[D] The underlying HHI formula (for completeness, from L1): `HHI = Σ(partner_import_share²) × 10000`, scale 0–10000, computed per reporter-year from UN Comtrade import rows, clamped to `[0, 10000]`.
 
 
-#### Winsorization {#h.nvzkncah8lwi}
+#### Winsorization 
 
 \[D] HHI pillar uses 0% winsorization – values are bounded by construction (0-10000).
 
 
-#### Notes {#h.8m7sfokkn1vx}
+#### Notes 
 
 - Countries without a Comtrade reporter code are excluded from the HHI pillar
 
@@ -245,20 +244,20 @@ Lookback: If data for the target year is unavailable, the system looks back up t
 ***
 
 
-### **3.5 Maritime Pillar** {#h.iz8uiirdg0ul}
+### **3.5 Maritime Pillar** 
 
 Weight: 33.3334%\
 Source: World Bank WDI (World Development Indicators)\
 Indicator: LSCI – Liner Shipping Connectivity Index
 
 
-#### Data Source {#h.906s52jux4bm}
+#### Data Source 
 
 API Endpoint: `https://api.worldbank.org/v2/country/all/indicator/IS.SHP.GCNW.XQ
 `Coverage: 20-year range from current year
 
 
-#### Calculation {#h.490lenomy31k}
+#### Calculation 
 
 \[D] `sivi_refresh_maritime_pillar()` reads World Bank LSCI values from the shared L1 cache (`blomstra_get_maritime_raw()`).
 
@@ -271,24 +270,22 @@ Inversion:
 This ensures higher vulnerability scores correspond to lower connectivity.
 
 
-#### Structural Zero (Landlocked Countries) {#h.j6sq8fgd4a82}
-
+#### Structural Zero (Landlocked Countries) 
 \[D] Landlocked countries (`sivi_is_landlocked()` → delegates to `blomstra_is_landlocked()`) get an explicit structural zero (`value: 0.0`, source `"Structural zero — landlocked"`) rather than being treated as missing data. This is not treated as missing — the zero is real and meaningful. Landlocked countries are scored in the Full Index, not the Partial Index.
 
 \[D] Countries with neither an LSCI value nor landlocked status get `value: null`.
 
 
-#### Winsorization {#h.t6sv0k8qh2ag}
+#### Winsorization 
 
 \[D] Maritime pillar uses 1% winsorization – caps extreme outliers (thin/erratic LSCI data for small or remote nations).
 
 ***
 
 
-## **4. Data Acquisition** {#h.xmn9l1dc24nc}
+## **4. Data Acquisition** 
 
-### **4.1 Pillar Refresh Functions** {#h.debcm6xgqwms}
-
+### **4.1 Pillar Refresh Functions** 
 Each pillar has its own refresh function that reads from the L1 reference data cache:
 
 |          |                                  |                                    |
@@ -299,7 +296,7 @@ Each pillar has its own refresh function that reads from the L1 reference data c
 | Maritime | `sivi_refresh_maritime_pillar()` | `blomstra_get_maritime_raw()`      |
 
 
-### **4.2 Energy Data Flow** {#h.a82sru8gf6yv}
+### **4.2 Energy Data Flow** 
 
     text
     External trigger (admin button / cron)
@@ -323,7 +320,7 @@ Each pillar has its own refresh function that reads from the L1 reference data c
 \[D] Source data comes from the shared L1 cache (`blomstra_get_eia_raw_data()`), never fetched directly by SIVI. `sivi_refresh_energy_pillar()` pulls the raw consumption/production arrays, aggregates, and persists via `sivi_persist_energy_results()` into `SIVI_ENERGY_KEY`, with per-country provenance tracked via `blomstra_track_source()` and a 12-hour transient cache per ISO3.
 
 
-### **4.3 HHI Data Flow** {#h.5nrrm8vo4gtb}
+### **4.3 HHI Data Flow** 
 
     text
     External trigger (admin button / cron)
@@ -342,7 +339,7 @@ Each pillar has its own refresh function that reads from the L1 reference data c
     sivi_hhi_meta (option)
 
 
-### **4.4 Maritime Data Flow** {#h.dv6vnc6ivnjh}
+### **4.4 Maritime Data Flow** 
 
     text
     External trigger (admin button / cron)
@@ -361,7 +358,7 @@ Each pillar has its own refresh function that reads from the L1 reference data c
     sivi_maritime_meta (option)
 
 
-### **4.5 Pillar Storage Shape** {#h.5vw5d9engga4}
+### **4.5 Pillar Storage Shape** 
 
 Each pillar is stored as:
 
@@ -385,7 +382,7 @@ Each pillar is stored as:
     ]
 
 
-### **4.6 Meta Storage** {#h.g0hmmzw4z2xk}
+### **4.6 Meta Storage** 
 
 Each pillar has a meta option:
 
@@ -401,16 +398,16 @@ Each pillar has a meta option:
     sivi_maritime_meta
 
 
-### **4.7 Direct API Fallback** {#h.xdr7kfwnuixk}
+### **4.7 Direct API Fallback** 
 
 \[N] All three pillars are populated exclusively from L1 shared caches — SIVI performs no direct external API calls of its own for live builds (only the fallback country-list fetcher, `sivi_get_global_country_list_fallback()`, calls World Bank directly, and only if the shared `blomstra_get_global_country_list()` is unavailable).
 
 ***
 
 
-## **5. Normalization** {#h.6u8s18xozowf}
+## **5. Normalization** 
 
-### **5.1 Percentile Computation** {#h.1rj8iebzfdg5}
+### **5.1 Percentile Computation** 
 
 \[D] `blomstra_compute_percentile_ranks_safe()`: values are winsorized (§5.2), then ranked with mean-rank tie handling, converted to percentiles as:
 
@@ -420,7 +417,7 @@ Each pillar has a meta option:
 where `n` is the count of countries with numeric data for that pillar (not the global country count). Tied values receive the average of their tied rank positions.
 
 
-### **5.2 Winsorization Settings** {#h.iuyj45nd7npc}
+### **5.2 Winsorization Settings**
 
 \[D] Per-pillar winsorization percentages, applied only when `n ≥ 10`:
 
@@ -432,12 +429,12 @@ where `n` is the count of countries with numeric data for that pillar (not the g
 | Maritime | 1%            | Thin/erratic LSCI data for small/remote nations |
 
 
-### **5.3 Directionality (Post-Percentile Transform)** {#h.mbwll1j1e91v}
+### **5.3 Directionality (Post-Percentile Transform)** 
 
 \[N] Maritime's raw percentile is inverted (`100 − pct`) before entering the composite, since higher LSCI (more connected) means _lower_ vulnerability — the only pillar needing this transform, applied via `post_percentile_transform['maritime']` in `sivi_get_generic_config()`. Energy and HHI percentiles are used as-is (higher raw value already means higher vulnerability for both).
 
 
-### **5.4 Directionality Summary** {#h.j07rqek5ni6p}
+### **5.4 Directionality Summary** 
 
 |          |                                |                                                |
 | -------- | ------------------------------ | ---------------------------------------------- |
@@ -449,9 +446,9 @@ where `n` is the count of countries with numeric data for that pillar (not the g
 ***
 
 
-## **6. Aggregation** {#h.1458p3loev3f}
+## **6. Aggregation** 
 
-### **6.1 Per-Pillar Aggregation** {#h.3w6nqgq0u40f}
+### **6.1 Per-Pillar Aggregation** 
 
 Each pillar has a single indicator (no within-pillar aggregation needed):
 
@@ -463,7 +460,7 @@ Each pillar has a single indicator (no within-pillar aggregation needed):
 | Maritime | maritime\_connectivity  | 100%                 |
 
 
-### **6.2 Composite Aggregation (Full Coverage)** {#h.gkf65p2k7qvm}
+### **6.2 Composite Aggregation (Full Coverage)** 
 
 \[D] For a country with `k` present pillars:
 
@@ -478,7 +475,7 @@ Example (all three pillars present):
     composite = (energy_score × 0.333333) + (hhi_score × 0.333333) + (maritime_score × 0.333334)
 
 
-### **6.3 Composite Aggregation (Partial Coverage)** {#h.mxsymwmtjaz2}
+### **6.3 Composite Aggregation (Partial Coverage)** 
 
 When only two pillars are present (minimum required = 2):
 
@@ -493,7 +490,7 @@ Example: If Energy is missing and weights are 33.33/33.33/33.34:
     composite = (hhi_score × 33.33 + maritime_score × 33.34) / 66.67
 
 
-### **6.4 Coverage Classification** {#h.4qhywtx61bh}
+### **6.4 Coverage Classification** 
 
 |                 |           |                      |
 | --------------- | --------- | -------------------- |
@@ -505,9 +502,9 @@ Example: If Energy is missing and weights are 33.33/33.33/33.34:
 ***
 
 
-## **7. Ranking** {#h.v2yhitr6hwuq}
+## **7. Ranking** 
 
-### **7.1 Full Index (Definitive Rank)** {#h.k34k0pppnrqa}
+### **7.1 Full Index (Definitive Rank)** 
 
 \[D] Countries with all three pillars present receive a definitive rank:
 
@@ -518,7 +515,7 @@ Example: If Energy is missing and weights are 33.33/33.33/33.34:
 Tie handling: average rank for tied scores.
 
 
-### **7.2 Partial Index (Projected Rank Range)** {#h.tndtjgr63u6l}
+### **7.2 Partial Index (Projected Rank Range)** 
 
 \[D] For partial-coverage countries, since the generic builder's condition (`pillar_count ≥ 3 AND min_required ≥ pillar_count − 1`) is met for SIVI, a hypothetical rank range is computed by injecting five candidate values (0, 10, 50, 90, 100) for the missing pillar and recomputing the composite at each point (`blomstra_project_partial_rank_composite()`), then ranking each hypothetical composite against the full-coverage distribution:
 
@@ -528,7 +525,7 @@ Tie handling: average rank for tied scores.
 \[D] Display format (`blomstra_build_partial_rank_display()`): `best_estimate` = rank at injection point 50; `range_80_low/high` = ranks at injection points 10/90; `theoretical_low/high` = ranks at 0/100. Rendered as `"#Low–High*"`. A full-coverage country's rank is definitive: `"#N"` (`blomstra_build_full_rank_display()`).
 
 
-### **7.3 Rank Display Helpers** {#h.5jgg8j52lpxz}
+### **7.3 Rank Display Helpers** 
 
     php
     blomstra_build_full_rank_display($rank)      // For full-index countries
@@ -550,9 +547,8 @@ Output (Partial):
 ***
 
 
-## **8. Partial Index Logic** {#h.du0natw2dbt}
-
-### **8.1 When Partial Index Is Applied** {#h.vbfxohsdg3pv}
+## **8. Partial Index Logic** 
+### **8.1 When Partial Index Is Applied** 
 
 \[N] A country is in the partial index when:
 
@@ -561,7 +557,7 @@ Output (Partial):
 - But not all 3 pillars have data
 
 
-### **8.2 The OECD/JRC Injection Method** {#h.cna531hcylpz}
+### **8.2 The OECD/JRC Injection Method** 
 
 Why this method:
 
@@ -586,8 +582,7 @@ Mechanism:
 Returns: Hypothetical composites at each injection point.
 
 
-### **8.3 What Partial Index Means** {#h.ph3vzb2a8ijn}
-
+### **8.3 What Partial Index Means** 
 - Best estimate: Rank if missing pillar were at global median (50th percentile)
 
 - 80% plausible range: Rank if missing pillar were at 10th or 90th percentile
@@ -599,13 +594,12 @@ Display: Countries with partial coverage show `#38-#52*` instead of a single def
 ***
 
 
-## **9. Data Quality Index (DQI)** {#h.qtw94o630ygu}
+## **9. Data Quality Index (DQI)** 
 
 \[N] DQI is explicitly stated in the shortcode's public methodology text as "disclosed as a confidence metric only — it does not affect the score." Confirmed in code: DQI is computed and attached to output but never enters the composite-score formula in §6.
 
 
-### **9.1 Per-Pillar DQI** {#h.cb1aq5f2c5td}
-
+### **9.1 Per-Pillar DQI** 
 \[D] `blomstra_compute_dqi($data_year, $current_year, $max_lag)`:
 
     text
@@ -624,7 +618,7 @@ Display: Countries with partial coverage show `#38-#52*` instead of a single def
 | Maritime | 5 years (`SIVI_MAX_LAG_MARITIME`) |
 
 
-### **9.2 Composite DQI** {#h.r4holpt4vkyd}
+### **9.2 Composite DQI**
 
 \[D] `blomstra_compute_composite_dqi()`: weighted average of the pillars that have a non-null DQI, weighted by the same composite pillar weights.
 
@@ -634,7 +628,7 @@ Display: Countries with partial coverage show `#38-#52*` instead of a single def
 Where pillar\_weight is the actual weight used (re-normalized if partial coverage).
 
 
-### **9.3 DQI Interpretation** {#h.6tzxd85ii3lr}
+### **9.3 DQI Interpretation** 
 
 |         |                                |
 | ------- | ------------------------------ |
@@ -646,7 +640,7 @@ Where pillar\_weight is the actual weight used (re-normalized if partial coverag
 Note: DQI is a confidence metric only – it does not affect the score.
 
 
-### **9.4 Vintage Summary** {#h.8qwi9dxc9wzb}
+### **9.4 Vintage Summary** 
 
 \[D] A human-readable summary of data years per pillar:
 
@@ -656,9 +650,9 @@ Note: DQI is a confidence metric only – it does not affect the score.
 ***
 
 
-## **10. Historical Snapshots** {#h.85x4kqn91mrm}
+## **10. Historical Snapshots** 
 
-### **10.1 Overview** {#h.gfkuwopomm5f}
+### **10.1 Overview** 
 
 SIVI maintains historical snapshots in the `wp_blomstra_index_history` table.
 
@@ -671,7 +665,7 @@ Purpose:
 - Data quality comparison
 
 
-### **10.2 Snapshot Row Shape (Flat)** {#h.4nsx4rbacmj}
+### **10.2 Snapshot Row Shape (Flat)** 
 
 \[N] All snapshots use the canonical flat shape from `blomstra_build_flat_snapshot_row()`:
 
@@ -693,7 +687,7 @@ Purpose:
 \[N] Invariant: Every snapshot MUST use `blomstra_build_flat_snapshot_row()`. Hand‑built rows are forbidden. Both the live build (inside `blomstra_build_index_composite()`) and the historical backfill (`sivi_build_historical_snapshot()`) build their snapshot row via this shared helper — the v3.3.0 fix that eliminated a shape divergence between live and backfilled history rows.
 
 
-### **10.3 Historical Backfill** {#h.knsz9mvoa6uo}
+### **10.3 Historical Backfill** 
 
     php
     sivi_build_historical_snapshot($year)
@@ -713,7 +707,7 @@ Purpose:
 \[D] Historical snapshots are saved to the shared history table via `blomstra_index_snapshot_save('sivi', $rows, "{$year}-01")` — one row per year, dated to January of that year.
 
 
-### **10.4 Backfill Range** {#h.s7wql364ogx8}
+### **10.4 Backfill Range** 
 
 \[D] Minimum backfill year: `SIVI_BACKFILL_MIN_YEAR = 2004`. Range is admin-configurable (`sivi_backfill_range_start/end` options), validated on save (start ≤ end, start ≥ 2004).
 
@@ -723,7 +717,7 @@ Purpose:
 | Previous 5 years | Capped at 2004 (due to maritime data availability) |
 
 
-### **10.5 Backfill Status Tracking** {#h.um869mx9ekif}
+### **10.5 Backfill Status Tracking** 
 
 \[D] Backfill runs one year per cron invocation (`sivi_backfill_year_cron` action → `sivi_backfill_year_cron_callback`), gated by a `sivi_backfill_lock` transient; each year's outcome is tracked per-year (`sivi_backfill_status` option):
 
@@ -742,9 +736,9 @@ Purpose:
 ***
 
 
-## **11. Sensitivity Testing** {#h.kp5q81iesca9}
+## **11. Sensitivity Testing** 
 
-### **11.1 Overview** {#h.wnlj7e7bni1c}
+### **11.1 Overview** 
 
 \[D] `sensitivity_enabled = true` for SIVI. Sensitivity testing measures how rankings change when pillar weights are altered.
 
@@ -757,7 +751,7 @@ Purpose:
 - Research transparency
 
 
-### **11.2 Bootstrap Confidence Intervals** {#h.by314n3n5pk5}
+### **11.2 Bootstrap Confidence Intervals** 
 
 \[D] Applied only to full-coverage countries via `blomstra_bootstrap_ci()`:
 
@@ -772,8 +766,7 @@ Purpose:
 \[N] This is a weight-sensitivity interval, not a statistical sampling-uncertainty interval; it answers "how much would this country's score move if the pillar weights were slightly different," not "how confident are we in the underlying data."
 
 
-### **11.3 Preset Weight Schemes** {#h.sd8ajpge73tj}
-
+### **11.3 Preset Weight Schemes** 
 |                |        |       |          |
 | -------------- | ------ | ----- | -------- |
 | Preset         | Energy | HHI   | Maritime |
@@ -786,7 +779,7 @@ Purpose:
 | Maritime-light | 45     | 45    | 10       |
 
 
-### **11.4 Scenario Build** {#h.m2hezq1apvg2}
+### **11.4 Scenario Build** 
 
     php
     sivi_build_composite('scenario', null, $custom_composite_weights)
@@ -794,7 +787,7 @@ Purpose:
 \[N] Scenario builds never write to production. They are stored under `sivi_composite_index_scenario_{id}`.
 
 
-### **11.5 Scenario Comparison** {#h.etol5h6z2s09}
+### **11.5 Scenario Comparison** 
 
 Scenarios are compared to baseline using:
 
@@ -816,9 +809,9 @@ Spearman Correlation Interpretation:
 ***
 
 
-## **12. Refresh Architecture** {#h.qdvpbyk0ig4u}
+## **12. Refresh Architecture** 
 
-### **12.1 Auto-Refresh Triggers** {#h.nvsw86ekkqwb}
+### **12.1 Auto-Refresh Triggers** 
 
 \[D] SIVI listens to reference-data refresh events:
 
@@ -833,7 +826,7 @@ Spearman Correlation Interpretation:
     wp_schedule_single_event(time() + 60, SIVI_AUTO_REFRESH_HOOK);
 
 
-### **12.2 Auto-Refresh Flow** {#h.h13y7b6y4pjn}
+### **12.2 Auto-Refresh Flow** 
 
     text
     Reference-data event (EIA/HHI/Maritime completed)
@@ -855,12 +848,12 @@ Spearman Correlation Interpretation:
         └─ Update cron status
 
 
-### **12.3 Daily Cron** {#h.7ruuzeg8wnkz}
+### **12.3 Daily Cron** 
 
 \[D] Daily cron at 03:00 UTC (`SIVI_AUTO_REFRESH_HOOK`, scheduled on `init` if not already scheduled) runs `sivi_auto_refresh_callback()`, which refreshes all three pillars from their L1 caches, aborts with a logged error if any pillar refresh errors, and only then rebuilds the composite (context `'cron'`).
 
 
-### **12.4 Build Lock** {#h.mcqz99rkxq2m}
+### **12.4 Build Lock** 
 
 \[D] Build lock: transient `sivi_build_lock` (or generically `{slug}_build_lock`), TTL `SIVI_LOCK_TTL = 30 minutes`.
 
@@ -879,9 +872,9 @@ Spearman Correlation Interpretation:
 ***
 
 
-## **13. Build Lifecycle** {#h.mgeszmwk6eop}
+## **13. Build Lifecycle**
 
-### **13.1 The Generic Builder Pattern** {#h.6nk7iuxqijzr}
+### **13.1 The Generic Builder Pattern** 
 
 \[N] SIVI never computes its own statistics — `sivi_build_composite()` always delegates to the shared generic orchestrator `blomstra_build_index_composite()` via `sivi_get_generic_config()`. This is Invariant #3 (universe-aware promotion) and Invariant #1 (bookkeeping key isolation) from the engineering rules, and both are confirmed correctly implemented here:
 
@@ -890,7 +883,7 @@ Spearman Correlation Interpretation:
 - \[N] Canonical snapshot row (confirmed): both the live build (inside `blomstra_build_index_composite()`) and the historical backfill (`sivi_build_historical_snapshot()`) build their snapshot row via the same shared `blomstra_build_flat_snapshot_row()` helper — the v3.3.0 fix that eliminated a shape divergence between live and backfilled history rows.
 
 
-### **13.2 Build Steps** {#h.fmiknlro2msp}
+### **13.2 Build Steps** 
 
 \[D] Build steps in order:
 
@@ -925,7 +918,7 @@ Spearman Correlation Interpretation:
 15. Snapshot save via `blomstra_index_snapshot_save()`
 
 
-### **13.3 Build-Failure Safety Guard (Auto-Rollback)** {#h.sjdss37qr36k}
+### **13.3 Build-Failure Safety Guard (Auto-Rollback)** 
 
 \[N] Before promoting a new build over the existing one, the generic builder compares country counts:
 
@@ -940,16 +933,16 @@ Spearman Correlation Interpretation:
 If the new build's count is both less than 80% of the previous build's count and under 50 countries absolute, the new build is discarded and the old composite is kept and returned instead, with an error logged and a `{slug}_auto_build_failed` transient set for 24 hours. This guards against a partial/degraded upstream fetch silently truncating the public index.
 
 
-### **13.4 Alerts** {#h.wvp2f0ymar3e}
+### **13.4 Alerts** 
 
 \[D] After a successful build with a pre-existing prior composite, `blomstra_fire_index_alerts()` is called comparing old vs. new country data and metadata; alert count is logged. (Full alert-system behavior is out of scope for this document — see `OPERATIONS.md`.)
 
 ***
 
 
-## **14. REST API** {#h.jw433d9aam43}
+## **14. REST API** 
 
-### **14.1 Endpoint** {#h.t5ircheu5avt}
+### **14.1 Endpoint** 
 
     text
     GET /wp-json/blomstra/v1/sovereign-infrastructure-vulnerability-index
@@ -957,7 +950,7 @@ If the new build's count is both less than 80% of the previous build's count and
 \[D] Public (`__return_true`), returns the full `SIVI_OPTION_KEY` option verbatim, or a 404 `no_data` error if no build has ever run. Response header: `Cache-Control: public, max-age=3600`.
 
 
-### **14.2 Legacy Redirect** {#h.ox3orsl8rnjm}
+### **14.2 Legacy Redirect** 
 
 The old endpoint redirects to the canonical endpoint:
 
@@ -966,7 +959,7 @@ The old endpoint redirects to the canonical endpoint:
     → 301 redirect to /wp-json/blomstra/v1/sovereign-infrastructure-vulnerability-index
 
 
-### **14.3 Response Shape** {#h.rb7y95kr56ie}
+### **14.3 Response Shape** 
 
 Top-Level Fields:
 
@@ -1023,7 +1016,7 @@ Rank Display Object:
     ]
 
 
-### **14.4 Frontend Integration** {#h.mcfj8x5wzhdb}
+### **14.4 Frontend Integration** 
 
 \[D] The shortcode injects configuration for the frontend widget:
 
@@ -1052,9 +1045,9 @@ Rank Display Object:
 ***
 
 
-## **15. Admin UI** {#h.ce02jansjac0}
+## **15. Admin UI** 
 
-### **15.1 Navigation** {#h.90he00fnhwec}
+### **15.1 Navigation** 
 
     text
     Blomstra Insights Tools (menu)
@@ -1063,7 +1056,7 @@ Rank Display Object:
 Menu position: Submenu under `blomstra-insights-tools`
 
 
-### **15.2 Dashboard Sections** {#h.5ln185q4115t}
+### **15.2 Dashboard Sections** 
 
 |                            |                                                        |
 | -------------------------- | ------------------------------------------------------ |
@@ -1081,7 +1074,7 @@ Menu position: Submenu under `blomstra-insights-tools`
 | Preview Tables             | 10 Most Vulnerable, 10 Least Vulnerable, Excluded      |
 
 
-### **15.3 Action Buttons** {#h.3m76299hu6y4}
+### **15.3 Action Buttons** 
 
 |                        |                                                           |
 | ---------------------- | --------------------------------------------------------- |
@@ -1098,9 +1091,9 @@ Menu position: Submenu under `blomstra-insights-tools`
 ***
 
 
-## **16. Versioning** {#h.6x4mxm3fohau}
+## **16. Versioning** 
 
-### **16.1 Methodology Version** {#h.c03k7movvktj}
+### **16.1 Methodology Version** 
 
 \[D] SIVI methodology version is defined by:
 
@@ -1116,7 +1109,7 @@ Version policy:
 - Patch (3.3.1): Bug fix, no methodology change
 
 
-### **16.2 Software Version** {#h.uv6eisvw6ldx}
+### **16.2 Software Version** 
 
 \[D] SIVI software version is the same as the methodology version (for now):
 
@@ -1126,8 +1119,7 @@ Version policy:
 Note: This should be separate from the methodology version in the future. A software change does not necessarily mean a methodology change.
 
 
-### **16.3 Standard Version** {#h.4yk8i6k7n45}
-
+### **16.3 Standard Version** 
 \[D] SIVI declares conformance to the Blomstra Methodology Standard:
 
     php
@@ -1136,7 +1128,7 @@ Note: This should be separate from the methodology version in the future. A soft
 ***
 
 
-## **17. Open Questions** {#h.w0xmczd6hizx}
+## **17. Open Questions** 
 
 \[D] These are unresolved methodology/product decisions, not code defects — confirmed still open by inspecting the code (no policy for them exists anywhere in `sivi-backend.php` or the shared utilities beyond the current defaults):
 
