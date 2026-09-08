@@ -1,13 +1,27 @@
 /**
  * Blomstra Shared Index Utilities — Data Integrity & Processing Layer
  *
- * Provides safe numeric handling, timeseries sanitization, per-indicator source
- * tracking, validated fallback merging, winsorized percentile computation,
- * static country classification data, and the generic index builder orchestrator.
- *
  * @package Blomstra\Insights\Shared
  * @since   1.0.0
- * @version 1.4.1  – Fixed critical bugs in generic builder
+ * @version 1.6.0  – Added blomstra_build_flat_snapshot_row(): the single
+ *                   canonical function every index's live build AND
+ *                   historical backfill must call when assembling a row
+ *                   for blomstra_index_snapshot_save(). Previously SIVI's
+ *                   live build (via the generic builder) and its
+ *                   historical backfill built two DIFFERENT shapes for the
+ *                   same table — flat vs. nested-with-DQI — and the
+ *                   frontend's history/trend chart only understood the
+ *                   flat one, so every backfilled year silently rendered
+ *                   as blank while live-built months worked fine. Both
+ *                   paths now share one function so they cannot diverge
+ *                   again. This version also wires DQI-per-pillar,
+ *                   composite DQI, and vintage_summary into that same flat
+ *                   row (as sibling keys alongside the pillar scores, not
+ *                   re-nested) for BOTH live and historical rows, rather
+ *                   than deferring that as a later feature — since both
+ *                   call sites were already being touched for the shape
+ *                   fix, wiring the fields now costs nothing extra and
+ *                   avoids a second migration later.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -717,38 +731,99 @@ function blomstra_compute_composite_dqi( $pillar_data ) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 12. GENERIC INDEX BUILDER ORCHESTRATOR – CORRECTED
+// 12. CANONICAL FLAT SNAPSHOT ROW — v1.6.0 (now carries DQI/vintage)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Build the canonical FLAT snapshot row every index must use when calling
+ * blomstra_index_snapshot_save() — for BOTH live builds and historical
+ * backfills. This is the single source of truth for that row's shape:
+ *
+ *   { composite_score, rank, coverage_type,
+ *     <one bare key per pillar>,
+ *     dqi_<pillar> for each pillar (if provided),
+ *     composite_dqi (if provided),
+ *     vintage_summary (if provided) }
+ *
+ * All fields sit at the SAME nesting level — no 'pillars' sub-key. That
+ * flatness is the actual fix: the bug this replaces was a caller nesting
+ * pillar scores and DQI under a sub-object that blomstra_index_snapshot_get_history()
+ * and the frontend's history/trend chart never unwrapped, so every row
+ * built that way silently rendered as blank. Route every caller (current
+ * and future indices) through this one function so that class of bug is
+ * structurally impossible to reintroduce.
+ *
+ * DQI/vintage are optional trailing arguments — a caller with no DQI
+ * wiring yet can omit them and still produce a valid row; a caller that
+ * has DQI (as both SIVI call sites do) should always pass it, since doing
+ * so costs nothing extra once you're already calling this function.
+ *
+ * @since 1.6.0
+ * @param float|null  $composite_score
+ * @param int|null    $rank             Definitive rank, or null for partial-coverage countries.
+ * @param string|null $coverage_type    'full' or 'partial'. Defaults to 'full' if omitted.
+ * @param array       $pillar_scores    pillar_key => percentile score (or null), one entry per pillar.
+ * @param array       $pillar_dqi       Optional: pillar_key => DQI (or null), one entry per pillar.
+ * @param float|null  $composite_dqi    Optional: weighted composite DQI.
+ * @param string|null $vintage_summary  Optional: human-readable data-vintage string.
+ * @return array
+ */
+function blomstra_build_flat_snapshot_row( $composite_score, $rank, $coverage_type, $pillar_scores, $pillar_dqi = array(), $composite_dqi = null, $vintage_summary = null ) {
+    $row = array(
+        'composite_score' => $composite_score,
+        'rank'            => $rank,
+        'coverage_type'   => $coverage_type ?: 'full',
+    );
+    foreach ( $pillar_scores as $key => $score ) {
+        $row[ $key ] = $score;
+    }
+    foreach ( $pillar_dqi as $key => $dqi ) {
+        $row[ 'dqi_' . $key ] = $dqi;
+    }
+    if ( $composite_dqi !== null ) {
+        $row['composite_dqi'] = $composite_dqi;
+    }
+    if ( $vintage_summary !== null ) {
+        $row['vintage_summary'] = $vintage_summary;
+    }
+    return $row;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 13. GENERIC INDEX BUILDER ORCHESTRATOR – v1.6.0
 // ─────────────────────────────────────────────────────────────────
 
 /**
  * Build a composite index using a generic orchestrator.
  *
+ * Internal bookkeeping key isolation (v1.5.0, unchanged): this function
+ * persists its own generic-shaped working copy under
+ * "{slug}_composite_internal" — used ONLY for this function's own
+ * old-vs-new-build comparison and alert-firing decisions. Never a public
+ * option. See v1.5.0 changelog for why sharing a key here broke alerts.
+ *
  * @since 1.4.1
  * @param array $config {
- *     Index configuration.
- *
- *     @type string $index_slug                Unique slug (e.g., 'sivi', 'seri').
- *     @type array  $pillar_keys              Array of pillar keys.
- *     @type array  $pillar_weights           Associative: pillar => weight (must sum to 100).
- *     @type int    $min_pillars_required     Minimum pillars to score a country.
- *     @type array  $get_raw_values           Associative: pillar => callable( $iso3_list ) returning [iso3 => float].
- *     @type array  $winsorization            Optional: pillar => float (0.0 = none).
- *     @type array  $post_percentile_transform Optional: pillar => callable( $percentile ) returning transformed value.
- *     @type callable $get_data_years         Optional: callable( $iso3_list ) returning [iso3 => [pillar => year]].
- *     @type callable $is_landlocked_check    Optional: function( $iso3 ) : bool.
- *     @type array  $dqi_config               Optional: pillar => max_lag (years).
- *     @type callable $benchmark_getter       Optional: callable returning [iso3 => score].
- *     @type bool   $sensitivity_enabled      Default true.
- *     @type int    $lock_ttl                 Lock TTL in seconds.
- *     @type string $composite_field          Field name for composite score (default 'composite_score').
- *     @type bool   $skip_snapshot            If true, skip saving snapshot (caller handles it).
+ *     @type string $index_slug
+ *     @type array  $pillar_keys
+ *     @type array  $pillar_weights
+ *     @type int    $min_pillars_required
+ *     @type array  $get_raw_values
+ *     @type array  $winsorization
+ *     @type array  $post_percentile_transform
+ *     @type callable $get_data_years
+ *     @type callable $is_landlocked_check
+ *     @type array  $dqi_config
+ *     @type callable $benchmark_getter
+ *     @type bool   $sensitivity_enabled
+ *     @type int    $lock_ttl
+ *     @type string $composite_field
+ *     @type bool   $skip_snapshot
  * }
- *
  * @param string $context  'manual', 'cron', 'historical', or 'scenario'.
- * @return array|WP_Error  The composite index data, or error.
+ * @return array|WP_Error
  */
 function blomstra_build_index_composite( $config, $context = 'manual' ) {
-    // ─── Validation ────────────────────────────────────────────────
     if ( empty( $config['index_slug'] ) || empty( $config['pillar_keys'] ) || empty( $config['pillar_weights'] ) ) {
         return new WP_Error( 'missing_config', 'Index slug, pillar keys, and weights are required.' );
     }
@@ -769,21 +844,17 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
     $composite_field = $config['composite_field'] ?? 'composite_score';
     $skip_snapshot = $config['skip_snapshot'] ?? false;
 
-    // Validate that every pillar has a weight
     foreach ( $pillar_keys as $key ) {
         if ( ! isset( $pillar_weights[ $key ] ) ) {
             return new WP_Error( 'missing_weight', "Pillar '$key' has no weight defined." );
         }
     }
-
-    // Validate callbacks
     foreach ( $pillar_keys as $key ) {
         if ( ! isset( $get_raw_values[ $key ] ) || ! is_callable( $get_raw_values[ $key ] ) ) {
             return new WP_Error( 'missing_fetcher', "No callable fetcher for pillar '$key'." );
         }
     }
 
-    // ─── Lock ────────────────────────────────────────────────────────
     $lock_key = $slug . '_build_lock';
     $lock = get_transient( $lock_key );
     if ( $lock !== false && ( time() - (int) $lock ) < $lock_ttl ) {
@@ -800,7 +871,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
     };
     register_shutdown_function( $shutdown );
 
-    // Initialize output_meta array (fixes undefined variable notice)
     $output_meta = array();
 
     try {
@@ -808,9 +878,8 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             blomstra_update_cron_status( $slug, 'running', "{$slug} build started." );
         }
 
-        // ─── Fetch Raw Values ────────────────────────────────────────
-        $countries = function_exists( 'blomstra_get_global_country_list' ) 
-            ? blomstra_get_global_country_list() 
+        $countries = function_exists( 'blomstra_get_global_country_list' )
+            ? blomstra_get_global_country_list()
             : array();
         if ( empty( $countries ) ) {
             throw new Exception( 'No country list available.' );
@@ -827,7 +896,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             $raw_values[ $key ] = $raw;
         }
 
-        // ─── Compute Percentiles (with winsorization) ──────────────
         $percentiles = array();
         foreach ( $pillar_keys as $key ) {
             $winsor = $winsorization[ $key ] ?? 0.0;
@@ -840,7 +908,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             }
         }
 
-        // ─── Apply Post-Percentile Transforms ──────────────────────
         $transformed_percentiles = array();
         foreach ( $pillar_keys as $key ) {
             if ( isset( $post_percentile_transform[ $key ] ) && is_callable( $post_percentile_transform[ $key ] ) ) {
@@ -854,7 +921,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             }
         }
 
-        // ─── Compute Composite Scores ───────────────────────────────
         $results = array();
         $excluded = array();
         $all_pillar_keys = $pillar_keys;
@@ -907,7 +973,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             }
         }
 
-        // ─── Rank Assignment ────────────────────────────────────────
         $full_composites = array();
         foreach ( $results as $iso3 => $row ) {
             if ( $row['coverage_type'] === 'full' ) {
@@ -930,7 +995,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
         }
         unset( $row );
 
-        // ─── Partial Ranks (Projection) ────────────────────────────
         if ( count( $all_pillar_keys ) >= 3 && $min_pillars_required >= count( $all_pillar_keys ) - 1 ) {
             foreach ( $results as $iso3 => &$row ) {
                 if ( $row['coverage_type'] !== 'partial' ) {
@@ -979,9 +1043,8 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             unset( $row );
         }
 
-        // ─── Data Quality & Measurement Flags ──────────────────────
         $current_year = (int) current_time( 'Y' );
-        
+
         $data_years = array();
         if ( $get_data_years && is_callable( $get_data_years ) ) {
             $data_years = call_user_func( $get_data_years, $all_iso3 );
@@ -995,16 +1058,16 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             foreach ( $pillar_keys as $key ) {
                 $year = isset( $data_years[ $iso3 ][ $key ] ) ? (int) $data_years[ $iso3 ][ $key ] : null;
                 $row[ 'data_year_' . $key ] = $year;
-                
+
                 $max_lag = $dqi_config[ $key ] ?? 3;
                 $dqi = blomstra_compute_dqi( $year, $current_year, $max_lag );
                 $row[ 'dqi_' . $key ] = $dqi;
-                
+
                 $pillar_data_for_dqi[] = array( 'dqi' => $dqi, 'weight' => $pillar_weights[ $key ] );
             }
-            
+
             $row['composite_dqi'] = blomstra_compute_composite_dqi( $pillar_data_for_dqi );
-            
+
             $vintage_parts = array();
             foreach ( $pillar_keys as $key ) {
                 if ( isset( $row[ 'data_year_' . $key ] ) && $row[ 'data_year_' . $key ] !== null ) {
@@ -1015,7 +1078,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
         }
         unset( $row );
 
-        // ─── Sensitivity Interval ──────────────────────────────────
         if ( $sensitivity_enabled && function_exists( 'blomstra_bootstrap_ci' ) ) {
             $pillar_values_by_country = array();
             foreach ( $results as $iso3 => $row ) {
@@ -1039,7 +1101,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             }
         }
 
-        // ─── Benchmark Correlation ──────────────────────────────────
         if ( $benchmark_getter && is_callable( $benchmark_getter ) && function_exists( 'blomstra_benchmark_correlate' ) ) {
             $benchmark_scores = $benchmark_getter();
             if ( is_array( $benchmark_scores ) ) {
@@ -1056,7 +1117,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             }
         }
 
-        // ─── Build Output ──────────────────────────────────────────
         $country_output = array();
         foreach ( $results as $iso3 => $row ) {
             $entry = array(
@@ -1089,7 +1149,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             $country_output[ $iso3 ] = $entry;
         }
 
-        // ─── FIXED BUG 1: Data is already under $composite_field, no rename needed ───
         $output = array(
             'version'         => '1.0',
             'last_updated'    => current_time( 'mysql' ),
@@ -1106,22 +1165,19 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             ),
         );
 
-        // Add benchmark correlation if present
         if ( isset( $output_meta['benchmark_correlation'] ) ) {
             $output['_meta']['benchmark_correlation'] = $output_meta['benchmark_correlation'];
         }
 
-        // ─── FIXED BUG 3: Only promote for manual/cron, NOT historical ───
         $should_promote = in_array( $context, [ 'manual', 'cron' ], true );
-        
+
         if ( $should_promote ) {
-            // Use the SIVI-compatible staging key (matches flush button)
-            $staging_key = $slug . '_composite_index_staging';
-            $production_key = $slug . '_composite_index';
+            $internal_key         = $slug . '_composite_internal';
+            $internal_staging_key = $slug . '_composite_internal_staging';
 
-            update_option( $staging_key, $output, false );
+            update_option( $internal_staging_key, $output, false );
 
-            $old_composite = get_option( $production_key, null );
+            $old_composite = get_option( $internal_key, null );
             $should_keep_old = false;
             if ( $old_composite && ! empty( $old_composite[ $composite_field ] ) ) {
                 $prev_count = count( $old_composite[ $composite_field ] );
@@ -1134,7 +1190,7 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
             }
 
             if ( $should_keep_old && $old_composite ) {
-                delete_option( $staging_key );
+                delete_option( $internal_staging_key );
                 if ( function_exists( 'blomstra_update_cron_status' ) ) {
                     blomstra_update_cron_status( $slug, 'error', "Build failed – coverage too low. Old composite preserved." );
                 }
@@ -1143,7 +1199,6 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
                 return $old_composite;
             }
 
-            // ─── Fire Alerts ─────────────────────────────────────────
             if ( function_exists( 'blomstra_fire_index_alerts' ) && $old_composite && ! empty( $old_composite[ $composite_field ] ) ) {
                 $new_meta = array(
                     'total_countries' => $output['total_countries'],
@@ -1161,22 +1216,28 @@ function blomstra_build_index_composite( $config, $context = 'manual' ) {
                 error_log( "{$slug}: Alerts fired with {$alert_count} changes detected." );
             }
 
-            // ─── Save Composite ──────────────────────────────────────
-            update_option( $production_key, $output, false );
-            delete_option( $staging_key );
+            update_option( $internal_key, $output, false );
+            delete_option( $internal_staging_key );
 
-            // ─── Save Snapshot (only if caller hasn't disabled it) ───
+            // ─── Save Snapshot — canonical flat shape, DQI now wired (v1.6.0) ───
             if ( ! $skip_snapshot && function_exists( 'blomstra_index_snapshot_save' ) ) {
                 $snap = array();
                 foreach ( $output[ $composite_field ] as $iso3 => $data ) {
-                    $snap[ $iso3 ] = array(
-                        'composite_score' => $data['composite_score'] ?? null,
-                        'rank'            => $data['rank_display']['best_estimate'] ?? null,
-                        'coverage_type'   => $data['coverage'] ?? 'full',
-                    );
+                    $pillar_scores = array();
+                    $pillar_dqi    = array();
                     foreach ( $pillar_keys as $key ) {
-                        $snap[ $iso3 ][ $key ] = $data[ $key . '_percentile' ] ?? null;
+                        $pillar_scores[ $key ] = $data[ $key . '_percentile' ] ?? null;
+                        $pillar_dqi[ $key ]    = $data[ 'dqi_' . $key ] ?? null;
                     }
+                    $snap[ $iso3 ] = blomstra_build_flat_snapshot_row(
+                        $data['composite_score'] ?? null,
+                        $data['rank_display']['best_estimate'] ?? null,
+                        $data['coverage'] ?? 'full',
+                        $pillar_scores,
+                        $pillar_dqi,
+                        $data['composite_dqi'] ?? null,
+                        $data['vintage_summary'] ?? null
+                    );
                 }
                 blomstra_index_snapshot_save( $slug, $snap );
             }
