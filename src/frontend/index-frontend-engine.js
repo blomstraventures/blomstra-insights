@@ -1,20 +1,27 @@
 /* =====================================================================
-   Blomstra Index Frontend Engine — v3.9.8
-   - Dynamic year slider (reads min/max from data attributes)
-   - Zoom hint reappears on map re‑entry (IntersectionObserver, 3s fade)
-   - All previous map zoom fixes preserved
+   Blomstra Index Frontend Engine — v4.1.8
+   - Countries Covered: total uses default text color
+   - Composite Analytics: all stats use default text color
+   - "Compare Blocks" → "Compare Groups"
+   - Block share buttons: "CSV" and "Share" with icons
+   - Map tooltip now uses pillars (generic)
+   - Added data-biw-block-groups filter
+   - Fixed hover contrasts for tabs and map zoom
    ===================================================================== */
+
+// ─── Check for shared utilities ──────────────────────────────────
+if (typeof window.BIW_GET_ISO3 !== 'function') {
+    console.warn('Blomstra: BIW_GET_ISO3 not found – country codes will fail.');
+}
+if (!window.BIW_COUNTRY_GROUPS) {
+    console.warn('Blomstra: BIW_COUNTRY_GROUPS not found – block comparisons disabled.');
+}
+
 (function () {
     'use strict';
 
-    var iso3Lookup = {
-        "004":"AFG","008":"ALB","012":"DZA","024":"AGO","028":"ATG","032":"ARG","036":"AUS","040":"AUT","044":"BHS","048":"BHR","050":"BGD","051":"ARM","052":"BRB","056":"BEL","060":"BMU","064":"BTN","068":"BOL","070":"BIH","072":"BWA","074":"BVT","076":"BRA","084":"BLZ","086":"IOT","090":"SLB","092":"VGB","096":"BRN","100":"BGR","104":"MMR","108":"BDI","112":"BLR","116":"KHM","120":"CMR","124":"CAN","132":"CPV","136":"CYM","140":"CAF","144":"LKA","148":"TCD","152":"CHL","156":"CHN","158":"TWN","162":"CXR","166":"CCK","170":"COL","174":"COM","175":"MYT","178":"COG","180":"COD","184":"COK","188":"CRI","191":"HRV","192":"CUB","196":"CYP","203":"CZE","204":"BEN","208":"DNK","212":"DMA","214":"DOM","218":"ECU","222":"SLV","226":"GNQ","231":"ETH","232":"ERI","233":"EST","234":"FRO","238":"FLK","239":"SGS","242":"FJI","246":"FIN","248":"ALA","250":"FRA","254":"GUF","258":"PYF","260":"ATF","262":"DJI","266":"GAB","268":"GEO","270":"GMB","275":"PSE","276":"DEU","288":"GHA","292":"GIB","296":"KIR","300":"GRC","304":"GRL","308":"GRD","312":"GLP","316":"GUM","320":"GTM","324":"GIN","328":"GUY","332":"HTI","334":"HMD","340":"HND","344":"HKG","348":"HUN","352":"ISL","356":"IND","360":"IDN","364":"IRN","368":"IRQ","372":"IRL","376":"ISR","380":"ITA","384":"CIV","388":"JAM","392":"JPN","398":"KAZ","400":"JOR","404":"KEN","408":"PRK","410":"KOR","414":"KWT","417":"KGZ","418":"LAO","422":"LBN","426":"LSO","428":"LVA","430":"LBR","434":"LBY","438":"LIE","440":"LTU","442":"LUX","446":"MAC","450":"MDG","454":"MWI","458":"MYS","462":"MDV","466":"MLI","470":"MLT","474":"MTQ","478":"MRT","480":"MUS","484":"MEX","492":"MCO","496":"MNG","498":"MDA","499":"MNE","500":"MSR","504":"MAR","508":"MOZ","512":"OMN","516":"NAM","520":"NRU","524":"NPL","528":"NLD","531":"CUW","533":"ABW","534":"SXM","535":"BES","540":"NCL","548":"VUT","554":"NZL","558":"NIC","562":"NER","566":"NGA","570":"NIU","574":"NFK","578":"NOR","580":"MNP","581":"UMI","583":"FSM","584":"MHL","585":"PLW","586":"PAK","591":"PAN","598":"PNG","600":"PRY","604":"PER","608":"PHL","612":"PCN","616":"POL","620":"PRT","624":"GNB","626":"TLS","630":"PRI","634":"QAT","638":"REU","642":"ROU","643":"RUS","646":"RWA","652":"BLM","654":"SHN","659":"KNA","660":"AIA","662":"LCA","663":"MAF","666":"SPM","670":"VCT","674":"SMR","678":"STP","682":"SAU","686":"SEN","688":"SRB","690":"SYC","694":"SLE","702":"SGP","703":"SVK","704":"VNM","705":"SVN","706":"SOM","710":"ZAF","716":"ZWE","724":"ESP","728":"SSD","729":"SDN","732":"ESH","740":"SUR","744":"SJM","748":"SWZ","752":"SWE","756":"CHE","760":"SYR","762":"TJK","764":"THA","768":"TGO","772":"TKL","776":"TON","780":"TTO","784":"ARE","788":"TUN","792":"TUR","795":"TKM","796":"TCA","798":"TUV","800":"UGA","804":"UKR","807":"MKD","818":"EGY","826":"GBR","831":"GGY","832":"JEY","833":"IMN","834":"TZA","840":"USA","854":"BFA","858":"URY","860":"UZB","862":"VEN","876":"WLF","882":"WSM","887":"YEM","894":"ZMB"
-    };
-
-    function getIso3(id) {
-        var idStr = String(id);
-        return iso3Lookup[idStr] || null;
-    }
+    var getIso3 = window.BIW_GET_ISO3 || function() { return null; };
+    var allCountryGroups = window.BIW_COUNTRY_GROUPS || {};
 
     function loadScript(src) {
         return new Promise(function (resolve, reject) {
@@ -67,6 +74,27 @@
     }
 
     function BlomstraIndexWidget(root) {
+        // ─── Per-index block group filter ─────────────────────────────
+        var blockGroupsAttr = root.getAttribute('data-biw-block-groups');
+        var blockGroups = [];
+        if (blockGroupsAttr) {
+            try {
+                blockGroups = JSON.parse(blockGroupsAttr);
+                if (typeof blockGroups === 'string') blockGroups = [blockGroups];
+                if (!Array.isArray(blockGroups)) blockGroups = [];
+            } catch (e) {
+                blockGroups = [];
+            }
+        }
+        var countryGroups = blockGroups.length
+            ? Object.keys(allCountryGroups)
+                .filter(function(name) { return blockGroups.indexOf(name) !== -1; })
+                .reduce(function(acc, name) {
+                    acc[name] = allCountryGroups[name];
+                    return acc;
+                }, {})
+            : allCountryGroups;
+
         var slug = root.getAttribute('data-biw-slug');
         var endpoint = root.getAttribute('data-biw-endpoint');
         var namesEndpoint = root.getAttribute('data-biw-names-endpoint') || '/wp-json/blomstra/v1/country-names';
@@ -82,7 +110,6 @@
         var scoreLabel = root.getAttribute('data-biw-score-label') || 'Vulnerability Score';
         var methodology = root.getAttribute('data-biw-methodology') || '';
 
-        // ─── Dynamic year range from data attributes ──────────────────
         var minYear = parseInt(root.getAttribute('data-biw-year-min')) || 2004;
         var maxYear = parseInt(root.getAttribute('data-biw-year-max')) || (new Date().getFullYear());
 
@@ -104,7 +131,7 @@
             d3Ready: false,
             d3Error: null,
             compareList: [],
-            isDark: false, //default theme bright
+            isDark: false,
             hasRegionData: false,
             selectedYear: maxYear,
             mapLayer: 'score',
@@ -113,7 +140,9 @@
             mapFeatures: null,
             mapMarkers: null,
             mapHintObserver: null,
-            mapHintTimeout: null
+            mapHintTimeout: null,
+            blockCompareA: null,
+            blockCompareB: null,
         };
 
         root.innerHTML = buildShell();
@@ -185,12 +214,27 @@
             return getHistoricalScore(iso3, year);
         }
 
+        // ─── getRecomputedRank with fallback ──────────────────────
         function getRecomputedRank(iso3, year) {
             var scores = {};
+            var liveCountry = state.all.find(function(c) { return c.iso3 === iso3; });
+            var hasHistory = false;
             state.all.forEach(function (country) {
                 var score = getScoreForYear(country.iso3, year);
-                if (score !== null && score !== undefined) scores[country.iso3] = score;
+                if (score !== null && score !== undefined) {
+                    scores[country.iso3] = score;
+                    hasHistory = true;
+                }
             });
+            if (!hasHistory || Object.keys(scores).length < 2) {
+                if (liveCountry && liveCountry.rank !== undefined && liveCountry.rank !== null) {
+                    return liveCountry.rank;
+                }
+                if (liveCountry && liveCountry.rank_display && liveCountry.rank_display.best_estimate !== undefined) {
+                    return liveCountry.rank_display.best_estimate;
+                }
+                return null;
+            }
             var sorted = Object.keys(scores).sort(function (a, b) { return scores[b] - scores[a]; });
             var rank = sorted.indexOf(iso3) + 1;
             return rank > 0 ? rank : null;
@@ -203,12 +247,13 @@
             var eyebrow = root.getAttribute('data-biw-eyebrow') || 'Strategic Intelligence';
 
             var shell = '<div class="biw-header">' +
-                '  <span class="biw-eyebrow">' + esc(eyebrow) + '</span>' +
-                '  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">' +
+                '  <div class="biw-header-left">' +
+                '    <span class="biw-eyebrow">' + esc(eyebrow) + '</span>' +
                 '    <h1>' + esc(title) + '</h1>' +
+                '    <div class="biw-sub">' + esc(subtitle) + '</div>' +
+                '    <div class="biw-meta biw-last-updated">Loading data…</div>' +
                 '  </div>' +
-                '  <div class="biw-sub">' + esc(subtitle) + '</div>' +
-                '  <div class="biw-meta biw-last-updated">Loading data…</div>' +
+                '  <button class="biw-header-method" id="biw-header-method">📖 Methodology</button>' +
                 '</div>';
 
             if (view === 'dashboard') {
@@ -249,7 +294,7 @@
                 '</div>';
 
             shell += '<div class="biw-compare-dock" id="biw-compare-dock">' +
-                '  <div class="dock-header"><span>Compare (<span id="biw-compare-count">0</span>/3)</span><button class="close-dock" id="biw-compare-dock-close">✕</button></div>' +
+                '  <div class="dock-header"><span>Compare (<span id="biw-compare-count">0</span>/4)</span><button class="close-dock" id="biw-compare-dock-close">✕</button></div>' +
                 '  <div class="dock-items" id="biw-compare-items"></div>' +
                 '  <div class="dock-actions"><button id="biw-compare-view-btn">View comparison</button><button class="secondary" id="biw-compare-clear-btn">Clear</button></div>' +
                 '</div>';
@@ -261,6 +306,38 @@
                 '  <div class="compare-grid">' +
                 '    <div class="radar-box" id="compare-radar-box"></div>' +
                 '    <div class="table-wrap" id="compare-table-wrap"></div>' +
+                '  </div>' +
+                '</div>';
+
+            // ─── Block Comparison Modal ──────────────────────────────
+            shell += '<div class="biw-block-compare-overlay" id="biw-block-overlay"></div>' +
+                '<div class="biw-block-compare-modal" id="biw-block-modal">' +
+                '  <button class="modal-close" id="biw-block-close">✕</button>' +
+                '  <div class="block-header">' +
+                '    <h2><span id="biw-block-title">🏛️ Compare Groups</span></h2>' +
+                '    <div class="block-share">' +
+                '      <button id="biw-block-share" title="Share this comparison">🔗 Share</button>' +
+                '      <button id="biw-block-download" title="Download CSV">⬇ CSV</button>' +
+                '    </div>' +
+                '  </div>' +
+                '  <div class="block-selector">' +
+                '    <div class="block-select-group">' +
+                '      <label>Group A:</label>' +
+                '      <select id="biw-block-a"><option value="">— Select —</option></select>' +
+                '    </div>' +
+                '    <div class="block-select-group">' +
+                '      <label>Group B (optional):</label>' +
+                '      <select id="biw-block-b"><option value="">— None —</option></select>' +
+                '    </div>' +
+                '    <button id="biw-block-compare-btn" class="button">Compare</button>' +
+                '  </div>' +
+                '  <div class="block-tabs" id="block-tabs-wrapper" style="display:none;">' +
+                '    <button class="block-tab active" data-tab="overview">Overview</button>' +
+                '    <button class="block-tab" data-tab="detailed">Detailed Comparison</button>' +
+                '  </div>' +
+                '  <div class="block-results" id="biw-block-results" style="display:none;">' +
+                '    <div class="block-tab-content active" id="block-tab-overview"></div>' +
+                '    <div class="block-tab-content" id="block-tab-detailed"></div>' +
                 '  </div>' +
                 '</div>';
 
@@ -289,13 +366,20 @@
                 '    <select class="biw-select biw-sort-select">' +
                 '      <option value="rank">Sort: Rank</option>' +
                 '      <option value="name">Sort: Country</option>' +
-                '      <option value="sivi_structural">Sort: Score</option>' +
+                '      <option value="' + esc(scoreKey) + '">Sort: Score</option>' +
                 '      <option value="coverage">Sort: Coverage</option>' +
                 pillars.map(function (p) { return '<option value="' + esc(p.key) + '">Sort: ' + esc(p.label) + '</option>'; }).join('') +
                 '    </select>' +
+                '    <select class="biw-select biw-block-dropdown" id="biw-block-dropdown">' +
+                '      <option value="">🏛️ Compare Groups</option>' +
+                Object.keys(countryGroups).map(function(name) {
+                    return '<option value="' + name + '">' + name + '</option>';
+                }).join('') +
+                '      <option value="__all__">View All Groups →</option>' +
+                '    </select>' +
                 '    <button class="biw-watchlist-toggle"><span>★</span> Watchlist</button>' +
                 '    <button class="biw-btn-print">Print</button>' +
-                '    <button class="biw-btn-methodology" id="biw-btn-methodology">📖 Methodology</button>' +
+                '    <button class="biw-btn-export" id="biw-btn-export">⬇ CSV</button>' +
                 '    <div class="biw-share-group">' +
                 '      <button class="biw-btn-share" data-share="x">𝕏</button>' +
                 '      <button class="biw-btn-share" data-share="linkedin">in</button>' +
@@ -310,10 +394,27 @@
         function renderDashboardShell() {
             return '' +
                 '<div class="biw-summary-grid">' +
-                '  <div class="biw-summary-card"><b class="biw-stat-total">—</b><span>Countries</span></div>' +
-                '  <div class="biw-summary-card"><b class="biw-stat-mean">—</b><span>Global mean score</span></div>' +
-                '  <div class="biw-summary-card"><b class="biw-stat-extreme" style="color:var(--biw-extreme)">—</b><span>Ext / High / Med / Low</span></div>' +
-                '  <div class="biw-summary-card"><b class="biw-stat-mover" style="color:var(--biw-champagne);font-size:1.2rem;">—</b><span>Top mover</span></div>' +
+                '  <div class="biw-summary-card" id="biw-countries-card">' +
+                '    <b class="card-title">Countries Covered</b>' +
+                '    <div id="biw-countries-detail"></div>' +
+                '  </div>' +
+                '  <div class="biw-summary-card" id="biw-score-card">' +
+                '    <b class="card-title">Composite Analytics</b>' +
+                '    <div id="biw-score-detail"></div>' +
+                '  </div>' +
+                '  <div class="biw-summary-card" id="biw-dist-card">' +
+                '    <b class="card-title">Vulnerabilities</b>' +
+                '    <div class="biw-distribution-grid" id="biw-dist-inline"></div>' +
+                '  </div>' +
+                '  <div class="biw-summary-card" id="biw-mover-card">' +
+                '    <b class="card-title">Top movers</b>' +
+                '    <div id="biw-mover-list" style="font-size:0.8rem;margin-top:2px;"></div>' +
+                '  </div>' +
+                '  <div class="biw-summary-card biw-block-card" id="biw-block-card" style="cursor:pointer;border-left:3px solid var(--biw-champagne);">' +
+                '    <b class="card-title">Compare Groups</b>' +
+                '    <div class="block-card-buttons" id="biw-block-card-buttons"></div>' +
+                '    <a href="#" class="block-card-view-all" id="biw-block-card-view-all">View all groups →</a>' +
+                '  </div>' +
                 '</div>' +
 
                 '<div class="biw-toolbar">' +
@@ -414,13 +515,20 @@
                 '    <select class="biw-select biw-sort-select">' +
                 '      <option value="rank">Sort: Rank</option>' +
                 '      <option value="name">Sort: Country</option>' +
-                '      <option value="sivi_structural">Sort: Score</option>' +
+                '      <option value="' + esc(scoreKey) + '">Sort: Score</option>' +
                 '      <option value="coverage">Sort: Coverage</option>' +
                 pillars.map(function (p) { return '<option value="' + esc(p.key) + '">Sort: ' + esc(p.label) + '</option>'; }).join('') +
                 '    </select>' +
+                '    <select class="biw-select biw-block-dropdown" id="biw-block-dropdown">' +
+                '      <option value="">🏛️ Compare Groups</option>' +
+                Object.keys(countryGroups).map(function(name) {
+                    return '<option value="' + name + '">' + name + '</option>';
+                }).join('') +
+                '      <option value="__all__">View All Groups →</option>' +
+                '    </select>' +
                 '    <button class="biw-watchlist-toggle"><span>★</span> Watchlist</button>' +
                 '    <button class="biw-btn-print">Print</button>' +
-                '    <button class="biw-btn-methodology" id="biw-btn-methodology">📖 Methodology</button>' +
+                '    <button class="biw-btn-export" id="biw-btn-export">⬇ CSV</button>' +
                 '    <div class="biw-share-group">' +
                 '      <button class="biw-btn-share" data-share="x">𝕏</button>' +
                 '      <button class="biw-btn-share" data-share="linkedin">in</button>' +
@@ -505,6 +613,9 @@
                             }
                         });
                 }
+
+                populateBlockSelectors();
+
             }).catch(function (err) {
                 var tbody2 = q('.biw-tbody');
                 if (tbody2) {
@@ -615,7 +726,6 @@
         function renderHead() {
             var head = q('.biw-head-row');
             if (!head) return;
-            // DQI column removed
             var cells = '<th style="width:36px;text-align:center;">★</th>' +
                 '<th style="width:70px;text-align:center;">Rank</th>' +
                 '<th style="width:60px;text-align:center;">Δ</th>' +
@@ -652,7 +762,7 @@
             return c.rank !== undefined && c.rank !== null ? '#' + c.rank : '—';
         }
 
-        // ─── Delta (YoY using common country set) ──────────────────
+        // ─── Delta ──────────────────────────────────────────────────
         function deltaInfo(c) {
             var currentYear = state.selectedYear;
             var prevYear = currentYear - 1;
@@ -697,7 +807,7 @@
             if (info.type === 'flat') return '<span class="biw-delta biw-delta-flat" title="No change in rank (compared among countries with data in both years)">—</span>';
             var arrow = info.type === 'up' ? '↑' : '↓';
             var cls = info.type === 'up' ? 'biw-delta-up' : 'biw-delta-down';
-            var label = info.type === 'up' ? 'Rank improved (less vulnerable)' : 'Rank worsened (more vulnerable)';
+            var label = info.type === 'up' ? 'Rank worsened (more vulnerable)' : 'Rank improved (less vulnerable)';
             return '<span class="biw-delta ' + cls + '" title="' + label + ' (compared among countries with data in both years)">' + arrow + info.value + '</span>';
         }
 
@@ -735,37 +845,122 @@
         // ─── Update summary ──────────────────────────────────────────
         function updateSummary() {
             var total = state.all.length;
+
+            // ─── Countries card ────────────────────────────────────────
+            var fullCount = 0, partialCount = 0;
+            state.all.forEach(function(c) {
+                var cov = c[coverageKey];
+                if (cov === 'full') fullCount++;
+                else if (cov === 'partial') partialCount++;
+            });
+            var countriesDetail = document.getElementById('biw-countries-detail');
+            if (countriesDetail) {
+                countriesDetail.innerHTML =
+                    '<div style="font-size:1rem;font-weight:700;">' + total + ' total</div>' +
+                    '<div style="font-size:0.8rem;display:flex;gap:12px;margin-top:2px;">' +
+                    '<span><span style="display:inline-block;width:10px;height:10px;background:var(--biw-low);border-radius:50%;margin-right:4px;"></span> ' + fullCount + ' full</span>' +
+                    '<span><span style="display:inline-block;width:10px;height:10px;background:var(--biw-medium);border-radius:50%;margin-right:4px;"></span> ' + partialCount + ' partial</span>' +
+                    '</div>';
+            }
+
+            // ─── Composite Analytics card ─────────────────────────────
             var scores = state.all.map(function (d) { return getScoreForYear(d.iso3, state.selectedYear) ?? d[scoreKey]; });
             var validScores = scores.filter(function (s) { return s !== null && s !== undefined; });
-            var mean = validScores.length ? (validScores.reduce(function (a, b) { return a + b; }, 0) / validScores.length).toFixed(1) : '—';
+            var mean = validScores.length ? (validScores.reduce(function (a, b) { return a + b; }, 0) / validScores.length) : 0;
+            var sortedScores = validScores.slice().sort(function(a,b){return a-b;});
+            var median = 0;
+            if (sortedScores.length) {
+                var mid = Math.floor(sortedScores.length / 2);
+                median = sortedScores.length % 2 ? sortedScores[mid] : (sortedScores[mid-1] + sortedScores[mid]) / 2;
+            }
+            var minScore = sortedScores.length ? sortedScores[0] : 0;
+            var maxScore = sortedScores.length ? sortedScores[sortedScores.length-1] : 0;
+
+            var scoreDetail = document.getElementById('biw-score-detail');
+            if (scoreDetail) {
+                scoreDetail.innerHTML =
+                    '<div style="font-size:0.9rem;display:flex;gap:14px;flex-wrap:wrap;margin-top:2px;align-items:center;">' +
+                    '<span style="font-weight:600;">📊 Range: ' + fmtNum(minScore) + ' – ' + fmtNum(maxScore) + '</span>' +
+                    '</div>' +
+                    '<div style="font-size:0.85rem;display:flex;gap:20px;flex-wrap:wrap;margin-top:2px;">' +
+                    '<span style="font-weight:500;">📈 Median: ' + fmtNum(median) + '</span>' +
+                    '<span style="font-weight:500;">📉 Mean: ' + fmtNum(mean) + '</span>' +
+                    '</div>';
+            }
+
+            // ─── Vulnerability distribution ───────────────────────────
             var ext = validScores.filter(function (s) { return s >= bandThresholds[2]; }).length;
             var high = validScores.filter(function (s) { return s >= bandThresholds[1] && s < bandThresholds[2]; }).length;
             var med = validScores.filter(function (s) { return s >= bandThresholds[0] && s < bandThresholds[1]; }).length;
             var low = validScores.filter(function (s) { return s < bandThresholds[0]; }).length;
 
-            var totalEl = q('.biw-stat-total');
-            if (totalEl) totalEl.textContent = total;
-            var meanEl = q('.biw-stat-mean');
-            if (meanEl) meanEl.textContent = mean;
-            var extEl = q('.biw-stat-extreme');
-            if (extEl) extEl.textContent = ext;
-            var tiersEl = extEl ? extEl.parentElement.querySelector('span') : null;
-            if (tiersEl) tiersEl.textContent = 'Ext: ' + ext + ' / High: ' + high + ' / Med: ' + med + ' / Low: ' + low;
+            var distInline = document.getElementById('biw-dist-inline');
+            if (distInline) {
+                distInline.innerHTML =
+                    '<span class="dist-item"><span class="dist-dot extreme"></span><span class="dist-num">' + ext + '</span> Extreme</span>' +
+                    '<span class="dist-item"><span class="dist-dot high"></span><span class="dist-num">' + high + '</span> High</span>' +
+                    '<span class="dist-item"><span class="dist-dot medium"></span><span class="dist-num">' + med + '</span> Medium</span>' +
+                    '<span class="dist-item"><span class="dist-dot low"></span><span class="dist-num">' + low + '</span> Low</span>';
+            }
 
-            var movers = state.all.map(function (c) {
-                var info = deltaInfo(c);
-                return { country: c, delta: info.value || 0, type: info.type };
-            });
-            movers.sort(function (a, b) { return b.delta - a.delta; });
-            var mover = movers[0];
-            var moverEl = q('.biw-stat-mover');
-            if (moverEl && mover && mover.delta > 0) {
-                var arrow = mover.type === 'up' ? '▲' : mover.type === 'down' ? '▼' : '—';
-                moverEl.textContent = mover.country.name + ' (' + arrow + mover.delta + ')';
-                moverEl.style.fontSize = '1rem';
-            } else {
-                moverEl.textContent = '—';
-                moverEl.style.fontSize = '1.2rem';
+            // ─── Top movers ────────────────────────────────────────
+            var moverListEl = document.getElementById('biw-mover-list');
+            if (moverListEl) {
+                var movers = state.all.map(function (c) {
+                    var info = deltaInfo(c);
+                    return { country: c, delta: info.value || 0, type: info.type };
+                });
+
+                var upMover = null;
+                var downMover = null;
+                var upDelta = -1;
+                var downDelta = -1;
+
+                movers.forEach(function (m) {
+                    if (m.type === 'up' && m.delta > upDelta) {
+                        upDelta = m.delta;
+                        upMover = m;
+                    }
+                    if (m.type === 'down' && m.delta > downDelta) {
+                        downDelta = m.delta;
+                        downMover = m;
+                    }
+                });
+
+                var html = '';
+                if (upMover) {
+                    html += '<div class="mover-up">🔺 ' + esc(upMover.country.name) + ' (▲' + upMover.delta + ')</div>';
+                }
+                if (downMover) {
+                    html += '<div class="mover-down">🔻 ' + esc(downMover.country.name) + ' (▼' + downMover.delta + ')</div>';
+                }
+                if (!upMover && !downMover) {
+                    html = '<div style="color:var(--biw-slate-dim);font-size:0.8rem;">No significant moves</div>';
+                }
+                moverListEl.innerHTML = html;
+            }
+
+            // ─── Block card buttons ──────────────────────────────
+            var cardButtons = document.getElementById('biw-block-card-buttons');
+            if (cardButtons) {
+                var quickGroups = ['G7', 'BRICS', 'EU', 'ASEAN'];
+                cardButtons.innerHTML = quickGroups.map(function(name) {
+                    return '<button class="block-card-btn" data-group="' + name + '">' + name + '</button>';
+                }).join('');
+                cardButtons.querySelectorAll('.block-card-btn').forEach(function(btn) {
+                    btn.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        openBlockSelector(this.dataset.group, null);
+                    });
+                });
+            }
+
+            var viewAll = document.getElementById('biw-block-card-view-all');
+            if (viewAll) {
+                viewAll.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    openBlockSelector(null, null);
+                });
             }
         }
 
@@ -823,9 +1018,7 @@
                 .style('font-size', '18px')
                 .text(total);
 
-            document.addEventListener('click', function () {
-                tooltip.classList.remove('visible');
-            });
+            // Tooltip hiding handled by delegated listener
         }
 
         // ─── Extremes ───────────────────────────────────────────────
@@ -911,9 +1104,7 @@
                 container.appendChild(bar);
             });
 
-            document.addEventListener('click', function () {
-                tooltip.classList.remove('pinned', 'visible');
-            });
+            // Tooltip hiding handled by delegated listener
         }
 
         // ─── Scatter ────────────────────────────────────────────────
@@ -963,9 +1154,7 @@
                 container.appendChild(dot);
             });
 
-            document.addEventListener('click', function () {
-                tooltip.classList.remove('pinned', 'visible');
-            });
+            // Tooltip hiding handled by delegated listener
         }
 
         // ─── Helpers ────────────────────────────────────────────────
@@ -1023,8 +1212,9 @@
                 .center([0, 10]);
 
             var path = d3.geoPath().projection(projection);
+            state.mapProjection = projection;
+            state.mapPath = path;
 
-            // ─── Zoom handler with unified factors ──────────────────
             var ZOOM_STEP_IN = 1.12;
             var ZOOM_STEP_OUT = 0.89;
             var WHEEL_SENSITIVITY = 0.0018;
@@ -1046,7 +1236,6 @@
                     return true;
                 })
                 .wheelDelta(function (event) {
-                    // d3 passes ONLY the wheel event as the first argument
                     return -event.deltaY * WHEEL_SENSITIVITY * ZOOM_STEP_IN;
                 })
                 .on('zoom', function (e) {
@@ -1056,12 +1245,10 @@
 
             svg.call(zoom);
 
-            // ─── Custom double-click handler (same factor as +) ───
             svg.on('dblclick', function (event) {
                 svg.transition().duration(300).call(zoom.scaleBy, ZOOM_STEP_IN);
             });
 
-            // ─── Zoom hint with IntersectionObserver ────────────────
             var hint = container.querySelector('.biw-zoom-hint');
             if (!hint) {
                 hint = document.createElement('div');
@@ -1070,29 +1257,22 @@
                 container.appendChild(hint);
             }
 
-            // Function to show the hint and start the 3‑second fade timer
             function showHint() {
                 if (!hint) return;
-                // Clear any existing timeout
                 if (state.mapHintTimeout) {
                     clearTimeout(state.mapHintTimeout);
                     state.mapHintTimeout = null;
                 }
-                // Reset opacity and display
                 hint.style.opacity = '1';
                 hint.style.display = 'block';
-                // Start timer to fade out
                 state.mapHintTimeout = setTimeout(function () {
                     hint.style.opacity = '0';
-                    // After fade, we can keep it hidden but still in DOM
                     setTimeout(function () {
                         hint.style.display = 'none';
                     }, 300);
                 }, 3000);
             }
 
-            // If the container is already visible, show the hint immediately
-            // We'll use a small delay to ensure layout is settled
             setTimeout(function () {
                 var rect2 = container.getBoundingClientRect();
                 if (rect2.width > 0 && rect2.height > 0 &&
@@ -1101,16 +1281,13 @@
                 }
             }, 100);
 
-            // Set up IntersectionObserver to re‑show when the map comes into view
             if (window.IntersectionObserver) {
-                // Disconnect previous observer if any
                 if (state.mapHintObserver) {
                     state.mapHintObserver.disconnect();
                 }
                 state.mapHintObserver = new IntersectionObserver(function (entries) {
                     entries.forEach(function (entry) {
                         if (entry.isIntersecting) {
-                            // Map became visible – show hint again
                             showHint();
                         }
                     });
@@ -1118,7 +1295,6 @@
                 state.mapHintObserver.observe(container);
             }
 
-            // ─── Zoom buttons ──────────────────────────────────────
             var zoomIn = container.querySelector('.biw-zoom-in');
             var zoomOut = container.querySelector('.biw-zoom-out');
             var zoomReset = container.querySelector('.biw-zoom-reset');
@@ -1126,7 +1302,6 @@
             if (zoomOut) zoomOut.addEventListener('click', function () { svg.transition().duration(300).call(zoom.scaleBy, ZOOM_STEP_OUT); });
             if (zoomReset) zoomReset.addEventListener('click', function () { svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity); });
 
-            // ─── Year slider ──────────────────────────────────────────
             var slider = container.querySelector('#biw-year-slider');
             var label = container.querySelector('#biw-year-label');
             var playBtn = container.querySelector('#biw-play-btn');
@@ -1151,6 +1326,7 @@
                     if (state.selectedCountry) {
                         openDrawer(state.selectedCountry, y);
                     }
+                    updateHash();
                 });
 
                 playBtn.addEventListener('click', function() {
@@ -1185,11 +1361,11 @@
                         if (state.selectedCountry) {
                             openDrawer(state.selectedCountry, currentYear);
                         }
+                        updateHash();
                     }, 800);
                 });
             }
 
-            // ─── Load map data ────────────────────────────────────────
             fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
                 .then(function (res) { return res.json(); })
                 .then(function (world) {
@@ -1229,11 +1405,25 @@
                             var c = state.all.find(function (i) { return i.iso3 === iso3; });
                             var tt = container.querySelector('.biw-map-tooltip');
                             if (c) {
+                                // ─── Generic tooltip: show all pillars ──
                                 var score = getHistoricalScore(iso3, state.selectedYear) ?? c[scoreKey];
-                                tt.innerHTML = '<div style="font-weight:800;">' + esc(c.name) + '</div>' +
+                                var dqi = c.composite_dqi !== undefined && c.composite_dqi !== null ? Math.round(c.composite_dqi) + '%' : '—';
+                                var html = '<div style="font-weight:800;">' + esc(c.name) + '</div>' +
                                     '<div>Rank: ' + rankHtml(c) + '</div>' +
                                     '<div>' + esc(scoreLabel) + ': ' + fmtNum(score) + '</div>' +
-                                    '<div style="font-size:11px;color:' + getColor(score) + ';">' + bandLabels[band(score)] + '</div>';
+                                    '<div style="font-size:11px;color:' + getColor(score) + ';">' + bandLabels[band(score)] + '</div>' +
+                                    '<hr style="border-color:var(--biw-border);margin:4px 0;">';
+                                // Add pillar rows
+                                pillars.forEach(function(p) {
+                                    var val = getHistoricalPillar(iso3, state.selectedYear, p.key) ?? c[p.key];
+                                    if (val !== null && val !== undefined) {
+                                        html += '<div style="font-size:10px;display:flex;justify-content:space-between;">' +
+                                            '<span>' + esc(p.label) + '</span><span>' + fmtNum(val) + '</span></div>';
+                                    }
+                                });
+                                html += '<div style="font-size:10px;display:flex;justify-content:space-between;margin-top:4px;">' +
+                                    '<span>DQI</span><span>' + dqi + '</span></div>';
+                                tt.innerHTML = html;
                                 var rect2 = container.getBoundingClientRect();
                                 tt.style.left = (e.clientX - rect2.left + 12) + 'px';
                                 tt.style.top = (e.clientY - rect2.top + 12) + 'px';
@@ -1291,6 +1481,7 @@
                     return getCountryColor(c, layer, year);
                 });
             state.mapLayer = layer;
+            updateHash();
         }
 
         function getCountryColor(c, layer, year) {
@@ -1306,7 +1497,7 @@
             return ['var(--biw-low)', 'var(--biw-medium)', 'var(--biw-high)', 'var(--biw-extreme)'][b] || 'var(--biw-no-data)';
         }
 
-        // ─── Map markers (purple, offset) ──────────────────────────
+        // ─── Map markers ──────────────────────────────────────────
         function updateMapMarkers() {
             var container = document.getElementById('biw-map');
             if (!container || !state.d3Ready || typeof d3 === 'undefined' || !state.mapProjection) return;
@@ -1623,7 +1814,7 @@
             });
         }
 
-        // ─── History chart (includes latest per year) ──────────────
+        // ─── History chart ──────────────────────────────────────────
         function renderHistoryChart(c) {
             var container = document.getElementById('drawer-history-chart');
             if (!container) return;
@@ -1895,8 +2086,9 @@
         function toggleCompare(iso3) {
             var idx = state.compareList.findIndex(function (item) { return item.iso3 === iso3; });
             if (idx === -1) {
-                if (state.compareList.length >= 3) {
-                    alert('You can compare up to 3 countries.');
+                var MAX_COMPARE = 4;
+                if (state.compareList.length >= MAX_COMPARE) {
+                    alert('You can compare up to ' + MAX_COMPARE + ' countries.');
                     return;
                 }
                 var c = state.all.find(function (d) { return d.iso3 === iso3; });
@@ -1927,6 +2119,19 @@
             items.innerHTML = state.compareList.map(function (c) {
                 return '<div class="dock-item">' + esc(c.name) + ' <button class="remove" data-action="compare-remove" data-iso="' + c.iso3 + '">✕</button></div>';
             }).join('');
+        }
+
+        function loadGroup(groupName) {
+            var iso3s = countryGroups[groupName];
+            if (!iso3s) return;
+            var countries = iso3s.map(function(iso3) {
+                return state.all.find(function(c) { return c.iso3 === iso3; });
+            }).filter(function(c) { return c; });
+            if (countries.length === 0) return;
+            state.compareList = countries.slice(0, 4);
+            updateCompareDock();
+            render();
+            showCompareModal();
         }
 
         function showCompareModal() {
@@ -2068,6 +2273,60 @@
             render();
         }
 
+        // ─── CSV Export ──────────────────────────────────────────────
+        function exportCSV() {
+            var data = state.filtered.length ? state.filtered : state.all;
+            if (!data || data.length === 0) {
+                alert('No data to export.');
+                return;
+            }
+
+            var headers = ['Country', 'Rank', 'Score'];
+            pillars.forEach(function(p) {
+                headers.push(p.label);
+            });
+            headers.push('Coverage');
+            headers.push('DQI');
+
+            function escapeCSV(val) {
+                if (val === null || val === undefined) return '';
+                var str = String(val);
+                if (str.indexOf(',') !== -1 || str.indexOf('"') !== -1 || str.indexOf('\n') !== -1) {
+                    return '"' + str.replace(/"/g, '""') + '"';
+                }
+                return str;
+            }
+
+            var rows = data.map(function(c) {
+                var score = getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey];
+                var rank = getRecomputedRank(c.iso3, state.selectedYear) || '';
+                var dqi = c.composite_dqi !== undefined && c.composite_dqi !== null ? Math.round(c.composite_dqi) + '%' : '';
+                var coverage = c[coverageKey] || '';
+
+                var row = [
+                    c.name || '',
+                    rank,
+                    score !== undefined && score !== null ? fmtNum(score) : ''
+                ];
+                pillars.forEach(function(p) {
+                    var val = getHistoricalPillar(c.iso3, state.selectedYear, p.key) ?? c[p.key];
+                    row.push(val !== undefined && val !== null ? fmtNum(val) : '');
+                });
+                row.push(coverage);
+                row.push(dqi);
+
+                return row.map(escapeCSV).join(',');
+            });
+
+            var csv = escapeCSV(headers.join(',')) + '\n' + rows.join('\n');
+            var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = slug + '_export_' + new Date().toISOString().split('T')[0] + '.csv';
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+
         // ─── Dark mode ──────────────────────────────────────────────
         function toggleDark() {
             state.isDark = !state.isDark;
@@ -2094,8 +2353,652 @@
             document.getElementById('biw-method-modal').classList.remove('visible');
         }
 
+        // ─── URL Hash State ──────────────────────────────────────────
+        function updateHash() {
+            var parts = [];
+            if (state.selectedYear !== maxYear) parts.push('year=' + state.selectedYear);
+            if (state.mapLayer !== 'score') parts.push('layer=' + state.mapLayer);
+            if (state.selectedCountry) parts.push('country=' + state.selectedCountry.iso3);
+            if (state.showWatchlistOnly) parts.push('watchlist=1');
+            if (parts.length) {
+                window.location.hash = parts.join('&');
+            } else {
+                window.location.hash = '';
+            }
+        }
+
+        function decodeHash() {
+            var hash = window.location.hash.replace('#', '');
+            if (!hash) return;
+            var params = {};
+            hash.split('&').forEach(function(p) {
+                var kv = p.split('=');
+                params[kv[0]] = decodeURIComponent(kv[1] || '');
+            });
+            if (params.year) {
+                var y = parseInt(params.year, 10);
+                if (y >= minYear && y <= maxYear) {
+                    state.selectedYear = y;
+                    var slider = document.getElementById('biw-year-slider');
+                    var label = document.getElementById('biw-year-label');
+                    if (slider) slider.value = y;
+                    if (label) label.textContent = y;
+                }
+            }
+            if (params.layer) {
+                state.mapLayer = params.layer;
+                var btns = document.querySelectorAll('.biw-seg-btn[data-layer]');
+                btns.forEach(function(b) {
+                    b.classList.toggle('active', b.dataset.layer === params.layer);
+                });
+                if (state.d3Ready) {
+                    updateMapColors(state.mapLayer, state.selectedYear);
+                }
+            }
+            if (params.country) {
+                var c = state.all.find(function(d) { return d.iso3 === params.country; });
+                if (c) selectCountry(c.iso3);
+            }
+            if (params.watchlist === '1') {
+                state.showWatchlistOnly = true;
+                var toggle = document.querySelector('.biw-watchlist-toggle');
+                if (toggle) toggle.classList.add('active');
+            }
+        }
+
+        // ─── Block Comparison Feature ───────────────────────────────
+
+        function populateBlockSelectors() {
+            var selectA = document.getElementById('biw-block-a');
+            var selectB = document.getElementById('biw-block-b');
+            if (!selectA || !selectB) return;
+            var options = Object.keys(countryGroups).map(function(name) {
+                return '<option value="' + name + '">' + name + '</option>';
+            }).join('');
+            selectA.innerHTML = '<option value="">— Select —</option>' + options;
+            selectB.innerHTML = '<option value="">— None —</option>' + options;
+        }
+
+        function openBlockSelector(blockA, blockB) {
+            var modal = document.getElementById('biw-block-modal');
+            var overlay = document.getElementById('biw-block-overlay');
+            if (!modal || !overlay) return;
+
+            document.getElementById('biw-block-a').value = blockA || '';
+            document.getElementById('biw-block-b').value = blockB || '';
+
+            modal.classList.add('visible');
+            overlay.classList.add('visible');
+
+            document.getElementById('block-tabs-wrapper').style.display = 'none';
+            document.getElementById('biw-block-results').style.display = 'none';
+
+            if (blockA && blockB) {
+                document.getElementById('biw-block-title').innerHTML = '🏛️ ' + esc(blockA) + ' <span style="color:var(--biw-slate-dim)">vs</span> ' + esc(blockB);
+            } else if (blockA) {
+                document.getElementById('biw-block-title').textContent = '🏛️ ' + blockA;
+            } else {
+                document.getElementById('biw-block-title').textContent = '🏛️ Compare Groups';
+            }
+
+            document.getElementById('biw-block-compare-btn').onclick = function() {
+                var a = document.getElementById('biw-block-a').value;
+                var b = document.getElementById('biw-block-b').value;
+                if (!a) { alert('Please select at least one group.'); return; }
+                runBlockComparison(a, b || null);
+            };
+
+            document.getElementById('biw-block-close').onclick = closeBlockCompare;
+            overlay.onclick = closeBlockCompare;
+        }
+
+        function closeBlockCompare() {
+            document.getElementById('biw-block-modal').classList.remove('visible');
+            document.getElementById('biw-block-overlay').classList.remove('visible');
+        }
+
+        function runBlockComparison(blockA, blockB) {
+            var resultContainer = document.getElementById('biw-block-results');
+            if (!resultContainer) return;
+
+            document.getElementById('block-tabs-wrapper').style.display = 'flex';
+            resultContainer.style.display = 'block';
+
+            var statsA = computeBlockStats(blockA);
+            var statsB = blockB ? computeBlockStats(blockB) : null;
+
+            var overviewTab = document.getElementById('block-tab-overview');
+            if (blockB && statsB) {
+                overviewTab.innerHTML = renderTwoBlockOverview(statsA, statsB);
+            } else if (statsA) {
+                overviewTab.innerHTML = renderSingleBlockOverview(statsA);
+            } else {
+                overviewTab.innerHTML = '<p style="color:var(--biw-slate-dim)">No data available for the selected group.</p>';
+            }
+
+            var detailedTab = document.getElementById('block-tab-detailed');
+            detailedTab.innerHTML = renderDetailedComparison(statsA, statsB);
+
+            document.querySelectorAll('.block-tab').forEach(function(tab) {
+                tab.onclick = function() {
+                    document.querySelectorAll('.block-tab').forEach(function(t) { t.classList.remove('active'); });
+                    this.classList.add('active');
+                    var target = this.dataset.tab;
+                    document.getElementById('block-tab-overview').style.display = target === 'overview' ? 'block' : 'none';
+                    document.getElementById('block-tab-detailed').style.display = target === 'detailed' ? 'block' : 'none';
+                };
+            });
+            document.querySelector('.block-tab[data-tab="overview"]').classList.add('active');
+            document.getElementById('block-tab-overview').style.display = 'block';
+            document.getElementById('block-tab-detailed').style.display = 'none';
+
+            setTimeout(function() {
+                if (state.d3Ready && typeof d3 !== 'undefined') {
+                    drawBlockRadar(statsA, statsB);
+                    if (statsB) {
+                        drawBlockPillarComparison(statsA, statsB, 'block-pillar-mini-container');
+                    }
+                    drawBlockDistribution(statsA, statsB);
+                    drawBlockPillarComparison(statsA, statsB, 'block-pillar-container');
+                }
+            }, 60);
+
+            document.getElementById('biw-block-share').onclick = function() {
+                var url = window.location.href.split('#')[0];
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(url).then(function() { alert('Link copied to clipboard!'); }, function() { prompt('Copy this link:', url); });
+                } else {
+                    prompt('Copy this link:', url);
+                }
+            };
+            document.getElementById('biw-block-download').onclick = function() {
+                exportBlockCSV(statsA, statsB);
+            };
+        }
+
+        function computeBlockStats(groupName) {
+            var iso3s = countryGroups[groupName];
+            if (!iso3s || !state.all || state.all.length === 0) return null;
+            var members = iso3s.map(function(iso3) {
+                return state.all.find(function(c) { return c.iso3 === iso3; });
+            }).filter(function(c) { return c; });
+            if (members.length === 0) return null;
+            var scores = members.map(function(c) {
+                return getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey];
+            }).filter(function(s) { return s !== null && s !== undefined; });
+            if (scores.length === 0) return null;
+            var sum = scores.reduce(function(a, b) { return a + b; }, 0);
+            var avg = sum / scores.length;
+            var min = Math.min.apply(null, scores);
+            var max = Math.max.apply(null, scores);
+            var stddev = 0;
+            if (scores.length > 1) {
+                var variance = scores.reduce(function(acc, s) { return acc + Math.pow(s - avg, 2); }, 0) / scores.length;
+                stddev = Math.sqrt(variance);
+            }
+            var mostVuln = members.reduce(function(a, b) {
+                var scoreA = getScoreForYear(a.iso3, state.selectedYear) ?? a[scoreKey];
+                var scoreB = getScoreForYear(b.iso3, state.selectedYear) ?? b[scoreKey];
+                return (scoreA || 0) > (scoreB || 0) ? a : b;
+            });
+            var leastVuln = members.reduce(function(a, b) {
+                var scoreA = getScoreForYear(a.iso3, state.selectedYear) ?? a[scoreKey];
+                var scoreB = getScoreForYear(b.iso3, state.selectedYear) ?? b[scoreKey];
+                return (scoreA || 0) < (scoreB || 0) ? a : b;
+            });
+            var pillarAverages = {};
+            pillars.forEach(function(p) {
+                var vals = members.map(function(c) {
+                    return getHistoricalPillar(c.iso3, state.selectedYear, p.key) ?? c[p.key];
+                }).filter(function(v) { return v !== null && v !== undefined; });
+                pillarAverages[p.key] = vals.length ? (vals.reduce(function(a, b) { return a + b; }, 0) / vals.length) : 0;
+            });
+            return { name: groupName, members: members, scores: scores, count: members.length, avg: avg, min: min, max: max, stddev: stddev, mostVuln: mostVuln, leastVuln: leastVuln, pillarAverages: pillarAverages };
+        }
+
+        function renderSingleBlockOverview(stats) {
+            if (!stats) return '<p style="color:var(--biw-slate-dim)">No data available for this group.</p>';
+            var html = '<div class="block-overview-content">';
+            html += '<div class="block-overview-grid">';
+            html += '<div class="block-overview-radar"><div id="block-radar-container" style="height:280px;"></div></div>';
+            html += '<div class="block-overview-summary">';
+            html += '<div class="block-summary-cards">' +
+                '<div class="block-stat-card"><span class="stat-label">Countries</span><span class="stat-value">' + stats.count + '</span></div>' +
+                '<div class="block-stat-card"><span class="stat-label">Average Score</span><span class="stat-value">' + fmtNum(stats.avg) + '</span></div>' +
+                '<div class="block-stat-card"><span class="stat-label">Range</span><span class="stat-value">' + fmtNum(stats.min) + ' – ' + fmtNum(stats.max) + '</span></div>' +
+                '<div class="block-stat-card"><span class="stat-label">Std Dev</span><span class="stat-value">' + fmtNum(stats.stddev) + '</span></div>' +
+                '</div>';
+            html += '<div class="block-extremes">' +
+                '<div><strong>Most Vulnerable:</strong> <span class="block-country-link" data-iso3="' + stats.mostVuln.iso3 + '">' + esc(stats.mostVuln.name) + '</span> (' + fmtNum(getScoreForYear(stats.mostVuln.iso3, state.selectedYear) ?? stats.mostVuln[scoreKey]) + ')</div>' +
+                '<div><strong>Least Vulnerable:</strong> <span class="block-country-link" data-iso3="' + stats.leastVuln.iso3 + '">' + esc(stats.leastVuln.name) + '</span> (' + fmtNum(getScoreForYear(stats.leastVuln.iso3, state.selectedYear) ?? stats.leastVuln[scoreKey]) + ')</div>' +
+                '</div>';
+            html += '</div>';
+            html += '</div>';
+            html += '</div>';
+            return html;
+        }
+
+        function renderTwoBlockOverview(statsA, statsB) {
+            if (!statsA || !statsB) return '<p style="color:var(--biw-slate-dim)">No data available for one of the groups.</p>';
+            var diff = statsA.avg - statsB.avg;
+            var diffText = diff > 0
+                ? statsA.name + ' is <strong>' + fmtNum(Math.abs(diff)) + '</strong> points more vulnerable on average'
+                : statsB.name + ' is <strong>' + fmtNum(Math.abs(diff)) + '</strong> points more vulnerable on average';
+            var html = '<div class="block-overview-content">';
+            html += '<div class="block-overview-grid">';
+            html += '<div class="block-overview-radar"><div id="block-radar-container" style="height:300px;"></div><div class="block-legend"><span class="legend-a">● ' + esc(statsA.name) + '</span><span class="legend-b">● ' + esc(statsB.name) + '</span></div></div>';
+            html += '<div class="block-overview-summary">';
+            html += '<div class="block-summary-cards two-block">' +
+                '<div class="block-stat-card block-a"><span class="stat-label">' + esc(statsA.name) + '</span><span class="stat-value">' + fmtNum(statsA.avg) + '</span><span class="stat-sub">' + statsA.count + ' countries · σ ' + fmtNum(statsA.stddev) + '</span></div>' +
+                '<div class="block-stat-card block-b"><span class="stat-label">' + esc(statsB.name) + '</span><span class="stat-value">' + fmtNum(statsB.avg) + '</span><span class="stat-sub">' + statsB.count + ' countries · σ ' + fmtNum(statsB.stddev) + '</span></div>' +
+                '</div>';
+            html += '<div class="block-diff-indicator"><span>📊 ' + diffText + '</span></div>';
+            html += '<div class="block-extremes two-col">' +
+                '<div><strong>' + esc(statsA.name) + ' most vulnerable:</strong> <span class="block-country-link" data-iso3="' + statsA.mostVuln.iso3 + '">' + esc(statsA.mostVuln.name) + '</span> (' + fmtNum(getScoreForYear(statsA.mostVuln.iso3, state.selectedYear) ?? statsA.mostVuln[scoreKey]) + ')</div>' +
+                '<div><strong>' + esc(statsB.name) + ' most vulnerable:</strong> <span class="block-country-link" data-iso3="' + statsB.mostVuln.iso3 + '">' + esc(statsB.mostVuln.name) + '</span> (' + fmtNum(getScoreForYear(statsB.mostVuln.iso3, state.selectedYear) ?? statsB.mostVuln[scoreKey]) + ')</div>' +
+                '<div><strong>' + esc(statsA.name) + ' least vulnerable:</strong> <span class="block-country-link" data-iso3="' + statsA.leastVuln.iso3 + '">' + esc(statsA.leastVuln.name) + '</span> (' + fmtNum(getScoreForYear(statsA.leastVuln.iso3, state.selectedYear) ?? statsA.leastVuln[scoreKey]) + ')</div>' +
+                '<div><strong>' + esc(statsB.name) + ' least vulnerable:</strong> <span class="block-country-link" data-iso3="' + statsB.leastVuln.iso3 + '">' + esc(statsB.leastVuln.name) + '</span> (' + fmtNum(getScoreForYear(statsB.leastVuln.iso3, state.selectedYear) ?? statsB.leastVuln[scoreKey]) + ')</div>' +
+                '</div>';
+            html += '</div>';
+            html += '</div>';
+            html += '</div>';
+            return html;
+        }
+
+        function renderDetailedComparison(statsA, statsB) {
+            var html = '<div class="block-detailed-content">';
+            if (statsA && statsB) {
+                html += '<div class="block-chart-wrap"><h4>Metrics Comparison</h4><div class="block-detailed-table"><table><thead><tr><th>Metric</th><th class="col-a">' + esc(statsA.name) + '</th><th class="col-b">' + esc(statsB.name) + '</th><th>Difference</th></tr></thead><tbody>';
+                var rows = [
+                    { label: 'Countries', a: statsA.count, b: statsB.count, diff: false },
+                    { label: 'Average Score', a: fmtNum(statsA.avg), b: fmtNum(statsB.avg), diff: true, valA: statsA.avg, valB: statsB.avg },
+                    { label: 'Min Score', a: fmtNum(statsA.min), b: fmtNum(statsB.min), diff: true, valA: statsA.min, valB: statsB.min },
+                    { label: 'Max Score', a: fmtNum(statsA.max), b: fmtNum(statsB.max), diff: true, valA: statsA.max, valB: statsB.max },
+                    { label: 'Std Deviation', a: fmtNum(statsA.stddev), b: fmtNum(statsB.stddev), diff: true, valA: statsA.stddev, valB: statsB.stddev }
+                ];
+                pillars.forEach(function(p) {
+                    var valA = statsA.pillarAverages[p.key] !== undefined ? statsA.pillarAverages[p.key] : null;
+                    var valB = statsB.pillarAverages[p.key] !== undefined ? statsB.pillarAverages[p.key] : null;
+                    rows.push({ label: p.label, a: valA !== null ? fmtNum(valA) : '—', b: valB !== null ? fmtNum(valB) : '—', diff: true, valA: valA || 0, valB: valB || 0 });
+                });
+                rows.forEach(function(row) {
+                    var diffCell = '';
+                    if (row.diff) {
+                        var d = row.valA - row.valB;
+                        var diffClass = d > 0 ? 'diff-a' : (d < 0 ? 'diff-b' : 'diff-none');
+                        diffCell = '<td class="' + diffClass + '">' + (d > 0 ? '+' : '') + fmtNum(d) + '</td>';
+                    } else {
+                        diffCell = '<td class="diff-none">—</td>';
+                    }
+                    html += '<tr><td>' + esc(row.label) + '</td><td class="col-a">' + row.a + '</td><td class="col-b">' + row.b + '</td>' + diffCell + '</tr>';
+                });
+                html += '</tbody></table></div></div>';
+                html += '<div class="block-chart-wrap"><h4>Score Distribution</h4><div id="block-dist-container" style="height:160px;"></div></div>';
+                html += '<div class="block-chart-wrap"><h4>Pillar Breakdown</h4><div id="block-pillar-container" style="height:240px;"></div></div>';
+                html += '<div class="block-chart-wrap"><h4>All Members</h4><div class="block-member-table-wrap"><table class="block-member-table"><thead><tr><th>Country</th><th>Group</th><th>Score</th><th>Rank</th><th>Coverage</th></tr></thead><tbody>';
+                var allMembers = [];
+                statsA.members.forEach(function(c) { allMembers.push({ country: c, block: statsA.name, blockClass: 'block-a' }); });
+                statsB.members.forEach(function(c) { allMembers.push({ country: c, block: statsB.name, blockClass: 'block-b' }); });
+                allMembers.sort(function(a, b) {
+                    var scoreA = getScoreForYear(a.country.iso3, state.selectedYear) ?? a.country[scoreKey];
+                    var scoreB = getScoreForYear(b.country.iso3, state.selectedYear) ?? b.country[scoreKey];
+                    return (scoreB || 0) - (scoreA || 0);
+                });
+                allMembers.forEach(function(m) {
+                    var score = getScoreForYear(m.country.iso3, state.selectedYear) ?? m.country[scoreKey];
+                    var rank = getRecomputedRank(m.country.iso3, state.selectedYear);
+                    var cov = m.country[coverageKey] || 'partial';
+                    html += '<tr><td><span class="block-country-link" data-iso3="' + m.country.iso3 + '">' + esc(m.country.name) + '</span></td>' +
+                        '<td><span class="block-badge ' + m.blockClass + '">' + esc(m.block) + '</span></td>' +
+                        '<td><span class="block-score-badge" style="background:' + getColor(score) + '20;color:' + getColor(score) + ';">' + fmtNum(score) + '</span></td>' +
+                        '<td>#' + (rank || '—') + '</td>' +
+                        '<td><span class="block-cov-badge ' + cov + '">' + cov + '</span></td></tr>';
+                });
+                html += '</tbody></table></div></div>';
+            } else if (statsA) {
+                html += '<div class="block-chart-wrap"><h4>Score Distribution</h4><div id="block-dist-container" style="height:160px;"></div></div>';
+                html += '<div class="block-chart-wrap"><h4>Pillar Breakdown</h4><div id="block-pillar-container" style="height:240px;"></div></div>';
+                html += '<div class="block-chart-wrap"><h4>Member Countries</h4><div class="block-member-table-wrap"><table class="block-member-table"><thead><tr><th>Country</th><th>Score</th><th>Rank</th><th>Coverage</th></tr></thead><tbody>';
+                var sortedMembers = statsA.members.slice().sort(function(a, b) {
+                    var scoreA = getScoreForYear(a.iso3, state.selectedYear) ?? a[scoreKey];
+                    var scoreB = getScoreForYear(b.iso3, state.selectedYear) ?? b[scoreKey];
+                    return (scoreB || 0) - (scoreA || 0);
+                });
+                sortedMembers.forEach(function(c) {
+                    var score = getScoreForYear(c.iso3, state.selectedYear) ?? c[scoreKey];
+                    var rank = getRecomputedRank(c.iso3, state.selectedYear);
+                    var cov = c[coverageKey] || 'partial';
+                    html += '<tr><td><span class="block-country-link" data-iso3="' + c.iso3 + '">' + esc(c.name) + '</span></td>' +
+                        '<td><span class="block-score-badge" style="background:' + getColor(score) + '20;color:' + getColor(score) + ';">' + fmtNum(score) + '</span></td>' +
+                        '<td>#' + (rank || '—') + '</td>' +
+                        '<td><span class="block-cov-badge ' + cov + '">' + cov + '</span></td></tr>';
+                });
+                html += '</tbody></table></div></div>';
+            }
+            html += '</div>';
+            return html;
+        }
+
+        function drawBlockRadar(statsA, statsB) {
+            var container = document.getElementById('block-radar-container');
+            if (!container) return;
+            container.innerHTML = '';
+            if (!state.d3Ready || typeof d3 === 'undefined') return;
+            if (!statsA) {
+                container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--biw-slate-dim);">No data to display.</div>';
+                return;
+            }
+            var width = container.offsetWidth || 500;
+            var height = container.offsetHeight || 260;
+            var radius = Math.min(width, height) * 0.32;
+            var centerX = width / 2;
+            var centerY = height / 2 + 10;
+
+            var svg = d3.select(container).append('svg')
+                .attr('width', width)
+                .attr('height', height)
+                .append('g')
+                .attr('transform', 'translate(' + centerX + ',' + centerY + ')');
+
+            var levels = 5;
+            var maxScore = 100;
+            var angleSlice = (Math.PI * 2) / pillars.length;
+
+            for (var level = 1; level <= levels; level++) {
+                var r = (radius / levels) * level;
+                svg.append('circle')
+                    .attr('r', r)
+                    .attr('fill', 'none')
+                    .attr('stroke', 'var(--biw-border)')
+                    .attr('stroke-width', 1)
+                    .attr('stroke-dasharray', '2,4')
+                    .attr('opacity', 1);
+            }
+
+            pillars.forEach(function(p, i) {
+                var angle = i * angleSlice - Math.PI / 2;
+                var x = radius * Math.cos(angle);
+                var y = radius * Math.sin(angle);
+                svg.append('line')
+                    .attr('x1', 0).attr('y1', 0).attr('x2', x).attr('y2', y)
+                    .attr('stroke', 'var(--biw-border)')
+                    .attr('stroke-width', 0.5);
+                var labelX = (radius + 18) * Math.cos(angle);
+                var labelY = (radius + 18) * Math.sin(angle);
+                svg.append('text')
+                    .attr('x', labelX).attr('y', labelY)
+                    .attr('text-anchor', 'middle')
+                    .attr('dominant-baseline', 'middle')
+                    .style('font-size', '10px')
+                    .style('fill', 'var(--biw-slate)')
+                    .text(p.label);
+            });
+
+            function drawPoly(stats, color, labelOffsetY) {
+                var points = pillars.map(function(p, i) {
+                    var val = stats.pillarAverages[p.key] || 0;
+                    var r = (val / maxScore) * radius;
+                    var angle = i * angleSlice - Math.PI / 2;
+                    return [r * Math.cos(angle), r * Math.sin(angle)];
+                });
+                var line = d3.line().x(function(d) { return d[0]; }).y(function(d) { return d[1]; }).curve(d3.curveLinearClosed);
+                svg.append('path').datum(points).attr('d', line)
+                    .attr('fill', color).attr('fill-opacity', 0.12)
+                    .attr('stroke', color).attr('stroke-width', 2.5);
+                points.forEach(function(p) {
+                    svg.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', 4).attr('fill', color);
+                });
+                if (labelOffsetY) {
+                    svg.append('text').attr('x', radius + 24).attr('y', labelOffsetY)
+                        .style('font-size', '11px').style('fill', color).style('font-weight', 'bold')
+                        .text(stats.name);
+                }
+            }
+
+            drawPoly(statsA, 'var(--biw-champagne)', -radius - 8);
+            if (statsB) {
+                drawPoly(statsB, 'var(--biw-extreme)', -radius - 24);
+            }
+        }
+
+        function drawBlockPillarComparison(statsA, statsB, containerId) {
+            var container = document.getElementById(containerId);
+            if (!container || !statsA) return;
+            container.innerHTML = '';
+            if (!state.d3Ready || typeof d3 === 'undefined') return;
+
+            var width = container.offsetWidth || 500;
+            var height = container.offsetHeight || 220;
+            var margin = { top: 20, right: 20, bottom: 50, left: 40 };
+            var innerWidth = width - margin.left - margin.right;
+            var innerHeight = height - margin.top - margin.bottom;
+
+            var svg = d3.select(container).append('svg')
+                .attr('width', width).attr('height', height)
+                .append('g')
+                .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+            var data = pillars.map(function(p) {
+                return { pillar: p.label, a: statsA.pillarAverages[p.key] || 0, b: statsB ? (statsB.pillarAverages[p.key] || 0) : 0 };
+            });
+
+            var x0 = d3.scaleBand().domain(data.map(function(d) { return d.pillar; })).rangeRound([0, innerWidth]).paddingInner(0.2);
+            var x1 = d3.scaleBand().domain(['a', 'b']).rangeRound([0, x0.bandwidth()]).padding(0.08);
+            var y = d3.scaleLinear().domain([0, 100]).rangeRound([innerHeight, 0]);
+
+            var colorA = 'var(--biw-champagne)';
+            var colorB = 'var(--biw-extreme)';
+
+            svg.append('g').attr('class', 'grid')
+                .call(d3.axisLeft(y).ticks(5).tickSize(-innerWidth).tickFormat(''))
+                .style('stroke', 'var(--biw-border)').style('stroke-dasharray', '2,2').style('opacity', 0.3);
+
+            var pillarGroups = svg.selectAll('.pillar-group').data(data).enter().append('g')
+                .attr('class', 'pillar-group')
+                .attr('transform', function(d) { return 'translate(' + x0(d.pillar) + ',0)'; });
+
+            pillarGroups.append('rect')
+                .attr('x', x1('a')).attr('y', function(d) { return y(d.a); })
+                .attr('width', x1.bandwidth()).attr('height', function(d) { return innerHeight - y(d.a); })
+                .attr('fill', colorA).attr('rx', 3);
+
+            pillarGroups.append('text')
+                .attr('x', x1('a') + x1.bandwidth() / 2).attr('y', function(d) { return y(d.a) - 5; })
+                .attr('text-anchor', 'middle').style('font-size', '9px').style('fill', 'var(--biw-text)').text(function(d) { return fmtNum(d.a); });
+
+            if (statsB) {
+                pillarGroups.append('rect')
+                    .attr('x', x1('b')).attr('y', function(d) { return y(d.b); })
+                    .attr('width', x1.bandwidth()).attr('height', function(d) { return innerHeight - y(d.b); })
+                    .attr('fill', colorB).attr('rx', 3);
+                pillarGroups.append('text')
+                    .attr('x', x1('b') + x1.bandwidth() / 2).attr('y', function(d) { return y(d.b) - 5; })
+                    .attr('text-anchor', 'middle').style('font-size', '9px').style('fill', 'var(--biw-text)').text(function(d) { return fmtNum(d.b); });
+            }
+
+            svg.append('g').attr('transform', 'translate(0,' + innerHeight + ')')
+                .call(d3.axisBottom(x0)).style('font-size', '10px').style('fill', 'var(--biw-slate)')
+                .selectAll('text').style('text-anchor', 'middle');
+
+            svg.append('g').call(d3.axisLeft(y).ticks(5)).style('font-size', '9px').style('fill', 'var(--biw-slate-dim)');
+        }
+
+        function drawBlockDistribution(statsA, statsB) {
+            var container = document.getElementById('block-dist-container');
+            if (!container || !statsA) return;
+            container.innerHTML = '';
+            if (!state.d3Ready || typeof d3 === 'undefined') return;
+
+            var width = container.offsetWidth || 500;
+            var height = container.offsetHeight || 160;
+            var margin = { top: 20, right: 30, bottom: 30, left: 40 };
+            var innerWidth = width - margin.left - margin.right;
+            var innerHeight = height - margin.top - margin.bottom;
+
+            var svg = d3.select(container).append('svg')
+                .attr('width', width).attr('height', height)
+                .append('g')
+                .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+            var binSize = 5;
+            var numBins = 20;
+            function makeBins(scores) {
+                var bins = Array.from({ length: numBins }, function() { return 0; });
+                scores.forEach(function(s) {
+                    var idx = Math.min(numBins - 1, Math.floor(s / binSize));
+                    bins[idx]++;
+                });
+                return bins;
+            }
+            var binsA = makeBins(statsA.scores);
+            var binsB = statsB ? makeBins(statsB.scores) : null;
+            var maxCount = Math.max.apply(null, binsA.concat(binsB || [])) || 1;
+
+            var x = d3.scaleLinear().domain([0, 100]).range([0, innerWidth]);
+            var y = d3.scaleLinear().domain([0, maxCount]).range([innerHeight, 0]);
+
+            svg.append('g').attr('class', 'grid')
+                .call(d3.axisLeft(y).ticks(3).tickSize(-innerWidth).tickFormat(''))
+                .style('stroke', 'var(--biw-border)').style('stroke-dasharray', '2,2').style('opacity', 0.3);
+
+            var barWidth = innerWidth / numBins;
+            svg.selectAll('.bar-a').data(binsA).enter().append('rect').attr('class', 'bar-a')
+                .attr('x', function(d, i) { return i * barWidth; })
+                .attr('y', function(d) { return y(d); })
+                .attr('width', barWidth - 1).attr('height', function(d) { return innerHeight - y(d); })
+                .attr('fill', 'var(--biw-champagne)').attr('opacity', 0.7);
+
+            if (binsB) {
+                svg.selectAll('.bar-b').data(binsB).enter().append('rect').attr('class', 'bar-b')
+                    .attr('x', function(d, i) { return i * barWidth + 1; })
+                    .attr('y', function(d) { return y(d); })
+                    .attr('width', barWidth - 3).attr('height', function(d) { return innerHeight - y(d); })
+                    .attr('fill', 'var(--biw-extreme)').attr('opacity', 0.55);
+            }
+
+            bandThresholds.forEach(function(t) {
+                svg.append('line').attr('x1', x(t)).attr('x2', x(t)).attr('y1', 0).attr('y2', innerHeight)
+                    .attr('stroke', 'var(--biw-border)').attr('stroke-dasharray', '3,3').attr('opacity', 0.5);
+            });
+
+            svg.append('g').attr('transform', 'translate(0,' + innerHeight + ')')
+                .call(d3.axisBottom(x).ticks(5)).style('font-size', '9px').style('fill', 'var(--biw-slate-dim)');
+            svg.append('g').call(d3.axisLeft(y).ticks(3)).style('font-size', '9px').style('fill', 'var(--biw-slate-dim)');
+
+            var legend = svg.append('g').attr('transform', 'translate(' + (innerWidth - 90) + ',0)');
+            legend.append('rect').attr('width', 10).attr('height', 10).attr('fill', 'var(--biw-champagne)');
+            legend.append('text').attr('x', 14).attr('y', 9).style('font-size', '10px').style('fill', 'var(--biw-text)').text(statsA.name);
+            if (statsB) {
+                legend.append('rect').attr('y', 14).attr('width', 10).attr('height', 10).attr('fill', 'var(--biw-extreme)');
+                legend.append('text').attr('x', 14).attr('y', 23).style('font-size', '10px').style('fill', 'var(--biw-text)').text(statsB.name);
+            }
+        }
+
+        function drawBlockBarChart(statsA, statsB) {
+            var container = document.getElementById('block-bar-container');
+            if (!container || !statsA) return;
+            container.innerHTML = '';
+            if (!state.d3Ready || typeof d3 === 'undefined') return;
+            var width = container.offsetWidth || 300;
+            var height = container.offsetHeight || 150;
+            var margin = { top: 20, right: 20, bottom: 20, left: 40 };
+            var innerWidth = width - margin.left - margin.right;
+            var innerHeight = height - margin.top - margin.bottom;
+            var svg = d3.select(container).append('svg').attr('width', width).attr('height', height)
+                .append('g').attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+            var data = [];
+            if (statsA) data.push({ label: statsA.name, value: statsA.avg });
+            if (statsB) data.push({ label: statsB.name, value: statsB.avg });
+            var xScale = d3.scaleBand().domain(data.map(function(d) { return d.label; })).range([0, innerWidth]).padding(0.3);
+            var yScale = d3.scaleLinear().domain([0, Math.max(100, d3.max(data, function(d) { return d.value; }) * 1.2)]).range([innerHeight, 0]);
+            var colors = ['var(--biw-champagne)', 'var(--biw-extreme)'];
+            svg.selectAll('rect').data(data).enter().append('rect')
+                .attr('x', function(d) { return xScale(d.label); })
+                .attr('y', function(d) { return yScale(d.value); })
+                .attr('width', xScale.bandwidth())
+                .attr('height', function(d) { return innerHeight - yScale(d.value); })
+                .attr('fill', function(d, i) { return colors[i] || 'var(--biw-champagne)'; });
+            svg.selectAll('text.bar-label').data(data).enter().append('text').attr('class', 'bar-label')
+                .attr('x', function(d) { return xScale(d.label) + xScale.bandwidth() / 2; })
+                .attr('y', function(d) { return yScale(d.value) - 5; })
+                .attr('text-anchor', 'middle').style('font-size', '10px').style('fill', 'var(--biw-text)').text(function(d) { return fmtNum(d.value); });
+            svg.append('g').attr('transform', 'translate(0,' + innerHeight + ')').call(d3.axisBottom(xScale));
+        }
+
+        function exportBlockCSV(statsA, statsB) {
+            if (!statsA && !statsB) return;
+            var rows = [];
+            var headers = ['Block', 'Countries', 'Average', 'Min', 'Max', 'StdDev'];
+            pillars.forEach(function(p) { headers.push(p.label + ' (avg)'); });
+            rows.push(headers);
+            if (statsA) {
+                var rowA = [statsA.name, statsA.count, fmtNum(statsA.avg), fmtNum(statsA.min), fmtNum(statsA.max), fmtNum(statsA.stddev)];
+                pillars.forEach(function(p) { rowA.push(fmtNum(statsA.pillarAverages[p.key] || 0)); });
+                rows.push(rowA);
+            }
+            if (statsB) {
+                var rowB = [statsB.name, statsB.count, fmtNum(statsB.avg), fmtNum(statsB.min), fmtNum(statsB.max), fmtNum(statsB.stddev)];
+                pillars.forEach(function(p) { rowB.push(fmtNum(statsB.pillarAverages[p.key] || 0)); });
+                rows.push(rowB);
+            }
+            var csv = rows.map(function(row) { return row.join(','); }).join('\n');
+            var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = slug + '_block_comparison.csv';
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+
+        // ─── Block Compare Entry Points ────────────────────────────
+
+        document.addEventListener('click', function(e) {
+            var card = e.target.closest('#biw-block-card');
+            if (card && !e.target.closest('.block-card-btn') && !e.target.closest('.block-card-view-all')) {
+                openBlockSelector(null, null);
+            }
+        });
+
+        document.addEventListener('change', function(e) {
+            var dropdown = e.target.closest('#biw-block-dropdown');
+            if (dropdown) {
+                var val = dropdown.value;
+                if (val === '__all__') {
+                    openBlockSelector(null, null);
+                } else if (val) {
+                    openBlockSelector(val, null);
+                }
+                dropdown.value = '';
+            }
+        });
+
+        // ─── Header Methodology Link ─────────────────────────────────
+        document.getElementById('biw-header-method').addEventListener('click', function(e) {
+            e.preventDefault();
+            showMethodologyPopup();
+        });
+
         // ─── Events ──────────────────────────────────────────────────
         function bindControls() {
+            // ─── Fix methodology popup close ──────────────────────────
+            document.getElementById('biw-method-close').addEventListener('click', closeMethodologyPopup);
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && document.getElementById('biw-method-modal').classList.contains('visible')) {
+                    closeMethodologyPopup();
+                }
+            });
+
+            // ─── Single delegated listener to hide all tooltips ──────
+            root.addEventListener('click', function(e) {
+                var target = e.target;
+                var isTooltip = target.closest('.biw-custom-tooltip') || target.closest('.biw-map-tooltip');
+                if (!isTooltip) {
+                    root.querySelectorAll('.biw-custom-tooltip.visible, .biw-map-tooltip.visible').forEach(function(t) {
+                        t.classList.remove('visible', 'pinned');
+                    });
+                }
+            });
+
             var darkBtn = document.getElementById('biw-dark-toggle');
             if (darkBtn) {
                 try {
@@ -2135,9 +3038,8 @@
                 }
             });
 
-            document.getElementById('biw-btn-methodology').addEventListener('click', showMethodologyPopup);
-            document.getElementById('biw-method-close').addEventListener('click', closeMethodologyPopup);
-            document.getElementById('biw-method-overlay').addEventListener('click', closeMethodologyPopup);
+            var exportBtn = document.getElementById('biw-btn-export');
+            if (exportBtn) exportBtn.addEventListener('click', exportCSV);
 
             var search = q('.biw-search');
             if (search) search.addEventListener('input', render);
@@ -2166,6 +3068,7 @@
                         this.classList.remove('active');
                     }
                     render();
+                    updateHash();
                 });
             }
 
@@ -2216,6 +3119,7 @@
                     state.mapLayer = this.getAttribute('data-layer');
                     updateMapColors(state.mapLayer, state.selectedYear);
                     updateMapMarkers();
+                    updateHash();
                 });
             });
 
@@ -2259,7 +3163,19 @@
                     var iso3 = moverItem.getAttribute('data-iso3');
                     if (iso3) selectCountry(iso3);
                 }
+                var blockLink = target.closest('.block-country-link');
+                if (blockLink) {
+                    var iso3 = blockLink.dataset.iso3;
+                    if (iso3) selectCountry(iso3);
+                }
             });
+
+            window.addEventListener('hashchange', function() {
+                decodeHash();
+                render();
+            });
+
+            decodeHash();
         }
 
         function renderDashboard() {
