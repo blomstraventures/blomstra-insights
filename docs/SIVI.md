@@ -1,4 +1,4 @@
-# **SIVI.md – Sovereign Infrastructure Vulnerability Index**
+# SIVI.md – Sovereign Infrastructure Vulnerability Index
 
 Document version: 1.0.0\
 Status: CANONICAL\
@@ -10,16 +10,16 @@ Source files: `sivi-backend.php` (SIVI\_VERSION 3.3.0), `sivi-shortcode.php`, `b
 ***
 
 
-## **Document Control**
+## **Document Control** 
 
-|                         |                                                                                                                                             |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Field                   | Value                                                                                                                                       |
-| Document                | `SIVI.md` v1.0.0                                                                                                                            |
-| Verified against commit | (to be filled)                                                                                                                              |
-| Source files            | `src/indices/sivi/sivi-backend.php` (SIVI\_VERSION 3.3.0), `src/indices/sivi/sivi-shortcode.php`, `src/shared/blomstra-index-utilities.php` |
-| Method                  | Code-first reconstruction — every statement traces to a specific function or constant in the files above                                    |
-| Status                  | Complete for current code. Items in §16 are open research questions, not implementation gaps                                                |
+|                         |                                                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Field                   | Value                                                                                                                                                                                                                                                  |
+| Document                | `SIVI.md` v1.0.0                                                                                                                                                                                                                                       |
+| Verified against commit | (to be filled) - Phase 6b                                                                                                                                                                                                                                        |
+| Source files            | `src/indices/sivi/sivi-backend.php` (SIVI\_VERSION 3.3.0), `src/indices/sivi/sivi-shortcode.php`, `src/shared/blomstra-index-utilities.php`                                                                                                            |
+| Method                  | Code-first reconstruction (Stage 2) — every statement below traces to a specific function or constant in the files above. No prior documentation was consulted while drafting; cross-checked against `BLOMSTRA-SPECIFICATION.md` Section 10 afterward. |
+| Status                  | Complete for current code. Items in §17 are open research questions, not implementation gaps.                                                                                                                                                          |
 
 Statements below are \[N] normative (a rule; violating it in future code is a bug) or \[D] descriptive (today's implementation; may change without violating a rule).
 
@@ -62,17 +62,16 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 
 17. Open Questions
 
+18. Corrections to Prior Documentation
+
 ***
 
 
 ## **1. Overview** 
 
-\[D] SIVI (`sivi_*` functions, `SIVI_OPTION_KEY = 'sivi_composite_index'`) is a three-pillar composite score per country. SIVI\_VERSION = '3.3.0', standard version BMS-1.1.0. Higher score = higher vulnerability; rank #1 is the _most_ vulnerable country (stated verbatim in the shortcode's methodology text).
+\[D] SIVI (`sivi_*` functions, `SIVI_OPTION_KEY = 'sivi_composite_index'`) is a three-pillar composite score per country. `SIVI_VERSION = '3.3.0'`, standard version `BMS-1.1.0`. Higher score = higher vulnerability; rank #1 is the _most_ vulnerable country (stated verbatim in the shortcode's methodology text).
 
 \[D] Purpose (from the shortcode's public methodology string): "A country-level assessment of exposure, dependency, and systemic weakness," combining Energy Dependency, Supplier Concentration, and Maritime Exposure.
-
-
-### **1.1 The Three Pillars**
 
 |          |          |                                                                                    |
 | -------- | -------- | ---------------------------------------------------------------------------------- |
@@ -90,7 +89,7 @@ File location: `src/indices/sivi/sivi-backend.php`
 
 ## **2. Conceptual Framework** 
 
-### **2.1 The Vulnerability Construct**
+### **2.1 The Vulnerability Construct** 
 
 SIVI measures exposure to disruption across infrastructure systems that are essential for economic and social functioning:
 
@@ -135,7 +134,7 @@ SIVI uses percentile ranks rather than absolute thresholds because:
 ***
 
 
-## **3. Pillar Specifications**
+## **3. Pillar Specifications** 
 
 ### **3.1 Pillar Definitions** 
 
@@ -159,12 +158,13 @@ SIVI uses percentile ranks rather than absolute thresholds because:
 
 
 ### **3.3 Energy Pillar** 
+
 Weight: 33.3333%\
 Source: U.S. Energy Information Administration (EIA)\
 Indicator: Consumption‑weighted energy dependency
 
 
-#### Data Source 
+#### Data Source
 
 API Endpoint: `https://api.eia.gov/v2/international/data/
 `Product IDs: 4411 (Coal), 4413 (Natural Gas), 4415 (Petroleum), 4417 (Nuclear), 4418 (Renewables)\
@@ -244,7 +244,7 @@ Lookback: If data for the target year is unavailable, the system looks back up t
 ***
 
 
-### **3.5 Maritime Pillar** 
+### **3.5 Maritime Pillar**
 
 Weight: 33.3334%\
 Source: World Bank WDI (World Development Indicators)\
@@ -271,6 +271,7 @@ This ensures higher vulnerability scores correspond to lower connectivity.
 
 
 #### Structural Zero (Landlocked Countries) 
+
 \[D] Landlocked countries (`sivi_is_landlocked()` → delegates to `blomstra_is_landlocked()`) get an explicit structural zero (`value: 0.0`, source `"Structural zero — landlocked"`) rather than being treated as missing data. This is not treated as missing — the zero is real and meaningful. Landlocked countries are scored in the Full Index, not the Partial Index.
 
 \[D] Countries with neither an LSCI value nor landlocked status get `value: null`.
@@ -286,6 +287,7 @@ This ensures higher vulnerability scores correspond to lower connectivity.
 ## **4. Data Acquisition** 
 
 ### **4.1 Pillar Refresh Functions** 
+
 Each pillar has its own refresh function that reads from the L1 reference data cache:
 
 |          |                                  |                                    |
@@ -417,7 +419,7 @@ Each pillar has a meta option:
 where `n` is the count of countries with numeric data for that pillar (not the global country count). Tied values receive the average of their tied rank positions.
 
 
-### **5.2 Winsorization Settings**
+### **5.2 Winsorization Settings** 
 
 \[D] Per-pillar winsorization percentages, applied only when `n ≥ 10`:
 
@@ -548,6 +550,7 @@ Output (Partial):
 
 
 ## **8. Partial Index Logic** 
+
 ### **8.1 When Partial Index Is Applied** 
 
 \[N] A country is in the partial index when:
@@ -583,6 +586,7 @@ Returns: Hypothetical composites at each injection point.
 
 
 ### **8.3 What Partial Index Means** 
+
 - Best estimate: Rank if missing pillar were at global median (50th percentile)
 
 - 80% plausible range: Rank if missing pillar were at 10th or 90th percentile
@@ -600,6 +604,7 @@ Display: Countries with partial coverage show `#38-#52*` instead of a single def
 
 
 ### **9.1 Per-Pillar DQI** 
+
 \[D] `blomstra_compute_dqi($data_year, $current_year, $max_lag)`:
 
     text
@@ -618,7 +623,7 @@ Display: Countries with partial coverage show `#38-#52*` instead of a single def
 | Maritime | 5 years (`SIVI_MAX_LAG_MARITIME`) |
 
 
-### **9.2 Composite DQI**
+### **9.2 Composite DQI** 
 
 \[D] `blomstra_compute_composite_dqi()`: weighted average of the pillars that have a non-null DQI, weighted by the same composite pillar weights.
 
@@ -751,7 +756,7 @@ Purpose:
 - Research transparency
 
 
-### **11.2 Bootstrap Confidence Intervals** 
+### **11.2 Bootstrap Confidence Intervals**
 
 \[D] Applied only to full-coverage countries via `blomstra_bootstrap_ci()`:
 
@@ -767,6 +772,7 @@ Purpose:
 
 
 ### **11.3 Preset Weight Schemes** 
+
 |                |        |       |          |
 | -------------- | ------ | ----- | -------- |
 | Preset         | Energy | HHI   | Maritime |
@@ -848,7 +854,7 @@ Spearman Correlation Interpretation:
         └─ Update cron status
 
 
-### **12.3 Daily Cron** 
+### **12.3 Daily Cron**
 
 \[D] Daily cron at 03:00 UTC (`SIVI_AUTO_REFRESH_HOOK`, scheduled on `init` if not already scheduled) runs `sivi_auto_refresh_callback()`, which refreshes all three pillars from their L1 caches, aborts with a logged error if any pillar refresh errors, and only then rebuilds the composite (context `'cron'`).
 
@@ -872,7 +878,7 @@ Spearman Correlation Interpretation:
 ***
 
 
-## **13. Build Lifecycle**
+## **13. Build Lifecycle** 
 
 ### **13.1 The Generic Builder Pattern** 
 
@@ -883,7 +889,7 @@ Spearman Correlation Interpretation:
 - \[N] Canonical snapshot row (confirmed): both the live build (inside `blomstra_build_index_composite()`) and the historical backfill (`sivi_build_historical_snapshot()`) build their snapshot row via the same shared `blomstra_build_flat_snapshot_row()` helper — the v3.3.0 fix that eliminated a shape divergence between live and backfilled history rows.
 
 
-### **13.2 Build Steps** 
+### **13.2 Build Steps**
 
 \[D] Build steps in order:
 
@@ -918,7 +924,7 @@ Spearman Correlation Interpretation:
 15. Snapshot save via `blomstra_index_snapshot_save()`
 
 
-### **13.3 Build-Failure Safety Guard (Auto-Rollback)** 
+### **13.3 Build-Failure Safety Guard (Auto-Rollback)**
 
 \[N] Before promoting a new build over the existing one, the generic builder compares country counts:
 
@@ -1046,7 +1052,6 @@ Rank Display Object:
 
 
 ## **15. Admin UI** 
-
 ### **15.1 Navigation** 
 
     text
@@ -1088,11 +1093,8 @@ Menu position: Submenu under `blomstra-insights-tools`
 | Backfill All Years     | Schedules historical backfill for range                   |
 | Retry                  | Retries a specific backfill year                          |
 
-***
-
 
 ## **16. Versioning** 
-
 ### **16.1 Methodology Version** 
 
 \[D] SIVI methodology version is defined by:
@@ -1120,6 +1122,7 @@ Note: This should be separate from the methodology version in the future. A soft
 
 
 ### **16.3 Standard Version** 
+
 \[D] SIVI declares conformance to the Blomstra Methodology Standard:
 
     php
@@ -1147,7 +1150,22 @@ These belong in a `research/` methodology track for explicit resolution, not sil
 ***
 
 
-## **End of SIVI Specification** {#h.791ybxouehu6}
+## **18. Corrections to Prior Documentation** 
+
+\[D] The following corrections are made from prior documentation:
+
+|                                                    |                                                               |                                |
+| -------------------------------------------------- | ------------------------------------------------------------- | ------------------------------ |
+| Prior Claim                                        | Correction                                                    | Source                         |
+| SIVI version was v2.0.0                            | SIVI is currently v3.3.0                                      | `SIVI_VERSION` constant        |
+| Methodology standard was BMS-1.0.0                 | Standard is BMS-1.1.0                                         | `standard_version` in output   |
+| SIVI computed its own statistics                   | SIVI delegates entirely to `blomstra_build_index_composite()` | `sivi_build_composite()` code  |
+| Historical and live snapshots had different shapes | Both use `blomstra_build_flat_snapshot_row()` (v3.3.0 fix)    | v3.3.0 changelog               |
+| HHI computed inside SIVI                           | HHI is read from L1 cache `blomstra_get_comtrade_hhi_data()`  | `sivi_merge_hhi_into_pillar()` |
+| SERI was documented as live                        | SERI is future work; this doc covers SIVI only                | Codebase verification          |
+
+
+## **End of SIVI Specification** 
 
 Status: CANONICAL\
-Next steps: Production of `OPERATIONS.md`, `FRONTEND.md`, and remaining supporting documents.
+Next steps: Production of `OPERATIONS.md`, `FRONTEND.md`, `DATA.md`, `API.md`, `DEVELOPMENT.md`, `ARCHITECTURE.md` (remaining merged documents).
