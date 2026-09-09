@@ -1,4 +1,4 @@
-# DATA.md – Blomstra Insights Reference Data Layer (Merged Final)
+# DATA.md – Blomstra Insights Reference Data Layer
 
 Document version: 1.0.0\
 Status: CANONICAL\
