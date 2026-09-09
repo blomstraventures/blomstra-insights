@@ -1,4 +1,4 @@
-# **DATABASE.md – Blomstra Insights Database Schema** {#h.7omj1kyw4af6}
+# **DATABASE.md – Blomstra Insights Database Schema** 
 
 Document version: 1.0.0\
 Status: CANONICAL\
@@ -10,7 +10,7 @@ Source files: `global-reference-data.php`, `blomstra-index-alerts.php`, `blomstr
 ***
 
 
-## **Document Control** {#h.zfvq8t5imfaa}
+## **Document Control** 
 
 |                         |                                                                                                                                                            |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -26,7 +26,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **Table of Contents** {#h.grnrq2n5eio4}
+## **Table of Contents** 
 
 1. Overview
 
@@ -55,7 +55,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **1. Overview** {#h.wnlxsb9ughp2}
+## **1. Overview**
 
 \[D] The Blomstra Insights platform uses a hybrid storage approach:
 
@@ -71,9 +71,9 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **2. WordPress Core Tables Used** {#h.3jqvtplep7ox}
+## **2. WordPress Core Tables Used** 
 
-### **2.1** `wp_options` **– Persistent Key-Value Storage** {#h.xxmn4wo1movn}
+### **2.1** `wp_options` **– Persistent Key-Value Storage** 
 
 \[D] Used for data that must persist across requests and survive cache clears.
 
@@ -88,7 +88,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 \[N] All `blomstra_*` and `{slug}_*` options should have `$autoload = false` unless explicitly justified (small config options may autoload for performance).
 
 
-### **2.2** `wp_transients` **– Cache with Expiration** {#h.qiah9fjzlrl}
+### **2.2** `wp_transients` **– Cache with Expiration** 
 
 \[D] Used for data that can be regenerated and should expire after a set time.
 
@@ -105,12 +105,12 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **3. Custom Table:** `wp_blomstra_index_history` {#h.267hic5rwrx7}
+## **3. Custom Table:** `wp_blomstra_index_history` 
 
 \[D] Stores historical snapshots of index data for trend visualization and rank comparison.
 
 
-### **3.1 Schema** {#h.66estunlq347}
+### **3.1 Schema** 
 
     sql
     CREATE TABLE wp_blomstra_index_history (
@@ -129,7 +129,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
     );
 
 
-### **3.2 Field Descriptions** {#h.oes3ufcw8o6}
+### **3.2 Field Descriptions** 
 
 |                   |                   |                                                                   |
 | ----------------- | ----------------- | ----------------------------------------------------------------- |
@@ -145,7 +145,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `recorded_at`     | DATETIME          | When the row was inserted/updated                                 |
 
 
-### **3.3 Keys & Indexes** {#h.u9kf1t46ko2o}
+### **3.3 Keys & Indexes** 
 
 |                       |         |                                       |                                       |
 | --------------------- | ------- | ------------------------------------- | ------------------------------------- |
@@ -155,7 +155,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `idx_slug_period`     | Index   | `(index_slug, snapshot_period)`       | Fast history queries per index/period |
 
 
-### **3.4 Write Operations** {#h.8bixsxkl0874}
+### **3.4 Write Operations** 
 
 \[D] `blomstra_index_snapshot_save($index_slug, $countries, $custom_period = null)`:
 
@@ -173,7 +173,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 \[N] Uses `INSERT ... ON DUPLICATE KEY UPDATE` — re-saving the same index/country/period overwrites rather than duplicating.
 
 
-### **3.5 Read Operations** {#h.rqddiihjegnj}
+### **3.5 Read Operations** 
 
 \[D] `blomstra_index_snapshot_get_history($index_slug, $iso3 = null)`:
 
@@ -191,7 +191,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
     ORDER BY snapshot_period ASC;
 
 
-### **3.6** `pillars_json` **Structure** {#h.2oo1cvcbstgd}
+### **3.6** `pillars_json` **Structure** 
 
 \[D] Contains all data not stored in first-class columns:
 
@@ -210,19 +210,18 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 \[N] The exact shape of `pillars_json` is index-specific and determined by `blomstra_build_flat_snapshot_row()`.
 
 
-### **3.7 Lifecycle** {#h.gzqdhw73j0mq}
+### **3.7 Lifecycle** 
 
 \[D] Rows are inserted on every successful composite build (live or historical). The `recorded_at` timestamp is updated on every save (including overwrites).
 
 ***
 
 
-## **4. Custom Table:** `wp_blomstra_alerts` {#h.l1dxp09goycp}
-
+## **4. Custom Table:** `wp_blomstra_alerts` 
 \[D] Stores alert records for change detection between builds.
 
 
-### **4.1 Schema** {#h.vw9ue7yzh5ss}
+### **4.1 Schema** 
 
     sql
     CREATE TABLE wp_blomstra_alerts (
@@ -249,7 +248,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
     );
 
 
-### **4.2 Field Descriptions** {#h.9l64s2mif6du}
+### **4.2 Field Descriptions** 
 
 |                    |                 |                                                                                                                  |
 | ------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -272,7 +271,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sent_at`          | DATETIME        | When the alert was delivered (null until delivered)                                                              |
 
 
-### **4.3 Keys & Indexes** {#h.9j9rgn72pwod}
+### **4.3 Keys & Indexes** 
 
 |                    |         |                  |                          |
 | ------------------ | ------- | ---------------- | ------------------------ |
@@ -283,18 +282,17 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `idx_triggered_at` | Index   | `(triggered_at)` | Time-based cleanup       |
 
 
-### **4.4 Write Operations** {#h.rurmtqdfqvcw}
+### **4.4 Write Operations** 
 
 \[D] `blomstra_alert_store_records($index_slug, $changes)` inserts one row per change detected.
 
 
-### **4.5 Read Operations** {#h.7bzyd8ak0nmh}
+### **4.5 Read Operations** 
 
 \[D] `blomstra_alerts_render_page()` queries the table for the admin UI with pagination and filters.
 
 
-### **4.6 Cleanup** {#h.7vu6ff1qg2ql}
-
+### **4.6 Cleanup** 
 \[D] `blomstra_alert_cleanup()`:
 
     sql
@@ -321,12 +319,12 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **5. Custom Table:** `wp_blomstra_historical_data` {#h.p6o7tz1erg25}
+## **5. Custom Table:** `wp_blomstra_historical_data` 
 
 \[D] Caches historical data values for backfill operations. Used exclusively by year-specific fetchers.
 
 
-### **5.1 Schema** {#h.fk9x77fgq8bp}
+### **5.1 Schema** 
 
     sql
     CREATE TABLE wp_blomstra_historical_data (
@@ -346,7 +344,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
     );
 
 
-### **5.2 Field Descriptions** {#h.dzvqmnx6yvar}
+### **5.2 Field Descriptions** 
 
 |              |                   |                                                         |
 | ------------ | ----------------- | ------------------------------------------------------- |
@@ -362,8 +360,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `fetched_at` | DATETIME          | When the row was inserted                               |
 
 
-### **5.3 Keys & Indexes** {#h.9hclyso6cujc}
-
+### **5.3 Keys & Indexes** 
 |                                       |         |                                         |                                     |
 | ------------------------------------- | ------- | --------------------------------------- | ----------------------------------- |
 | Key                                   | Type    | Columns                                 | Purpose                             |
@@ -373,17 +370,17 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `idx_iso3`                            | Index   | `(iso3)`                                | Fast queries by country             |
 
 
-### **5.4 Cache-If-Settled Rule** {#h.cc621dsptt83}
+### **5.4 Cache-If-Settled Rule** 
 
 \[N] A year is only cached if `$year ≤ current_year - 2`. Recent years are never persisted to this cache, since they may still be revised upstream — re-fetched fresh every time until they age past the 2-year settling window.
 
 
-### **5.5 Write Operations** {#h.hwwh9n4b1dv}
+### **5.5 Write Operations** 
 
 \[D] `blomstra_get_historical_data()` inserts rows via `wpdb->insert()` after fetching missing data.
 
 
-### **5.6 Read Operations** {#h.y7fubddoccnq}
+### **5.6 Read Operations** 
 
 \[D] `blomstra_get_historical_data()` queries the table before making API calls:
 
@@ -399,12 +396,12 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **6. Custom Table:** `wp_blomstra_cache_jobs` {#h.text9zb8ulzz}
+## **6. Custom Table:** `wp_blomstra_cache_jobs` 
 
 \[D] Tracks the status of historical cache jobs (one row per source-year pair).
 
 
-### **6.1 Schema** {#h.auuqh13ovnsk}
+### **6.1 Schema** 
 
     sql
     CREATE TABLE wp_blomstra_cache_jobs (
@@ -424,8 +421,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
     );
 
 
-### **6.2 Field Descriptions** {#h.w5k9qzswnpy1}
-
+### **6.2 Field Descriptions** 
 |                    |                   |                                                         |
 | ------------------ | ----------------- | ------------------------------------------------------- |
 | Field              | Type              | Description                                             |
@@ -440,7 +436,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `attempts`         | INT               | Number of retry attempts                                |
 
 
-### **6.3 Keys & Indexes** {#h.cit94x8l27j8}
+### **6.3 Keys & Indexes** 
 
 |                   |         |                  |                     |
 | ----------------- | ------- | ---------------- | ------------------- |
@@ -451,24 +447,24 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `idx_year`        | Index   | `(year)`         | Filter by year      |
 
 
-### **6.4 Lifecycle** {#h.pjr09yh2u6g3}
+### **6.4 Lifecycle** 
 
 \[D] `blomstra_cache_job_update($source, $year, $status, $countries, $error)` updates the job status. Jobs are created by `blomstra_hist_cache_bulk` admin action or individual retry actions.
 
 
-### **6.5 Read Operations** {#h.wpmsqx3zthvy}
+### **6.5 Read Operations** 
 
 \[D] `blomstra_cache_job_get_status($source, $year)` and `blomstra_cache_job_get_all()` for admin UI.
 
 ***
 
 
-## **7. Option Keys Reference** {#h.tz4kgfhenbjv}
+## **7. Option Keys Reference** 
 
 \[D] All persistent options used by the system:
 
 
-### **7.1 Composite & Index Data** {#h.4tttvqq21ras}
+### **7.1 Composite & Index Data** 
 
 |                                      |                                       |                                    |                                   |
 | ------------------------------------ | ------------------------------------- | ---------------------------------- | --------------------------------- |
@@ -478,7 +474,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sivi_composite_index_scenario_{id}` | Scenario builds                       | `sivi_store_scenario()`            | `sivi_list_scenarios()`, admin UI |
 
 
-### **7.2 Pillar Data** {#h.ogtrtd8mnl2r}
+### **7.2 Pillar Data** 
 
 |                      |                          |                                  |                             |
 | -------------------- | ------------------------ | -------------------------------- | --------------------------- |
@@ -491,7 +487,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sivi_maritime_meta` | Maritime pillar metadata | `sivi_refresh_maritime_pillar()` | Admin UI freshness          |
 
 
-### **7.3 L1 Production Data** {#h.gd811h5lcynt}
+### **7.3 L1 Production Data** 
 
 |                                      |                     |                                        |                                |
 | ------------------------------------ | ------------------- | -------------------------------------- | ------------------------------ |
@@ -502,7 +498,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `blomstra_eia_raw_data_staging`      | EIA staging         | `blomstra_process_eia_activity()`      | (Internal)                     |
 
 
-### **7.4 State Machine Pointers** {#h.ocqonrp6veux}
+### **7.4 State Machine Pointers** 
 
 |                                 |                            |                                 |                                        |
 | ------------------------------- | -------------------------- | ------------------------------- | -------------------------------------- |
@@ -514,7 +510,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sivi_backfill_range_start/end` | Backfill range             | Admin UI                        | `blomstra_get_index_backfill_range()`  |
 
 
-### **7.5 Configuration** {#h.r04s9jpi8vrb}
+### **7.5 Configuration** 
 
 |                                 |                          |            |                                 |
 | ------------------------------- | ------------------------ | ---------- | ------------------------------- |
@@ -524,8 +520,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sivi_custom_composite_weights` | Custom composite weights | Admin UI   | `sivi_get_composite_weights()`  |
 
 
-### **7.6 Status & Logs** {#h.w5upoji2772k}
-
+### **7.6 Status & Logs** 
 |                                   |                       |                                        |          |
 | --------------------------------- | --------------------- | -------------------------------------- | -------- |
 | Option Key                        | Purpose               | Written By                             | Read By  |
@@ -538,7 +533,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `blomstra_imf_call_log`           | IMF call log          | `blomstra_log_imf_call()`              | Admin UI |
 
 
-### **7.7 Miscellaneous** {#h.4buwkmq20995}
+### **7.7 Miscellaneous** 
 
 |                                     |                              |                 |                             |
 | ----------------------------------- | ---------------------------- | --------------- | --------------------------- |
@@ -551,12 +546,12 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **8. Transient Keys Reference** {#h.akoaaj4w0xcd}
+## **8. Transient Keys Reference** 
 
 \[D] All transient keys used by the system:
 
 
-### **8.1 Cron Locks** {#h.kptc8pd50veg}
+### **8.1 Cron Locks** 
 
 |                                        |                        |         |                                          |                                    |
 | -------------------------------------- | ---------------------- | ------- | ---------------------------------------- | ---------------------------------- |
@@ -572,7 +567,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sivi_backfill_lock`                   | Backfill lock          | 2 hours | `sivi_backfill_all` admin action         | `sivi_backfill_check_completion()` |
 
 
-### **8.2 Caches** {#h.aakqi3bjpboz}
+### **8.2 Caches** 
 
 |                                    |                                 |          |                                        |                                        |
 | ---------------------------------- | ------------------------------- | -------- | -------------------------------------- | -------------------------------------- |
@@ -588,7 +583,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sivi_maritime_{iso3}`             | SIVI maritime per-country cache | 7 days   | `sivi_refresh_maritime_pillar()`       | (Future use)                           |
 
 
-### **8.3 Cooldowns & Debounce** {#h.4ec319amkei3}
+### **8.3 Cooldowns & Debounce** 
 
 |                                     |                       |       |                                      |                                      |
 | ----------------------------------- | --------------------- | ----- | ------------------------------------ | ------------------------------------ |
@@ -598,7 +593,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `sivi_auto_refresh_queued`          | Auto-refresh debounce | 5 min | `sivi_maybe_auto_refresh_after_rd()` | `sivi_maybe_auto_refresh_after_rd()` |
 
 
-### **8.4 Flags** {#h.8kwzqe9pdxkq}
+### **8.4 Flags** 
 
 |                                |                             |        |                                          |            |
 | ------------------------------ | --------------------------- | ------ | ---------------------------------------- | ---------- |
@@ -609,7 +604,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `blomstra_api_test_result`     | API test result             | 30s    | `blomstra_test_api_credentials`          | Admin UI   |
 
 
-### **8.5 Historical Backfill** {#h.b2hms5gu8v4q}
+### **8.5 Historical Backfill** 
 
 |                                    |                          |        |                                        |                                        |
 | ---------------------------------- | ------------------------ | ------ | -------------------------------------- | -------------------------------------- |
@@ -620,12 +615,12 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **9. Schema Migrations** {#h.mz7i2vchmaad}
+## **9. Schema Migrations** 
 
 \[D] Table creation and migrations are triggered on `admin_init`:
 
 
-### **9.1 Table Creation Hooks** {#h.d67td7xkmano}
+### **9.1 Table Creation Hooks** 
 
 |                               |              |                                            |                               |
 | ----------------------------- | ------------ | ------------------------------------------ | ----------------------------- |
@@ -636,7 +631,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `wp_blomstra_cache_jobs`      | `admin_init` | `blomstra_cache_jobs_maybe_install()`      | (Idempotent)                  |
 
 
-### **9.2 Column Migrations** {#h.6plt0atenqki}
+### **9.2 Column Migrations** 
 
 |                      |                       |              |                                                                           |
 | -------------------- | --------------------- | ------------ | ------------------------------------------------------------------------- |
@@ -645,7 +640,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `wp_blomstra_alerts` | Backfill `log_type`   | `admin_init` | `UPDATE wp_blomstra_alerts SET log_type = 'alert' WHERE log_type IS NULL` |
 
 
-### **9.3 Version Gate Pattern** {#h.b2tclgqhvik5}
+### **9.3 Version Gate Pattern** 
 
 \[N] Table creation functions use a version option to prevent repeated schema checks:
 
@@ -661,9 +656,9 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 ***
 
 
-## **10. Backup & Restore** {#h.y1mrn6ywov2a}
+## **10. Backup & Restore** 
 
-### **10.1 Tables to Back Up** {#h.m2aktbpi6eba}
+### **10.1 Tables to Back Up** 
 
 |                                        |          |           |                                                                   |
 | -------------------------------------- | -------- | --------- | ----------------------------------------------------------------- |
@@ -675,7 +670,7 @@ Statements below are \[N] normative (a rule; violating it in future code is a bu
 | `wp_options` (blomstra\_\* / sivi\_\*) | High     | Weekly    | Composite data, pillar data, credentials, configuration, pointers |
 
 
-### **10.2 Backup Commands** {#h.r4s7t0pbx5jj}
+### **10.2 Backup Commands** 
 
 Options:
 
@@ -695,7 +690,7 @@ Custom Tables:
         > blomstra_tables_backup.sql
 
 
-### **10.3 Restore Commands** {#h.y3t5x8qhwwv8}
+### **10.3 Restore Commands** 
 
     sql
     -- Restore options (be careful with conflicts)
@@ -707,7 +702,7 @@ Custom Tables:
 ***
 
 
-## **11. Open Questions** {#h.ivvetyypf5mz}
+## **11. Open Questions** 
 
 \[D] These are database-related decisions that require explicit resolution:
 
@@ -724,7 +719,7 @@ Custom Tables:
 ***
 
 
-## **12. Corrections to Prior Documentation** {#h.sm9l1xx1q61d}
+## **12. Corrections to Prior Documentation** 
 
 \[D] The following corrections are made from prior documentation:
 
@@ -740,7 +735,7 @@ Custom Tables:
 ***
 
 
-## **End of Database Specification** {#h.g77qmnoekhi9}
+## **End of Database Specification** 
 
 Status: CANONICAL\
 Next steps: All ten documents are now complete. The documentation system is ready for final review and verification.
@@ -748,7 +743,7 @@ Next steps: All ten documents are now complete. The documentation system is read
 ***
 
 
-## **Complete Document List** {#h.kn78fx5cumkp}
+## **Complete Document List** 
 
 |    |                             |                               |           |
 | -- | --------------------------- | ----------------------------- | --------- |
