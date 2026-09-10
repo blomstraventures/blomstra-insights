@@ -1,4 +1,4 @@
-# **OVERVIEW\.md – Blomstra Insights System Overview** {#h.c2xx5x5qdacz}
+# **OVERVIEW\.md – Blomstra Insights System Overview** 
 
 Document version: 1.0.0\
 Status: CANONICAL\
@@ -9,7 +9,7 @@ Effective date: 2026-09-09
 ***
 
 
-## **Document Control** {#h.isho62mr5ys5}
+## **Document Control** 
 
 |                         |                                                                               |
 | ----------------------- | ----------------------------------------------------------------------------- |
@@ -23,7 +23,7 @@ Effective date: 2026-09-09
 ***
 
 
-## **1. What Is Blomstra Insights?** {#h.fmvg12abrt3p}
+## **1. What Is Blomstra Insights?** 
 
 Blomstra Insights is a research and data platform that builds, stores, and serves country-level composite indices from public international data sources. It combines:
 
@@ -51,23 +51,141 @@ Current status: SIVI (Sovereign Infrastructure Vulnerability Index) is live. SER
 ***
 
 
-## **2. The Big Picture** {#h.z41fb2i3uwdg}
+## **2. The Big Picture** 
 
-### **2.1 System Context Diagram** {#h.op2uruvapooa}
+### **2.1 System Context Diagram** 
 
-### **2.2 High-Level Data Flow** {#h.851blqolmm5b}
+```mermaid
+flowchart TB
+    subgraph External[External Data Sources]
+        WB[World Bank WDI/WGI]
+        IMF[IMF WEO]
+        COM[UN Comtrade]
+        EIA[EIA]
+    end
+
+    subgraph Blomstra[Blomstra Insights]
+        direction TB
+
+        subgraph L1[L1 — Reference Data]
+            FETCH[Fetchers & State Machines]
+            CACHE[Caching & Staging]
+            PROMOTE[Staging → Promotion]
+        end
+
+        subgraph L2[L2 — Shared Utilities]
+            MATH[Math & Statistics]
+            BUILDER[Generic Composite Builder]
+            DQI[DQI & Quality Scoring]
+        end
+
+        subgraph L3[L3 — Index Backend]
+            SIVI[SIVI Composite Builder]
+            ADMIN[SIVI Admin UI]
+            REST[SIVI REST API]
+        end
+
+        subgraph L4[L4 — Frontend]
+            WIDGET[Widget Engine]
+            MAPS[D3 Maps & Charts]
+            COMPARE[Comparisons & Export]
+        end
+
+        subgraph OPS[Cross-Cutting Systems]
+            ALERT[Alert System]
+            BACKFILL[Historical Backfill]
+            CRON[Cron & Locks]
+            DB[Database Storage]
+        end
+    end
+
+    subgraph Actors[Actors]
+        USER[End Users]
+        ADMIN[Administrators]
+    end
+
+    External --> L1
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+    L1 --> ALERT
+    L3 --> ALERT
+    L3 --> BACKFILL
+    L1 --> BACKFILL
+    L1 --> CRON
+    L3 --> CRON
+    L1 --> DB
+    L3 --> DB
+    ALERT --> DB
+    BACKFILL --> DB
+    L4 --> USER
+    ADMIN --> L3
+    ADMIN --> L1
+```
+
+### **2.2 High-Level Data Flow** 
+***
+
+``` Mermaid
+flowchart LR
+    API[External APIs] --> L1[L1 — Reference Data<br/>Fetch → Cache → Promote]
+    L1 --> L2[L2 — Shared Utilities<br/>Percentiles → DQI → Ranking]
+    L2 --> L3[L3 — Index Backend<br/>Composite → REST → Admin]
+    L3 --> L4[L4 — Frontend<br/>Widget → Maps → Compare]
+    L4 --> USER[End User]
+
+    L3 -.-> ALERT[Alert System<br/>Detect → Store → Deliver]
+    L1 -.-> BACKFILL[Historical Backfill<br/>Year-specific → History Table]
+```
+
+## **3. The Four-Layer Architecture** 
+```
+flowchart TB
+    subgraph L4[L4 — FRONTEND]
+        direction LR
+        JS[index-frontend-engine.js]
+        CSS[index-frontend-styles.css]
+        UTIL[index-frontend-utility.js]
+    end
+
+    subgraph L3[L3 — INDEX / DOMAIN]
+        direction LR
+        SIVI[sivi-backend.php]
+        SC[sivi-shortcode.php]
+    end
+
+    subgraph L2[L2 — SHARED UTILITIES]
+        direction LR
+        UTIL2[blomstra-index-utilities.php]
+        ALERT2[blomstra-index-alerts.php]
+    end
+
+    subgraph L1[L1 — REFERENCE DATA]
+        direction LR
+        REF[global-reference-data.php]
+    end
+
+    subgraph EXT[EXTERNAL APIs]
+        direction LR
+        WB[World Bank]
+        IMF[IMF]
+        COM[Comtrade]
+        EIA[EIA]
+    end
+
+    L4 --> L3
+    L3 --> L2
+    L2 --> L1
+    L1 --> EXT
+
+```
 
 ***
 
 
-## **3. The Four-Layer Architecture** {#h.18ajx1rmjwu}
+## **4. Subsystem Breakdown** 
 
-***
-
-
-## **4. Subsystem Breakdown** {#h.llmaeggqz2ny}
-
-### **4.1 L1 — Reference Data Layer** {#h.omh6p54ymy3v}
+### **4.1 L1 — Reference Data Layer** 
 
 File: `src/shared/global-reference-data.php`
 
@@ -104,12 +222,12 @@ Black-box view:
     Process: Fetch → Cache → Validate → Promote
     Output: Structured data in wp_options and wp_transients
 
-Link: `DATA.md`
+Details : [`DATA.md`](Data.md)
 
 ***
 
 
-### **4.2 L2 — Shared Utilities** {#h.uv5qbyjmq3d3}
+### **4.2 L2 — Shared Utilities** 
 
 File: `src/shared/blomstra-index-utilities.php`
 
@@ -154,12 +272,12 @@ Black-box view:
     Process: Winsorize → Percentile → Directional transform → Aggregate → Rank
     Output: Percentiles, composite scores, DQI, ranks, sensitivity intervals
 
-Link: `ARCHITECTURE.md` §10
+Link: [`ARCHITECTURE.md §10`](Architecture.md)
 
 ***
 
 
-### **4.3 L3 — Index Backend (SIVI)** {#h.pvp4cqstskqx}
+### **4.3 L3 — Index Backend (SIVI)** 
 
 Files: `src/indices/sivi/sivi-backend.php`, `sivi-shortcode.php`
 
@@ -207,7 +325,7 @@ Link: `SIVI.md`
 ***
 
 
-### **4.4 L4 — Frontend Widget Engine** {#h.3b2m9k1apbqq}
+### **4.4 L4 — Frontend Widget Engine** 
 
 Files: `src/frontend/index-frontend-engine.js`, `index-frontend-styles.css`, `index-frontend-utility.js`
 
@@ -256,12 +374,12 @@ Black-box view:
     Process: Discover → Configure → Fetch → Render → Interact
     Output: Rendered interactive UI (tables, maps, charts, comparisons)
 
-Link: `FRONTEND.md`
+Link: [`Frontend-Index.md`](Frontend-Index.md)
 
 ***
 
 
-### **4.5 Alert System** {#h.epr7c366477m}
+### **4.5 Alert System**
 
 File: `src/shared/blomstra-index-alerts.php`
 
@@ -305,7 +423,7 @@ Link: `OPERATIONS.md` §7, `ARCHITECTURE.md` §11
 ***
 
 
-### **4.6 Historical Backfill** {#h.r71qrrmtbscp}
+### **4.6 Historical Backfill** 
 
 What it is: A subsystem that reconstructs point-in-time index data for past years, enabling trend analysis and historical comparison in the frontend.
 
@@ -347,7 +465,7 @@ Link: `SIVI.md` §10, `DATA.md` §8
 ***
 
 
-### **4.7 Database Storage** {#h.o1ggju73uy7d}
+### **4.7 Database Storage** 
 
 What it is: The persistent storage layer for all Blomstra Insights data, including options, transients, and custom tables.
 
@@ -393,7 +511,7 @@ Link: `DATABASE.md`
 ***
 
 
-### **4.8 Operations & Monitoring** {#h.v7cjr1nijaar}
+### **4.8 Operations & Monitoring** 
 
 What it is: The operational infrastructure that keeps the system running — cron scheduling, lock management, health monitoring, and recovery procedures.
 
@@ -458,7 +576,7 @@ Link: `OPERATIONS.md`
 ***
 
 
-## **5. Document Navigation Map** {#h.68mzrng57jir}
+## **5. Document Navigation Map** 
 
 |                             |                                              |                                                                |
 | --------------------------- | -------------------------------------------- | -------------------------------------------------------------- |
@@ -478,7 +596,7 @@ Link: `OPERATIONS.md`
 ***
 
 
-## **6. Key Architectural Decisions** {#h.s1i4bekf0fn9}
+## **6. Key Architectural Decisions** 
 
 |                                     |                                         |                                                                         |
 | ----------------------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
@@ -499,9 +617,9 @@ Link: `OPERATIONS.md`
 ***
 
 
-## **7. Getting Started** {#h.11l1kpexy13p}
+## **7. Getting Started** 
 
-### **7.1 By Role** {#h.aqup1qe5q42e}
+### **7.1 By Role** 
 
 |                     |                                                                             |
 | ------------------- | --------------------------------------------------------------------------- |
@@ -514,7 +632,7 @@ Link: `OPERATIONS.md`
 | Backend Developer   | `OVERVIEW.md` → `ARCHITECTURE.md` → `DATA.md` → `SIVI.md`                   |
 
 
-### **7.2 By Task** {#h.jzwhs1sygcnj}
+### **7.2 By Task** 
 
 |                            |                                                            |
 | -------------------------- | ---------------------------------------------------------- |
@@ -530,7 +648,7 @@ Link: `OPERATIONS.md`
 ***
 
 
-## **8. Glossary (High-Level)** {#h.k3p22zu00qbc}
+## **8. Glossary (High-Level)** 
 
 |                        |                                                                                                |
 | ---------------------- | ---------------------------------------------------------------------------------------------- |
@@ -553,7 +671,7 @@ Link: `OPERATIONS.md`
 ***
 
 
-## **9. Document Status** {#h.hlqaurshppgm}
+## **9. Document Status** 
 
 |                             |           |
 | --------------------------- | --------- |
@@ -573,6 +691,6 @@ Link: `OPERATIONS.md`
 ***
 
 
-## **End of Overview** {#h.ab3jb3on1u9u}
+## **End of Overview** 
 
 Status: CANONICAL
