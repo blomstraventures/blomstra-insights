@@ -126,7 +126,7 @@ flowchart TB
 ### **2.2 High-Level Data Flow** 
 ***
 
-``` Mermaid
+```Mermaid
 flowchart LR
     API[External APIs] --> L1[L1 — Reference Data<br/>Fetch → Cache → Promote]
     L1 --> L2[L2 — Shared Utilities<br/>Percentiles → DQI → Ranking]
@@ -139,7 +139,8 @@ flowchart LR
 ```
 
 ## **3. The Four-Layer Architecture** 
-```
+
+```Mermaid
 flowchart TB
     subgraph L4[L4 — FRONTEND]
         direction LR
